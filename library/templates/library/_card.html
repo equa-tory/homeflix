@@ -1,0 +1,27 @@
+{% load library_extras %}
+<a class="card nav-item" tabindex="0" href="{% url 'watch' video.pk %}{% if pl %}?pl={{ pl }}{% endif %}">
+  <div class="thumb">
+    {% if video.thumbnail_path %}
+      <img src="{% url 'thumb' video.pk %}" alt="" loading="lazy">
+    {% else %}
+      <div class="placeholder">▶</div>
+    {% endif %}
+    {% if not video.browser_playable %}
+      <span class="warn" title="May not play in a desktop browser">MKV/HEVC</span>
+    {% elif video.aspect_label %}
+      <span class="qbadge">{{ video.aspect_label }}</span>
+    {% endif %}
+    <span class="dur">{{ video.duration_seconds|duration }}</span>
+    {% with p=video.playback|pct:video %}
+      {% if p > 1 %}<div class="progress" style="width:{{ p }}%"></div>{% endif %}
+    {% endwith %}
+  </div>
+  <div class="meta">
+    <div class="t">{{ video.title }}</div>
+    <div class="s">
+      {% if video.channel %}{{ video.channel }} · {% endif %}
+      {{ video.date_added|date:"M j, Y" }}
+      {% if video.favorite %} · ★{% endif %}
+    </div>
+  </div>
+</a>

@@ -1,0 +1,403 @@
+{% load library_extras %}<!DOCTYPE html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{% block title %}HomeFlix{% endblock %}</title>
+<style>
+:root{
+  --bg:#0e0f12; --surface:#17191e; --surface2:#1f222a; --border:#2a2e38;
+  --text:#e8e9ed; --muted:#9aa0ad; --accent:#f0654a; --accent-soft:#f0654a33;
+  --radius:12px; --gap:18px; --bottom-nav-h:0px;
+}
+[data-theme="light"]{
+  --bg:#faf8f4; --surface:#ffffff; --surface2:#f2efe9; --border:#e4e2dc;
+  --text:#1a1c20; --muted:#6b7280; --accent:#e2553c; --accent-soft:#e2553c1a;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{margin:0}
+body{background:var(--bg); color:var(--text); min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  padding-bottom:var(--bottom-nav-h);}
+a{color:inherit; text-decoration:none}
+img{display:block; max-width:100%}
+
+/* ---- header ---- */
+header{position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:14px;
+  padding:10px 18px; background:color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter:blur(10px); border-bottom:1px solid var(--border);}
+.brand{font-weight:800; letter-spacing:-.02em; font-size:19px; white-space:nowrap}
+.brand b{color:var(--accent)}
+nav.topnav{display:flex; gap:4px}
+nav.topnav a{padding:7px 11px; border-radius:8px; color:var(--muted);
+  font-weight:600; font-size:14px; white-space:nowrap}
+nav.topnav a:hover, nav.topnav a.active{color:var(--text); background:var(--surface2)}
+.hdr-search{flex:1; min-width:0; max-width:440px; margin-left:auto}
+.hdr-search input{width:100%; padding:9px 14px; border-radius:20px; border:1px solid var(--border);
+  background:var(--surface); color:var(--text); font-size:14px; min-width:0}
+.hdr-search input:focus{outline:2px solid var(--accent); outline-offset:1px}
+.iconbtn{flex-shrink:0; background:var(--surface); border:1px solid var(--border);
+  color:var(--text); width:40px; height:40px; border-radius:50%; cursor:pointer;
+  font-size:17px; display:grid; place-items:center}
+.iconbtn:hover{border-color:var(--accent)}
+
+/* ---- manage dropdown ---- */
+.menu{position:relative}
+.menu-panel{position:absolute; right:0; top:48px; background:var(--surface);
+  border:1px solid var(--border); border-radius:10px; padding:6px; min-width:210px;
+  box-shadow:0 10px 30px #0006; display:none; z-index:50}
+.menu.open .menu-panel{display:block}
+.menu-panel button,.menu-panel a{display:block; width:100%; text-align:left;
+  background:none; border:0; color:var(--text); padding:10px 12px; border-radius:7px;
+  font-size:14px; cursor:pointer; font-weight:600; line-height:1}
+.menu-panel button:hover,.menu-panel a:hover{background:var(--surface2)}
+.menu-panel .danger{color:var(--accent)}
+.menu-panel form{margin:0}
+.menu-panel hr{border:0; border-top:1px solid var(--border); margin:5px 0}
+
+/* ---- buttons ---- */
+.btn{background:var(--accent); color:#fff; border:0; border-radius:8px; cursor:pointer;
+  padding:9px 16px; font-weight:700; font-size:14px; white-space:nowrap}
+.btn.ghost{background:var(--surface); color:var(--text); border:1px solid var(--border)}
+.btn:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.4; cursor:default}
+
+/* ---- layout ---- */
+main{padding:20px 18px 48px; max-width:1500px; margin:0 auto}
+h1{font-size:22px; margin:0 0 4px; letter-spacing:-.01em}
+h2{font-size:14px; margin:26px 0 12px; color:var(--muted); font-weight:700;
+   text-transform:uppercase; letter-spacing:.07em}
+.sub{color:var(--muted); font-size:13px}
+
+/* ---- video grid ---- */
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:var(--gap)}
+.card{display:block; border-radius:var(--radius)}
+.thumb{position:relative; aspect-ratio:16/9; border-radius:var(--radius); overflow:hidden;
+  background:var(--surface2); border:1px solid var(--border);}
+.thumb img{width:100%; height:100%; object-fit:cover}
+.thumb .placeholder{width:100%; height:100%; display:grid; place-items:center;
+  color:var(--muted); font-size:28px}
+.card:hover .thumb,.card:focus .thumb{outline:2px solid var(--accent); outline-offset:0}
+.dur{position:absolute; right:7px; bottom:7px; background:#000c; color:#fff;
+  font-size:12px; font-weight:600; padding:2px 6px; border-radius:5px}
+.qbadge{position:absolute; left:7px; top:7px; background:#000c; color:#fff;
+  font-size:11px; font-weight:700; padding:2px 6px; border-radius:5px}
+.warn{position:absolute; left:7px; top:7px; background:var(--accent); color:#fff;
+  font-size:11px; font-weight:700; padding:2px 6px; border-radius:5px}
+.progress{position:absolute; left:0; bottom:0; height:4px; background:var(--accent)}
+.meta{padding:8px 2px 2px}
+.meta .t{font-weight:600; font-size:13.5px; line-height:1.35;
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
+.meta .s{color:var(--muted); font-size:12px; margin-top:3px}
+
+/* ---- toolbar ---- */
+.toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0 18px}
+select{padding:8px 12px; border-radius:8px; background:var(--surface);
+  color:var(--text); border:1px solid var(--border); font-size:14px}
+.chip{padding:6px 12px; border-radius:16px; border:1px solid var(--border);
+  background:var(--surface); color:var(--muted); font-size:13px; font-weight:600}
+.chip.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+.empty{text-align:center; padding:70px 20px; color:var(--muted)}
+.empty .big{font-size:42px; margin-bottom:10px}
+
+/* ---- focus / TV ---- */
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.focused{outline:3px solid var(--accent) !important; outline-offset:2px;
+  border-radius:var(--radius); scroll-margin:120px}
+.card.focused .thumb{outline:0}
+
+/* disable text selection everywhere except content fields */
+*{user-select:none; -webkit-user-select:none}
+input,textarea,select,
+.wtitle,.desc,.note-text,.tech,.key-legend,code{
+  user-select:text; -webkit-user-select:text}
+
+/* grid blowout prevention */
+.card{min-width:0}
+main{overflow-x:hidden}
+
+/* ---- mini player: slide up/down animation via transform ---- */
+#miniPlayer{
+  position:fixed; bottom:24px; right:16px; width:272px; z-index:500;
+  background:var(--surface); border:1px solid var(--border); border-radius:14px;
+  box-shadow:0 12px 48px #000b; overflow:hidden; cursor:grab; touch-action:none;
+  /* hidden by default — slides in when .visible is added */
+  transform:translateY(calc(100% + 56px)); opacity:0; pointer-events:none;
+  transition:transform .38s cubic-bezier(.34,1.56,.64,1), opacity .25s ease;
+}
+#miniPlayer.visible{transform:translateY(0); opacity:1; pointer-events:auto}
+#miniPlayer.grabbing{cursor:grabbing}
+#miniPlayer video{width:100%; aspect-ratio:16/9; display:block; background:#000}
+.mini-bar{display:flex; align-items:center; padding:7px 10px; gap:6px}
+.mini-title{flex:1; font-size:12px; font-weight:600; color:var(--text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+.mini-ts{font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap}
+.mini-btn{background:none; border:0; color:var(--text); cursor:pointer;
+  padding:4px 7px; border-radius:6px; font-size:14px; line-height:1; flex-shrink:0}
+.mini-btn:hover{background:var(--surface2)}
+@media(max-width:700px){#miniPlayer{bottom:72px; width:220px}}
+
+/* ====== MOBILE ====== */
+@media (max-width:700px){
+  :root{--bottom-nav-h:62px}
+
+  /* slim header */
+  nav.topnav{display:none}
+  header{gap:10px; padding:9px 14px}
+  .hdr-search{max-width:none}
+
+  /* KEY FIX: contain all scrolling inside <main> so the body never scrolls.
+     Header and bottom-nav become static flex children — they physically cannot move. */
+  html, body { height:100%; overflow:hidden }
+  body {
+    display:flex; flex-direction:column;
+    /* 100svh = small viewport height: the smaller of the two dynamic heights.
+       Keeps the layout stable whether the browser chrome is shown or hidden. */
+    height:100svh; height:100vh; /* fallback for older browsers */
+  }
+  header{ flex-shrink:0; position:static }   /* no longer sticky — it never moves anyway */
+  main  { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+          overscroll-behavior-y:contain; padding-bottom:16px }
+
+  /* 2-column grid on phones */
+  .grid{grid-template-columns:1fr 1fr; gap:10px}
+
+  /* bottom tab bar — static, no fixed positioning needed */
+  .bottom-nav{
+    display:flex; flex-shrink:0;
+    background:var(--bg); border-top:1px solid var(--border);
+    padding:0 0 env(safe-area-inset-bottom,0px);
+  }
+  .bottom-nav a{
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:10px 6px 8px; color:var(--muted); font-size:10px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.04em;
+  }
+  .bottom-nav a .icon{font-size:22px; line-height:1}
+  .bottom-nav a.active,.bottom-nav a:hover{color:var(--accent)}
+
+  /* hide focus rings on touch — they appear on tap and look wrong */
+  .focused{ outline:none !important }
+  :focus-visible{ outline:none }
+  .card:focus .thumb{ outline:none }
+}
+@media (min-width:701px){
+  .bottom-nav{display:none}
+}
+{% block style %}{% endblock %}
+</style>
+</head>
+<body data-page="{% block page_id %}{% endblock %}">
+
+<header>
+  <a href="{% url 'home' %}" class="brand nav-item">Home<b>Flix</b></a>
+  <nav class="topnav">
+    <a href="{% url 'home' %}" class="nav-item {% block nav_home %}{% endblock %}">Home</a>
+    <a href="{% url 'library' %}" class="nav-item {% block nav_lib %}{% endblock %}">Library</a>
+    <a href="{% url 'playlists' %}" class="nav-item {% block nav_pl %}{% endblock %}">Playlists</a>
+    <a href="{% url 'history' %}" class="nav-item {% block nav_hist %}{% endblock %}">History</a>
+  </nav>
+  <div class="hdr-search">
+    <form action="{% url 'library' %}" method="get">
+      <input type="search" name="q" placeholder="Search…" value="{{ q|default:'' }}" class="nav-item">
+    </form>
+  </div>
+  <button class="iconbtn nav-item" id="themeBtn" title="Toggle theme">◐</button>
+  <div class="menu" id="manageMenu">
+    <button class="iconbtn nav-item" id="manageBtn" title="Manage">⋯</button>
+    <div class="menu-panel">
+      <form action="{% url 'scan' %}" method="post">{% csrf_token %}
+        <button class="nav-item">↻ Rescan library</button></form>
+      <a href="{% url 'organize' %}" class="nav-item">🗂 Organize by date…</a>
+      <hr>
+      <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
+        <button class="nav-item">🧹 Remove missing files</button></form>
+      <form action="{% url 'reset_library' %}" method="post"
+            onsubmit="return confirm('Clear all records and rescan? (Files on disk are NOT deleted.)')">
+        {% csrf_token %}<button class="nav-item danger">⟳ Reset &amp; rebuild</button></form>
+    </div>
+  </div>
+</header>
+
+<main>{% block content %}{% endblock %}</main>
+
+<!-- mobile bottom tab bar — must come AFTER main in flex column -->
+<nav class="bottom-nav">
+  <a href="{% url 'home' %}" class="nav-item {% block bnav_home %}{% endblock %}">
+    <span class="icon">⌂</span>Home</a>
+  <a href="{% url 'library' %}" class="nav-item {% block bnav_lib %}{% endblock %}">
+    <span class="icon">▤</span>Library</a>
+  <a href="{% url 'playlists' %}" class="nav-item {% block bnav_pl %}{% endblock %}">
+    <span class="icon">☰</span>Playlists</a>
+  <a href="{% url 'history' %}" class="nav-item {% block bnav_hist %}{% endblock %}">
+    <span class="icon">◷</span>History</a>
+</nav>
+
+<!-- mini player: persists across page navigation via sessionStorage -->
+<div id="miniPlayer">
+  <video id="miniVid" playsinline></video>
+  <div class="mini-bar">
+    <span class="mini-title" id="miniTitle">…</span>
+    <span class="mini-ts" id="miniTs">0:00</span>
+    <button class="mini-btn" id="miniPlayBtn" title="Play/pause">▶</button>
+    <a class="mini-btn" id="miniOpenBtn" href="#" title="Open full player">⤢</a>
+    <button class="mini-btn" id="miniCloseBtn" title="Close">×</button>
+  </div>
+</div>
+
+<script>
+function getCookie(n){const m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?m.pop():'';}
+const CSRF=getCookie('csrftoken');
+function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
+  'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(d||{})}).then(r=>r.json());}
+
+document.getElementById('themeBtn').onclick=()=>post("{% url 'toggle_theme' %}")
+  .then(d=>document.documentElement.setAttribute('data-theme',d.theme));
+
+const mm=document.getElementById('manageMenu');
+document.getElementById('manageBtn').onclick=e=>{e.stopPropagation();mm.classList.toggle('open');};
+document.addEventListener('click',()=>mm.classList.remove('open'));
+
+/* ---- spatial navigation (TV arrows + OK) ---- */
+(function(){
+  const typing=el=>el&&/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
+  function items(){return[...document.querySelectorAll('.nav-item')].filter(el=>{
+    const r=el.getBoundingClientRect();return el.offsetParent!==null&&r.width>0&&r.height>0;});}
+  let cur=null;
+  function focus(el){if(!el)return;if(cur)cur.classList.remove('focused');
+    cur=el;el.classList.add('focused');
+    el.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'});
+    if(typing(el))el.focus();}
+  function center(el){const r=el.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};}
+  function move(dir){const all=items();if(!all.length)return;
+    if(!cur||!all.includes(cur)){focus(all[0]);return;}
+    const c=center(cur);let best=null,bestScore=1e12;
+    for(const el of all){if(el===cur)continue;
+      const p=center(el);const dx=p.x-c.x,dy=p.y-c.y;let primary,cross;
+      if(dir==='right'){if(dx<=8)continue;primary=dx;cross=Math.abs(dy);}
+      else if(dir==='left'){if(dx>=-8)continue;primary=-dx;cross=Math.abs(dy);}
+      else if(dir==='down'){if(dy<=8)continue;primary=dy;cross=Math.abs(dx);}
+      else{if(dy>=-8)continue;primary=-dy;cross=Math.abs(dx);}
+      const score=primary+cross*2;if(score<bestScore){bestScore=score;best=el;}}
+    if(best)focus(best);}
+  window.__spatial={focus,items,move,get current(){return cur;}};
+  document.addEventListener('keydown',e=>{
+    if(document.body.dataset.page==='watch')return;
+    if(typing(document.activeElement)&&e.key!=='Enter'&&!e.key.startsWith('Arrow'))return;
+    switch(e.key){
+      case'ArrowRight':e.preventDefault();move('right');break;
+      case'ArrowLeft':e.preventDefault();move('left');break;
+      case'ArrowDown':e.preventDefault();move('down');break;
+      case'ArrowUp':e.preventDefault();move('up');break;
+      case'Enter':if(cur&&!typing(cur)){e.preventDefault();cur.click();}break;
+      case'Backspace':case'GoBack':history.back();break;}});
+  window.addEventListener('load',()=>{const a=items();if(a.length)focus(
+    document.querySelector('main .nav-item')||a[0]);});
+})();
+/* ---- mini player ---- */
+(function(){
+  const SKEY='homeflix_mini';
+  const mp=document.getElementById('miniPlayer');
+  const mv=document.getElementById('miniVid');
+  const mTitle=document.getElementById('miniTitle');
+  const mTs=document.getElementById('miniTs');
+  const mPlay=document.getElementById('miniPlayBtn');
+  const mOpen=document.getElementById('miniOpenBtn');
+  const mClose=document.getElementById('miniCloseBtn');
+
+  function fmtT(s){s=Math.floor(s||0);return`${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;}
+  function loadState(){try{return JSON.parse(sessionStorage.getItem(SKEY));}catch{return null;}}
+
+  function hideMini(){
+    mp.classList.remove('visible');
+    setTimeout(()=>{mv.pause();mv.src='';},400);
+  }
+
+  function showMini(st){
+    if(!st||!st.streamUrl)return;
+    mTitle.textContent=st.title||'';
+    mOpen.href=st.watchUrl||'/';
+    // Seek using media fragment + loadedmetadata+seeked for reliability
+    const pos=parseFloat(st.position)||0;
+    mv.src=pos>2?`${st.streamUrl}#t=${Math.floor(pos)}`:st.streamUrl;
+    if(pos>2){
+      mv.addEventListener('loadedmetadata',function h(){
+        mv.removeEventListener('loadedmetadata',h);
+        mv.currentTime=pos;
+        let done=false;
+        const play=()=>{if(!done){done=true;mv.play().catch(()=>{});}};
+        mv.addEventListener('seeked',function s(){mv.removeEventListener('seeked',s);play();},{once:true});
+        setTimeout(play,1500); // fallback
+      });
+    } else {
+      mv.addEventListener('canplay',function h(){mv.removeEventListener('canplay',h);mv.play().catch(()=>{});});
+    }
+    requestAnimationFrame(()=>mp.classList.add('visible'));
+  }
+
+  window.MINI={
+    save(st){try{sessionStorage.setItem(SKEY,JSON.stringify(st));}catch{}},
+    clear(){try{sessionStorage.removeItem(SKEY);}catch{}hideMini();},
+    getState:loadState,
+    show:showMini,
+  };
+
+  // Show on non-watch pages at initial load
+  if(document.body.dataset.page!=='watch'){
+    const st=loadState();
+    if(st&&st.streamUrl)showMini(st);
+  }
+
+  // Sync sessionStorage position while playing
+  mv.addEventListener('timeupdate',()=>{
+    mTs.textContent=fmtT(mv.currentTime);
+    mPlay.textContent=mv.paused?'▶':'⏸';
+    const st=loadState();
+    if(st){st.position=mv.currentTime;window.MINI.save(st);}
+  });
+  mv.addEventListener('play',()=>mPlay.textContent='⏸');
+  mv.addEventListener('pause',()=>mPlay.textContent='▶');
+  mPlay.onclick=()=>{mv.paused?mv.play():mv.pause();};
+  mClose.onclick=()=>window.MINI.clear();
+
+  // Drag + tap
+  let dragging=false,moved=false,ox,oy,startL,startT;
+  mp.addEventListener('pointerdown',e=>{
+    if(e.target===mPlay||e.target===mClose||e.target===mOpen)return;
+    dragging=true;moved=false;
+    mp.setPointerCapture(e.pointerId);mp.classList.add('grabbing');
+    ox=e.clientX;oy=e.clientY;
+    const r=mp.getBoundingClientRect();startL=r.left;startT=r.top;
+  });
+  mp.addEventListener('pointermove',e=>{
+    if(!dragging)return;
+    const dx=e.clientX-ox,dy=e.clientY-oy;
+    if(Math.hypot(dx,dy)>8)moved=true;
+    if(!moved)return;
+    const nl=Math.max(0,Math.min(window.innerWidth-mp.offsetWidth,startL+dx));
+    const nt=Math.max(0,Math.min(window.innerHeight-mp.offsetHeight,startT+dy));
+    mp.style.right='auto';mp.style.bottom='auto';
+    mp.style.left=nl+'px';mp.style.top=nt+'px';
+  });
+  mp.addEventListener('pointerup',e=>{
+    if(!dragging)return;
+    dragging=false;mp.classList.remove('grabbing');
+    if(!moved){
+      // Tap: save mini position to DB then open full player
+      const st=loadState();
+      if(st){
+        const pos=mv.currentTime;
+        navigator.sendBeacon&&navigator.sendBeacon(
+          `/video/${st.videoId}/progress/`,
+          new URLSearchParams({position:pos.toFixed(1),csrfmiddlewaretoken:CSRF})
+        );
+        location.href=st.watchUrl;
+      }
+    }
+  });
+})();
+
+</script>
+{% block scripts %}{% endblock %}
+</body>

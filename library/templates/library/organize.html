@@ -1,0 +1,44 @@
+{% extends "library/base.html" %}
+{% block page_id %}organize{% endblock %}
+{% block style %}
+.movetbl{width:100%; border-collapse:collapse; margin-top:14px; font-size:13.5px}
+.movetbl th,.movetbl td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--border)}
+.movetbl th{color:var(--muted); text-transform:uppercase; font-size:11px; letter-spacing:.05em}
+.movetbl code{color:var(--text)}
+.arrow{color:var(--accent)}
+.scinfo{color:var(--muted)}
+{% endblock %}
+{% block content %}
+<h1>Organize files by date</h1>
+<p class="sub">Moves each video into <code>{{ library_root }}/YYYY-MM/DD/</code> based on its
+modified date. Subtitles and sidecar files (same name) move with it. Other files
+(txt, png, jpeg…) are left exactly where they are.</p>
+
+{% if done %}
+  <div class="banner" style="margin-top:16px">✓ Moved {{ result.count }} file{{ result.count|pluralize }} into date folders.</div>
+  <a class="btn nav-item" href="{% url 'library' %}">Back to library</a>
+{% elif result.count == 0 %}
+  <div class="empty"><p>Nothing to move — every video is already in a date folder (or has no modified date).</p></div>
+{% else %}
+  <form method="post" style="margin-top:16px">{% csrf_token %}
+    <input type="hidden" name="confirm" value="1">
+    <p><strong>{{ result.count }}</strong> file{{ result.count|pluralize }} will move. Preview:</p>
+    <button class="btn nav-item">Move {{ result.count }} file{{ result.count|pluralize }}</button>
+    <a class="btn ghost nav-item" href="{% url 'library' %}">Cancel</a>
+  </form>
+  <table class="movetbl">
+    <thead><tr><th>From</th><th></th><th>To</th><th>Also moves</th></tr></thead>
+    <tbody>
+      {% for m in result.moves|slice:":300" %}
+        <tr>
+          <td><code>{{ m.src }}</code></td>
+          <td class="arrow">→</td>
+          <td><code>{{ m.dst }}</code></td>
+          <td class="scinfo">{% if m.sidecars %}+{{ m.sidecars|length }} sidecar{{ m.sidecars|length|pluralize }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if result.count > 300 %}<p class="sub">…and {{ result.count|add:"-300" }} more.</p>{% endif %}
+{% endif %}
+{% endblock %}

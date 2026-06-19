@@ -1,0 +1,16 @@
+{% extends "library/base.html" %}
+{% load library_extras %}
+{% block nav_hist %}active{% endblock %}
+{% block bnav_hist %}active{% endblock %}
+{% block content %}
+<h1>History</h1>
+{% if events %}
+  <div class="grid" style="margin-top:18px">
+    {% for e in events %}
+      {% with video=e.video %}{% include "library/_card.html" %}{% endwith %}
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty"><p>Nothing watched yet.</p></div>
+{% endif %}
+{% endblock %}

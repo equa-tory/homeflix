@@ -1,0 +1,2 @@
+Django>=5.0
+# ffmpeg + ffprobe must also be installed on the system (apt install ffmpeg)

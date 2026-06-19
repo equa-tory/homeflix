@@ -1,0 +1,22 @@
+{% extends "library/base.html" %}
+{% load library_extras %}
+{% block nav_pl %}active{% endblock %}
+{% block bnav_pl %}active{% endblock %}
+{% block content %}
+<h1>{{ playlist.name }}</h1>
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+  <p class="sub" style="margin:0">{{ items|length }} video{{ items|length|pluralize }}</p>
+  <form method="post" action="{% url 'delete_playlist' playlist.pk %}"
+        onsubmit="return confirm('Delete this playlist? Videos are kept.')" style="margin:0">
+    {% csrf_token %}
+    <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete playlist</button>
+  </form>
+</div>
+{% if items %}
+  <div class="grid" style="margin-top:18px">
+    {% for item in items %}
+      {% with video=item.video pl=playlist.pk %}{% include "library/_card.html" %}{% endwith %}
+    {% endfor %}
+  </div>
+{% else %}<div class="empty"><p>This playlist is empty. Open a video and use “Add to playlist”.</p></div>{% endif %}
+{% endblock %}

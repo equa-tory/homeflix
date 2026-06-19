@@ -1,0 +1,241 @@
+{% extends "library/base.html" %}
+{% block nav_lib %}active{% endblock %}
+{% block bnav_lib %}active{% endblock %}
+{% block page_id %}library{% endblock %}
+{% block style %}
+#vgrid{position:relative; width:100%; min-height:4px}
+.vcard{position:absolute; display:block}
+{% endblock %}
+{% block content %}
+<h1>Library <span style="color:var(--muted);font-size:14px;font-weight:400" id="vcount"></span></h1>
+<form class="toolbar" method="get" id="filters">
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="rev" value="{{ rev|yesno:'1,0' }}">
+  <label>Sort&nbsp;
+    <select name="sort" class="nav-item" onchange="document.getElementById('filters').submit()">
+      <option value="added"    {% if sort == 'added'    %}selected{% endif %}>Date added</option>
+      <option value="name"     {% if sort == 'name'     %}selected{% endif %}>Name</option>
+      <option value="duration" {% if sort == 'duration' %}selected{% endif %}>Duration</option>
+      <option value="modified" {% if sort == 'modified' %}selected{% endif %}>Modified date</option>
+    </select>
+  </label>
+  <!-- toggle sort direction without JS: submit the form with rev flipped -->
+  <button type="submit" name="rev" value="{{ rev|yesno:'0,1' }}" class="btn ghost nav-item"
+          title="Reverse sort order" style="font-size:16px;padding:7px 10px">
+    {% if rev %}↑{% else %}↓{% endif %}
+  </button>
+  <a class="chip nav-item {% if fav %}active{% endif %}"
+     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q }}">★ Favorites</a>
+  {% for t in tags %}
+    <a class="chip nav-item {% if active_tag == t.name %}active{% endif %}"
+       href="?tag={{ t.name }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}">{{ t.name }}</a>
+  {% endfor %}
+</form>
+
+<!-- server-side count: if this is > 0 but grid shows empty, it's a JS/layout issue -->
+<div id="vgrid" data-server-total="{{ total_videos }}"></div>
+
+<div class="empty" id="vempty" style="display:none">
+  {% if total_videos > 0 %}
+    <p>Filtering returned no results. <a href="{% url 'library' %}">Clear filters</a></p>
+  {% else %}
+    <div class="big">🎬</div>
+    <p>Library is empty.</p>
+    <p class="sub">Use the <b>⋯ → Rescan</b> button to scan your video folder.<br>
+      Current folder: <code>{{ library_root }}</code></p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function(){
+  const PAGE = {{ page_size }};
+  const params = new URLSearchParams(location.search);
+  const grid   = document.getElementById('vgrid');
+  const countEl = document.getElementById('vcount');
+  const emptyEl = document.getElementById('vempty');
+  const BUFFER = 3;   // extra rows to render beyond the viewport
+  let _gap = 18;  // recalculated in calcMetrics to match CSS --gap
+  const META_H = 62;  // px below the thumbnail (title + subtitle + gap)
+
+  let total = null, cols = 1, cardW = 200, rowH = 200;
+  const data        = [];          // sparse array indexed by item position
+  const loadedPages = new Set();
+  const inflight    = new Set();
+  const nodes       = new Map();   // position -> DOM element
+
+  // ---- layout metrics ----
+  function calcMetrics() {
+    const w = grid.clientWidth;
+    if (w === 0) return false;
+    _gap = window.innerWidth <= 700 ? 10 : 18; // match CSS --gap
+    if (window.innerWidth <= 700) {
+      cols  = 2;
+      cardW = Math.floor((w - _gap) / 2);
+    } else {
+      cols  = Math.max(1, Math.floor((w + _gap) / (200 + _gap)));
+      cardW = Math.floor((w - _gap * (cols - 1)) / cols);
+    }
+    rowH = Math.round(cardW * 9 / 16) + META_H + _gap;
+    return true;
+  }
+
+  function setHeight() {
+    if (total == null) return;
+    grid.style.height = (Math.ceil(total / cols) * rowH) + 'px';
+  }
+
+  // ---- card DOM ----
+  function esc(s) {
+    return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+  function makeCard(item) {
+    const badge = item.needs_convert
+      ? '<span class="warn">MKV/HEVC</span>'
+      : (item.quality ? `<span class="qbadge">${item.quality}</span>` : '');
+    const prog  = item.progress > 1
+      ? `<div class="progress" style="width:${item.progress}%"></div>` : '';
+    const thumb = item.thumb
+      ? `<img src="${item.thumb}" alt="" loading="lazy">`
+      : '<div class="placeholder">▶</div>';
+    const sub = esc((item.channel ? item.channel + ' · ' : '') + item.date + (item.favorite ? ' · ★' : ''));
+    const el  = document.createElement('a');
+    el.className = 'vcard card nav-item';
+    el.tabIndex  = 0;
+    el.href      = item.url;
+    el.innerHTML =
+      `<div class="thumb">${thumb}${badge}<span class="dur">${item.dur}</span>${prog}</div>` +
+      `<div class="meta"><div class="t">${esc(item.title)}</div><div class="s">${sub}</div></div>`;
+    return el;
+  }
+
+  function placeCard(el, i) {
+    const row = Math.floor(i / cols), col = i % cols;
+    el.style.top   = (row * rowH) + 'px';
+    el.style.left  = (col * (cardW + _gap)) + 'px';
+    el.style.width = cardW + 'px';
+  }
+
+  // ---- render: place only the rows that are in/near the viewport ----
+  function render() {
+    if (total == null || !calcMetrics()) return;
+    setHeight();
+
+    const gridTop = grid.getBoundingClientRect().top
+      + (scrollEl === window ? window.scrollY : scrollEl.getBoundingClientRect().top * -1 + scrollEl.scrollTop);
+    const scroll  = getScroll();
+    const vh      = getVH();
+
+    const firstVis  = Math.floor((scroll - gridTop) / rowH);
+    const lastVis   = Math.ceil((scroll + vh - gridTop) / rowH);
+    const startRow  = Math.max(0, firstVis - BUFFER);
+    const endRow    = lastVis + BUFFER;
+    const start     = Math.max(0, startRow * cols);
+    const end       = Math.min(total, (endRow + 1) * cols);
+
+    // unload off-screen nodes
+    for (const [i, el] of nodes) {
+      if (i < start || i >= end) { el.remove(); nodes.delete(i); }
+    }
+
+    // trigger page loads for the visible range
+    if (end > start) ensurePages(start, end);
+
+    // mount/place in-window nodes
+    for (let i = start; i < end; i++) {
+      const item = data[i];
+      if (!item) continue;
+      let el = nodes.get(i);
+      if (!el) {
+        el = makeCard(item);
+        grid.appendChild(el);
+        nodes.set(i, el);
+      }
+      placeCard(el, i);
+    }
+  }
+
+  function ensurePages(start, end) {
+    const fp = Math.floor(start / PAGE) + 1;
+    const lp = Math.floor((end - 1) / PAGE) + 1;
+    for (let p = fp; p <= lp; p++) loadPage(p);
+  }
+
+  function loadPage(p) {
+    if (loadedPages.has(p) || inflight.has(p)) return;
+    inflight.add(p);
+    const q = new URLSearchParams(params);
+    q.set('page', p);
+    fetch('/api/videos/?' + q.toString())
+      .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(d => {
+        inflight.delete(p);
+        loadedPages.add(p);
+        if (total == null) {
+          total = d.total;
+          countEl.textContent = total ? ('· ' + total.toLocaleString() + ' videos') : '';
+          if (!total) {
+            emptyEl.style.display = '';
+            grid.style.display    = 'none';
+            return;
+          }
+          calcMetrics();
+          setHeight();
+        }
+        const base = (p - 1) * PAGE;
+        d.items.forEach((item, k) => { data[base + k] = item; });
+        render();
+      })
+      .catch(err => {
+        inflight.delete(p);
+        console.error('HomeFlix: failed to load page', p, err);
+      });
+  }
+
+  // ---- scroll / resize listeners ----
+  // On mobile the body doesn't scroll — <main> does.
+  const scrollEl = window.innerWidth <= 700
+    ? document.querySelector('main') || window
+    : window;
+
+  function getScroll() {
+    return scrollEl === window ? window.scrollY : scrollEl.scrollTop;
+  }
+  function getVH() {
+    return scrollEl === window ? window.innerHeight : scrollEl.clientHeight;
+  }
+
+  let ticking = false;
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => { render(); ticking = false; });
+  }
+
+  function onResize() {
+    if (!calcMetrics()) return;
+    setHeight();
+    for (const [i, el] of nodes) placeCard(el, i);
+    render();
+  }
+
+  // ---- initialization ----
+  // Don't touch the grid until the browser has actually laid it out (non-zero width).
+  // Using rAF loop avoids race conditions with sticky headers and toolbar rendering.
+  function start() {
+    if (grid.clientWidth > 0) {
+      scrollEl.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', onResize);
+      loadPage(1);
+    } else {
+      requestAnimationFrame(start);
+    }
+  }
+  requestAnimationFrame(start);
+})();
+</script>
+{% endblock %}
