@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import mimetypes
 
 from django.conf import settings
@@ -23,8 +24,21 @@ def theme(request):
     return Setting.get("theme", "dark")
 
 
-def base_ctx(request, **extra):
-    ctx = {"theme": theme(request), "library_root": settings.LIBRARY_ROOT}
+def is_spa(request):
+    """True when the SPA router fetched this view for a content fragment."""
+    return request.headers.get("X-SPA") == "1"
+
+
+def base_ctx(request, *, active_nav="", page_id="", spa_title="HomeFlix", **extra):
+    ctx = {
+        "theme": theme(request),
+        "library_root": settings.LIBRARY_ROOT,
+        "active_nav": active_nav,
+        "page_id": page_id,
+        "spa_title": spa_title,
+        # The page templates extend this. Full load -> shell; SPA fetch -> fragment.
+        "base_template": "library/_spa.html" if is_spa(request) else "library/base.html",
+    }
     ctx.update(extra)
     return ctx
 
@@ -47,6 +61,9 @@ def _filtered_videos(request):
         qs = qs.filter(tags__name=tag)
     if request.GET.get("fav") == "1":
         qs = qs.filter(favorite=True)
+    if request.GET.get("shorts") == "1":
+        from django.db.models import F as _F
+        qs = qs.filter(height__gt=_F("width"), width__gt=0)
     sort = request.GET.get("sort", "added")
     rev  = request.GET.get("rev") == "1"
     order = SORTS.get(sort, "-date_added")
@@ -66,7 +83,6 @@ def home(request):
         .select_related("playback").order_by("-playback__updated_at")[:12]
     )
 
-    # Discovery: based on tags of the 5 most recently watched videos
     recent_watch_ids = list(
         WatchEvent.objects.filter(video__missing=False)
         .order_by("-watched_at").values_list("video_id", flat=True)[:5]
@@ -75,7 +91,7 @@ def home(request):
         Video.objects.filter(pk__in=recent_watch_ids)
         .values_list("tags", flat=True).distinct()
     )
-    tag_ids = [t for t in tag_ids if t]           # drop None
+    tag_ids = [t for t in tag_ids if t]
     discovery = []
     if tag_ids:
         discovery = list(
@@ -93,7 +109,8 @@ def home(request):
         )
 
     return render(request, "library/home.html", base_ctx(
-        request, recent=recent, continue_watching=continue_watching,
+        request, active_nav="home", page_id="home", spa_title="HomeFlix",
+        recent=recent, continue_watching=continue_watching,
         discovery=discovery,
         total=Video.objects.filter(missing=False).count(),
     ))
@@ -102,7 +119,8 @@ def home(request):
 def library(request):
     qs, q, sort, rev = _filtered_videos(request)
     return render(request, "library/library.html", base_ctx(
-        request, q=q, sort=sort, rev=rev,
+        request, active_nav="library", page_id="library", spa_title="Library — HomeFlix",
+        q=q, sort=sort, rev=rev,
         page_size=settings.PAGE_SIZE,
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
         active_tag=request.GET.get("tag", ""),
@@ -110,7 +128,36 @@ def library(request):
     ))
 
 
-def watch(request, pk):
+def history(request):
+    events = (WatchEvent.objects.select_related("video")
+              .filter(video__missing=False)[:200])
+    return render(request, "library/history.html", base_ctx(
+        request, active_nav="history", spa_title="History — HomeFlix",
+        events=events))
+
+
+def playlists(request):
+    return render(request, "library/playlists.html", base_ctx(
+        request, active_nav="playlists", page_id="playlists", spa_title="Playlists — HomeFlix",
+        playlists=Playlist.objects.all(),
+        smart_playlists=SmartPlaylist.objects.all()))
+
+
+def playlist_detail(request, pk):
+    pl = get_object_or_404(Playlist, pk=pk)
+    items = pl.items.select_related("video").filter(video__missing=False)
+    return render(request, "library/playlist_detail.html", base_ctx(
+        request, active_nav="playlists", spa_title=f"{pl.name} — HomeFlix",
+        playlist=pl, items=items))
+
+
+# ---- watch (single-page player) --------------------------------------------
+
+def _build_watch_data(request, pk):
+    """Serialize everything the player overlay needs, for SSR and the JSON API."""
+    from .templatetags.library_extras import duration as fmt_dur, filesize as fmt_size
+    import random as _rnd
+
     video = get_object_or_404(Video, pk=pk, missing=False)
 
     pl_id = request.GET.get("pl")
@@ -135,61 +182,112 @@ def watch(request, pk):
     state, _ = PlaybackState.objects.get_or_create(video=video)
     WatchEvent.objects.create(video=video, progress_seconds=state.position_seconds)
 
-    # Recommended: same tags (unwatched first, random order), same channel, then random
-    import random as _rnd
     tag_ids = list(video.tags.values_list("pk", flat=True))
     recommended = []
     if tag_ids:
-        same_tag = list(
+        recommended += list(
             Video.objects.filter(tags__in=tag_ids, missing=False)
             .exclude(pk=video.pk).exclude(playback__finished=True)
             .distinct().order_by("?")[:8]
         )
-        recommended += same_tag
     if video.channel and len(recommended) < 8:
         excl = {video.pk} | {v.pk for v in recommended}
-        same_ch = list(
+        recommended += list(
             Video.objects.filter(channel=video.channel, missing=False)
             .exclude(pk__in=excl).exclude(playback__finished=True)
             .order_by("?")[:4]
         )
-        recommended += same_ch
     if len(recommended) < 12:
         excl = {video.pk} | {v.pk for v in recommended}
-        filler = list(
+        recommended += list(
             Video.objects.filter(missing=False).exclude(pk__in=excl)
             .order_by("?")[:12 - len(recommended)]
         )
-        recommended += filler
     _rnd.shuffle(recommended)
+    recommended = recommended[:12]
 
+    rec_pks = [v.pk for v in recommended]
+    rec_states = {ps.video_id: ps
+                  for ps in PlaybackState.objects.filter(video_id__in=rec_pks)}
+
+    def rec_dict(v):
+        st = rec_states.get(v.pk)
+        progress = 0
+        if st and v.duration_seconds:
+            progress = min(100, st.position_seconds / v.duration_seconds * 100)
+        return {
+            "id": v.pk, "title": v.title,
+            "thumb_url": f"/thumb/{v.pk}/" if v.thumbnail_path else "",
+            "watch_url": f"/watch/{v.pk}/",
+            "dur": fmt_dur(v.duration_seconds), "channel": v.channel or "",
+            "progress": round(progress, 1), "quality": v.aspect_label or "",
+            "needs_convert": not v.browser_playable and v.convert_status != Video.CONVERT_DONE,
+        }
+
+    tech = []
+    if video.aspect_label:
+        tech.append(f"{video.aspect_label} · {video.width}×{video.height}")
+    if video.duration_seconds:
+        tech.append(fmt_dur(video.duration_seconds))
+    if video.video_codec:
+        c = video.video_codec + (f" / {video.audio_codec}" if video.audio_codec else "")
+        tech.append(c)
+    if video.size_bytes:
+        tech.append(fmt_size(video.size_bytes))
+
+    return {
+        "id": video.pk, "title": video.title,
+        "description": video.description or "", "channel": video.channel or "",
+        "stream_url": f"/stream/{pk}/", "watch_url": f"/watch/{pk}/",
+        "save_url": f"/video/{pk}/progress/",
+        "position": state.position_seconds,
+        "duration_label": fmt_dur(video.duration_seconds),
+        "playable": video.playable_now,
+        "convert_status": video.convert_status,
+        "convert_progress": video.convert_progress,
+        "convert_url": f"/video/{pk}/convert/",
+        "convert_status_url": f"/video/{pk}/convert/status/",
+        "needs_convert": video.needs_conversion,
+        "next_id": next_id, "prev_id": prev_id,
+        "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
+        "regen_thumb_url": f"/video/{pk}/thumb/regen/",
+        "thumbnail_percent": video.thumbnail_percent or 0,
+        "source_url": video.source_url or "", "tech": tech,
+        "favorite": video.favorite, "rating": video.rating,
+        "favorite_url": f"/video/{pk}/favorite/",
+        "rating_url": f"/video/{pk}/rating/",
+        "playlist_url": f"/video/{pk}/playlist/",
+        "autoplay_toggle_url": "/autoplay/",
+        "autoplay": Setting.get("autoplay", "1") == "1",
+        "notes": [
+            {"id": n.pk, "ts": n.timestamp_seconds,
+             "ts_label": fmt_dur(n.timestamp_seconds), "text": n.text,
+             "delete_url": f"/video/{pk}/notes/{n.pk}/delete/"}
+            for n in video.notes.all()
+        ],
+        "note_add_url": f"/video/{pk}/notes/",
+        "recommended": [rec_dict(v) for v in recommended],
+        "playlists": [{"id": p.pk, "name": p.name} for p in Playlist.objects.all()],
+        "ext": (video.ext or "").upper(),
+        "is_portrait": bool(video.height and video.width and video.height > video.width),
+        "frame_url_base": f"/frame/{pk}/",
+        "pl": pl_id or "",
+    }
+
+
+def watch(request, pk):
+    """Hard load of /watch/<id>/ -> render the shell and auto-open the player."""
+    data = _build_watch_data(request, pk)
     return render(request, "library/watch.html", base_ctx(
-        request, video=video, state=state, prev_id=prev_id, next_id=next_id,
-        pl=pl_id or "", playlists=Playlist.objects.all(),
-        all_tags=Tag.objects.all(),
-        autoplay=Setting.get("autoplay", "1") == "1",
-        recommended=recommended[:12],
-        notes=video.notes.all(),
+        request, active_nav="", page_id="watch",
+        spa_title=f"{data['title']} — HomeFlix",
+        auto_watch=data,
     ))
 
 
-def history(request):
-    events = (WatchEvent.objects.select_related("video")
-              .filter(video__missing=False)[:200])
-    return render(request, "library/history.html", base_ctx(request, events=events))
-
-
-def playlists(request):
-    return render(request, "library/playlists.html",
-                  base_ctx(request, playlists=Playlist.objects.all(),
-                            smart_playlists=SmartPlaylist.objects.all()))
-
-
-def playlist_detail(request, pk):
-    pl = get_object_or_404(Playlist, pk=pk)
-    items = pl.items.select_related("video").filter(video__missing=False)
-    return render(request, "library/playlist_detail.html",
-                  base_ctx(request, playlist=pl, items=items))
+def watch_api(request, pk):
+    """JSON for the player — used by card clicks and prev/next/recommendations."""
+    return JsonResponse(_build_watch_data(request, pk))
 
 
 # ---- media serving ---------------------------------------------------------
@@ -203,10 +301,9 @@ def thumb(request, pk):
 
 
 def frame_thumb(request, pk, t):
-    """Single frame at time t (rounded to 5 s, disk-cached) for the seek preview."""
     video = get_object_or_404(Video, pk=pk)
     dur = int(video.duration_seconds or 0)
-    t = max(0, min(dur, (int(t) // 5) * 5))          # snap to 5 s grid
+    t = max(0, min(dur, (int(t) // 5) * 5))
     frame_dir = os.path.join(settings.THUMBNAIL_DIR, "frames")
     os.makedirs(frame_dir, exist_ok=True)
     path = os.path.join(frame_dir, f"{video.id}_{t}.jpg")
@@ -224,8 +321,6 @@ def frame_thumb(request, pk, t):
 
 
 def stream(request, pk):
-    """Serve the video file with HTTP Range support so seeking works.
-    Prefers a converted MP4 when one is ready (for MKV/HEVC sources)."""
     video = get_object_or_404(Video, pk=pk)
     path = video.file_path
     if (video.convert_status == Video.CONVERT_DONE and video.converted_path
@@ -284,12 +379,13 @@ def regen_thumb(request, pk):
         percent = 0.0
     percent = max(0.0, min(100.0, percent))
     services.generate_thumbnail(video, percent=percent)
+    if is_spa(request):
+        return JsonResponse({"ok": True})
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
 @require_POST
 def save_progress(request, pk):
-    """Called periodically by the player to store resume position + history."""
     video = get_object_or_404(Video, pk=pk)
     try:
         pos = float(request.POST.get("position", 0))
@@ -351,12 +447,16 @@ def create_playlist(request):
 def add_to_playlist(request, pk):
     video = get_object_or_404(Video, pk=pk)
     pl_pk = request.POST.get("playlist")
-    if not pl_pk:                               # empty select (no playlists exist)
+    if not pl_pk:
+        if is_spa(request):
+            return JsonResponse({"ok": False})
         return redirect(request.META.get("HTTP_REFERER", "/"))
     pl = get_object_or_404(Playlist, pk=pl_pk)
     order = pl.items.count()
     PlaylistItem.objects.get_or_create(playlist=pl, video=video,
                                        defaults={"order": order})
+    if is_spa(request):
+        return JsonResponse({"ok": True, "playlist": pl.name})
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
@@ -368,8 +468,7 @@ def _serialize(video):
         progress = min(100, (state.position_seconds / video.duration_seconds) * 100)
     from .templatetags.library_extras import duration as fmt_dur
     return {
-        "id": video.id,
-        "title": video.title,
+        "id": video.id, "title": video.title,
         "dur": fmt_dur(video.duration_seconds),
         "thumb": f"/thumb/{video.id}/" if video.thumbnail_path else "",
         "url": f"/watch/{video.id}/",
@@ -418,14 +517,15 @@ def convert_status(request, pk):
 
 # ---- Organize / maintenance -------------------------------------------------
 def organize(request):
-    """GET shows a dry-run preview; POST with confirm=1 performs the moves."""
     if request.method == "POST" and request.POST.get("confirm") == "1":
         result = services.organize_by_mtime(execute=True)
-        return render(request, "library/organize.html",
-                      base_ctx(request, result=result, done=True))
+        return render(request, "library/organize.html", base_ctx(
+            request, page_id="organize", spa_title="Organize — HomeFlix",
+            result=result, done=True))
     result = services.organize_by_mtime(execute=False)
-    return render(request, "library/organize.html",
-                  base_ctx(request, result=result, done=False))
+    return render(request, "library/organize.html", base_ctx(
+        request, page_id="organize", spa_title="Organize — HomeFlix",
+        result=result, done=False))
 
 
 @require_POST
@@ -442,12 +542,24 @@ def reset_library(request):
 
 
 # ---- Random video ----------------------------------------------------------
+def shorts(request):
+    from django.db.models import F
+    videos = (Video.objects.filter(missing=False, height__gt=F("width"), width__gt=0)
+              .order_by("-date_added"))
+    return render(request, "library/shorts.html", base_ctx(
+        request, active_nav="shorts", page_id="shorts", spa_title="Shorts — HomeFlix",
+        videos=videos,
+    ))
+
+
 def random_video(request):
     import random as _rnd
     count = Video.objects.filter(missing=False).count()
     if not count:
         return redirect("library")
     video = Video.objects.filter(missing=False)[_rnd.randrange(count)]
+    if is_spa(request) or request.GET.get("json") == "1":
+        return JsonResponse({"id": video.pk, "watch_url": f"/watch/{video.pk}/"})
     return redirect("watch", pk=video.pk)
 
 
@@ -492,8 +604,9 @@ from .models import SmartPlaylist
 def smart_playlist_detail(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     videos = list(sp.get_videos()[:200])
-    return render(request, "library/smart_playlist_detail.html",
-                  base_ctx(request, sp=sp, videos=videos))
+    return render(request, "library/smart_playlist_detail.html", base_ctx(
+        request, active_nav="playlists", page_id="smart_playlist",
+        spa_title=f"{sp.name} — HomeFlix", sp=sp, videos=videos))
 
 
 @require_POST
@@ -514,11 +627,10 @@ def delete_smart_playlist(request, pk):
 
 @require_POST
 def save_smart_rules(request, pk):
-    import json
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     try:
         rules = json.loads(request.POST.get("rules", "[]"))
-        json.dumps(rules)           # validate it's serialisable
+        json.dumps(rules)
     except Exception:
         rules = []
     sp.rules = json.dumps(rules)

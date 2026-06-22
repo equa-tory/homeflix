@@ -1,15 +1,4 @@
-{% extends "library/base.html" %}
-{% block nav_pl %}active{% endblock %}
-{% block bnav_pl %}active{% endblock %}
-{% block style %}
-/* wrapper fills grid cell; delete is absolutely positioned over the card */
-.pl-wrap{position:relative; display:block}
-.pl-del-form{position:absolute;top:8px;right:8px;z-index:10;margin:0}
-.pl-del-btn{background:color-mix(in srgb,var(--bg) 75%,transparent);
-  backdrop-filter:blur(6px); border:1px solid var(--border); border-radius:7px;
-  color:var(--muted); font-size:15px; cursor:pointer; padding:4px 7px; line-height:1}
-.pl-del-btn:hover{color:var(--accent);border-color:var(--accent)}
-{% endblock %}
+{% extends base_template %}
 {% block content %}
 <h1>Playlists</h1>
 <form class="toolbar" method="post" action="{% url 'create_playlist' %}">{% csrf_token %}
@@ -23,13 +12,13 @@
 <div class="grid">
   {% for p in playlists %}
   <div class="pl-wrap">
-    <a class="card nav-item" tabindex="0" href="{% url 'playlist_detail' p.pk %}">
+    <a class="card nav-item" tabindex="0" href="{% url 'playlist_detail' p.pk %}" data-spa>
       <div class="thumb"><div class="placeholder">☰ {{ p.items.count }}</div></div>
       <div class="meta"><div class="t">{{ p.name }}</div>
         <div class="s">{{ p.items.count }} video{{ p.items.count|pluralize }}</div></div>
     </a>
     <form class="pl-del-form" method="post" action="{% url 'delete_playlist' p.pk %}"
-          onsubmit="return confirm('Delete "{{ p.name|escapejs }}"? Videos are kept.')">
+          data-confirm="Delete &quot;{{ p.name|escapejs }}&quot;? Videos are kept.">
       {% csrf_token %}<button class="pl-del-btn" title="Delete playlist">🗑</button>
     </form>
   </div>
@@ -50,14 +39,14 @@
 <div class="grid">
   {% for sp in smart_playlists %}
   <div class="pl-wrap">
-    <a class="card nav-item" tabindex="0" href="{% url 'smart_playlist_detail' sp.pk %}">
+    <a class="card nav-item" tabindex="0" href="{% url 'smart_playlist_detail' sp.pk %}" data-spa>
       <div class="thumb"><div class="placeholder" style="font-size:16px">⚙ Auto</div></div>
       <div class="meta"><div class="t">{{ sp.name }}</div>
         <div class="s">Smart · {{ sp.get_videos.count }} video{{ sp.get_videos.count|pluralize }}</div>
       </div>
     </a>
     <form class="pl-del-form" method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
-          onsubmit="return confirm('Delete "{{ sp.name|escapejs }}"?')">
+          data-confirm="Delete &quot;{{ sp.name|escapejs }}&quot;?">
       {% csrf_token %}<button class="pl-del-btn" title="Delete">🗑</button>
     </form>
   </div>

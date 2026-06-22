@@ -1,13 +1,11 @@
-{% extends "library/base.html" %}
+{% extends base_template %}
 {% load library_extras %}
-{% block nav_pl %}active{% endblock %}
-{% block bnav_pl %}active{% endblock %}
 {% block content %}
 <h1>{{ playlist.name }}</h1>
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
   <p class="sub" style="margin:0">{{ items|length }} video{{ items|length|pluralize }}</p>
   <form method="post" action="{% url 'delete_playlist' playlist.pk %}"
-        onsubmit="return confirm('Delete this playlist? Videos are kept.')" style="margin:0">
+        data-confirm="Delete this playlist? Videos are kept." style="margin:0">
     {% csrf_token %}
     <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete playlist</button>
   </form>

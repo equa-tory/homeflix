@@ -1,36 +1,17 @@
-{% extends "library/base.html" %}
-{% block nav_pl %}active{% endblock %}
-{% block bnav_pl %}active{% endblock %}
-{% block style %}
-.rule-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 0;
-  border-bottom:1px solid var(--border)}
-.rule-row:last-child{border-bottom:none}
-.rule-row select,.rule-row input[type=text],.rule-row input[type=number]{
-  padding:7px 10px;border-radius:7px;border:1px solid var(--border);
-  background:var(--surface);color:var(--text);font-size:13px}
-.rule-row select{flex-shrink:0}
-.rule-row input[type=text]{flex:1;min-width:100px}
-.rule-row input[type=number]{width:90px}
-.del-rule{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;padding:0 6px}
-.del-rule:hover{color:var(--accent)}
-.rules-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  padding:14px;margin-bottom:16px}
-.rule-field-labels{color:var(--muted);font-size:11px;margin-bottom:8px;
-  display:flex;gap:24px;text-transform:uppercase;letter-spacing:.06em}
-{% endblock %}
+{% extends base_template %}
 {% block content %}
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
   <h1 style="margin:0">{{ sp.name }}</h1>
   <form method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
-        onsubmit="return confirm('Delete smart playlist?')" style="margin:0">
+        data-confirm="Delete smart playlist?" style="margin:0">
     {% csrf_token %}
     <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete</button>
   </form>
 </div>
 <p class="sub">{{ videos|length }} video{{ videos|length|pluralize }} match current rules</p>
 
-<!-- Rules editor -->
-<form method="post" action="{% url 'save_smart_rules' sp.pk %}" id="rulesForm">
+<form method="post" action="{% url 'save_smart_rules' sp.pk %}" id="rulesForm"
+      data-rules="{{ sp.rules }}">
   {% csrf_token %}
   <input type="hidden" name="name" value="{{ sp.name }}">
   <input type="hidden" name="rules" id="rulesInput" value="{{ sp.rules }}">
@@ -45,7 +26,7 @@
     </button>
   </div>
   <button class="btn nav-item" type="submit">Save &amp; refresh</button>
-  <a href="{% url 'playlists' %}" class="btn ghost nav-item">Back</a>
+  <a href="{% url 'playlists' %}" class="btn ghost nav-item" data-spa>Back</a>
 </form>
 
 {% if videos %}
@@ -58,81 +39,4 @@
   <p>No videos match the current rules.</p>
 </div>
 {% endif %}
-{% endblock %}
-
-{% block scripts %}
-<script>
-const FIELDS = [
-  {v:'title',          l:'Title'},
-  {v:'filename',       l:'Filename'},
-  {v:'channel',        l:'Channel'},
-  {v:'tags',           l:'Tag'},
-  {v:'ext',            l:'Format (ext)'},
-  {v:'rating',         l:'Rating (stars)'},
-  {v:'duration_seconds',l:'Duration (s)'},
-  {v:'height',         l:'Quality (px height)'},
-  {v:'favorite',       l:'Is favorite'},
-];
-const OPS_TEXT = [{v:'contains',l:'contains'},{v:'not_contains',l:'does not contain'}];
-const OPS_NUM  = [{v:'gte',l:'≥'},{v:'lte',l:'≤'},{v:'is',l:'='}];
-const OPS_BOOL = [{v:'is',l:'is true'}];
-
-function opsFor(field){
-  if(['rating','duration_seconds','height'].includes(field)) return OPS_NUM;
-  if(field==='favorite') return OPS_BOOL;
-  return OPS_TEXT;
-}
-function needsValue(field, op){ return field!=='favorite'; }
-
-let rules = [];
-try{ rules = JSON.parse({{ sp.rules|default:"[]"|safe }}); }catch{}
-
-const list = document.getElementById('rulesList');
-
-function renderRules(){
-  list.innerHTML = '';
-  rules.forEach((r,i)=>{
-    const row = document.createElement('div');
-    row.className='rule-row';
-    const fieldSel = `<select class="field-sel" data-i="${i}">${FIELDS.map(f=>`<option value="${f.v}"${r.field===f.v?' selected':''}>${f.l}</option>`).join('')}</select>`;
-    const ops = opsFor(r.field);
-    const opSel = `<select class="op-sel" data-i="${i}">${ops.map(o=>`<option value="${o.v}"${r.op===o.v?' selected':''}>${o.l}</option>`).join('')}</select>`;
-    const valInput = r.field==='favorite' ? '' :
-      `<input type="${['rating','duration_seconds','height'].includes(r.field)?'number':'text'}"
-         class="val-inp" data-i="${i}" value="${(r.value||'').toString().replace(/"/g,'&quot;')}"
-         placeholder="value" min="0" step="any">`;
-    row.innerHTML = fieldSel + opSel + valInput +
-      `<button type="button" class="del-rule" data-i="${i}">×</button>`;
-    list.appendChild(row);
-  });
-  // Bind events
-  list.querySelectorAll('.field-sel').forEach(s=>s.onchange=e=>{
-    const i=+e.target.dataset.i;
-    rules[i].field=e.target.value;
-    rules[i].op=opsFor(e.target.value)[0].v;
-    rules[i].value='';
-    renderRules();
-  });
-  list.querySelectorAll('.op-sel').forEach(s=>s.onchange=e=>{
-    rules[+e.target.dataset.i].op=e.target.value;
-  });
-  list.querySelectorAll('.val-inp').forEach(inp=>inp.oninput=e=>{
-    rules[+e.target.dataset.i].value=e.target.value;
-  });
-  list.querySelectorAll('.del-rule').forEach(b=>b.onclick=e=>{
-    rules.splice(+e.target.dataset.i,1); renderRules();
-  });
-}
-
-document.getElementById('addRuleBtn').onclick=()=>{
-  rules.push({field:'title',op:'contains',value:''});
-  renderRules();
-};
-
-document.getElementById('rulesForm').addEventListener('submit',()=>{
-  document.getElementById('rulesInput').value=JSON.stringify(rules);
-});
-
-renderRules();
-</script>
 {% endblock %}

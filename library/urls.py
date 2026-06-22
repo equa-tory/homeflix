@@ -16,6 +16,7 @@ urlpatterns = [
 
     # api
     path("api/videos/", views.api_videos, name="api_videos"),
+    path("api/watch/<int:pk>/", views.watch_api, name="watch_api"),
 
     # conversion
     path("video/<int:pk>/convert/", views.convert, name="convert"),
@@ -34,6 +35,7 @@ urlpatterns = [
     path("video/<int:pk>/rating/", views.set_rating, name="set_rating"),
     path("video/<int:pk>/playlist/", views.add_to_playlist, name="add_to_playlist"),
     path("theme/", views.toggle_theme, name="toggle_theme"),
+    path("shorts/", views.shorts, name="shorts"),
     path("random/", views.random_video, name="random_video"),
     path("video/<int:pk>/notes/", views.add_note, name="add_note"),
     path("video/<int:pk>/notes/<int:note_pk>/delete/", views.delete_note, name="delete_note"),

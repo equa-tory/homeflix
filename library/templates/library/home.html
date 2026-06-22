@@ -1,6 +1,4 @@
-{% extends "library/base.html" %}
-{% block nav_home %}active{% endblock %}
-{% block bnav_home %}active{% endblock %}
+{% extends base_template %}
 {% block content %}
 {% if total == 0 %}
   <div class="empty">
@@ -13,7 +11,7 @@
   <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
     <h1 style="margin:0">Home</h1>
     <a class="btn ghost nav-item" href="{% url 'random_video' %}"
-       style="font-size:13px;padding:7px 14px">🎲 Surprise me</a>
+       data-random style="font-size:13px;padding:7px 14px">🎲 Surprise me</a>
   </div>
   {% if continue_watching %}
     <h2>Continue watching</h2>

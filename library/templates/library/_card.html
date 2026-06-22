@@ -2,7 +2,8 @@
 <a class="card nav-item" tabindex="0" href="{% url 'watch' video.pk %}{% if pl %}?pl={{ pl }}{% endif %}">
   <div class="thumb">
     {% if video.thumbnail_path %}
-      <img src="{% url 'thumb' video.pk %}" alt="" loading="lazy">
+      {# background-image instead of <img> for TV browser compat (no object-fit needed) #}
+      <div class="thumb-bg" style="background-image:url({% url 'thumb' video.pk %})"></div>
     {% else %}
       <div class="placeholder">▶</div>
     {% endif %}
