@@ -431,7 +431,6 @@ html.player-locked{overflow:hidden}
     <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library">Library</a>
     <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists">Playlists</a>
     <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history">History</a>
-    <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts">Shorts</a>
   </nav>
   <div class="hdr-search">
     <form action="{% url 'library' %}" method="get" id="searchForm">
@@ -504,14 +503,14 @@ html.player-locked{overflow:hidden}
             <button class="cbtn" id="phPrev" disabled title="Previous">⏮</button>
             <button class="cbtn" id="phPlay" title="Play/Pause">▶</button>
             <button class="cbtn" id="phNext" disabled title="Next">⏭</button>
-            <span class="ctime" id="phCur">0:00</span><span class="csep">/</span>
-            <span class="ctime" id="phDur">0:00</span>
-            <span class="cflex"></span>
-            <button class="cbtn" id="phLoop" title="Loop">↻</button>
             <div class="vol-wrap">
               <button class="cbtn" id="phMute" title="Mute">🔊</button>
               <input type="range" id="phVol" class="vol-slider" min="0" max="1" step="0.02" value="1">
             </div>
+            <span class="ctime" id="phCur">0:00</span><span class="csep">/</span>
+            <span class="ctime" id="phDur">0:00</span>
+            <span class="cflex"></span>
+            <button class="cbtn" id="phLoop" title="Loop">↻</button>
             <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
           </div>
         </div>
@@ -931,7 +930,7 @@ const PLAYER=(function(){
     ms.setActionHandler('seekbackward',()=>{V.currentTime-=10;});ms.setActionHandler('seekforward',()=>{V.currentTime+=10;});
     ms.setActionHandler('seekto',ev=>{if(ev.seekTime!=null)V.currentTime=ev.seekTime;});
     ms.setActionHandler('previoustrack',data.prev_id?()=>navigate(data.prev_id):null);
-    ms.setActionHandler('nexttrack',data.next_id?()=>navigate(data.next_id):null);
+    ms.setActionHandler('nexttrack',data.next_id?()=>navigate(data.next_id,true):null);
   }
 
   /* ---- info panel ---- */
@@ -1114,7 +1113,7 @@ const PLAYER=(function(){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
       case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();V.currentTime=Math.min(V.duration||0,V.currentTime+10);}break;
       case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();V.currentTime=Math.max(0,V.currentTime-10);}break;
-      case'ArrowUp':e.preventDefault();if(d&&d.next_id)navigate(d.next_id);break;
+      case'ArrowUp':e.preventDefault();if(d&&d.next_id)navigate(d.next_id,true);break;
       case'ArrowDown':e.preventDefault();if(d&&d.prev_id)navigate(d.prev_id);break;
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
