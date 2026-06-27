@@ -4,7 +4,7 @@ import json
 import mimetypes
 
 from django.conf import settings
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.http import (
     StreamingHttpResponse, HttpResponse, JsonResponse, Http404, FileResponse,
 )
@@ -118,6 +118,10 @@ def home(request):
 
 def library(request):
     qs, q, sort, rev = _filtered_videos(request)
+    total_secs = Video.objects.filter(missing=False).aggregate(s=Sum('duration_seconds'))['s'] or 0
+    h, rem = divmod(int(total_secs), 3600)
+    m = rem // 60
+    total_duration = f"{h}h {m}m" if h else (f"{m}m" if m else "")
     return render(request, "library/library.html", base_ctx(
         request, active_nav="library", page_id="library", spa_title="Library — HomeFlix",
         q=q, sort=sort, rev=rev,
@@ -125,6 +129,7 @@ def library(request):
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
         active_tag=request.GET.get("tag", ""),
         total_videos=Video.objects.filter(missing=False).count(),
+        total_duration=total_duration,
     ))
 
 
@@ -637,3 +642,119 @@ def save_smart_rules(request, pk):
     sp.name  = request.POST.get("name", sp.name).strip() or sp.name
     sp.save()
     return redirect("smart_playlist_detail", pk=sp.pk)
+
+
+# ---- Bulk actions ----------------------------------------------------------
+
+@require_POST
+def bulk_regen_thumb(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+        percent = max(0.0, min(100.0, float(request.POST.get('percent', 0))))
+    except ValueError:
+        return JsonResponse({'ok': False})
+    for video in Video.objects.filter(pk__in=ids):
+        services.generate_thumbnail(video, percent=percent)
+    return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+@require_POST
+def bulk_rating(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+        rating = max(0, min(5, int(request.POST.get('rating', 0))))
+    except ValueError:
+        return JsonResponse({'ok': False})
+    Video.objects.filter(pk__in=ids).update(rating=rating)
+    return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+@require_POST
+def bulk_add_playlist(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    pl = get_object_or_404(Playlist, pk=request.POST.get('playlist'))
+    order = pl.items.count()
+    added = 0
+    for vid_id in ids:
+        try:
+            video = Video.objects.get(pk=vid_id)
+            _, created = PlaylistItem.objects.get_or_create(
+                playlist=pl, video=video, defaults={'order': order + added})
+            if created:
+                added += 1
+        except Video.DoesNotExist:
+            pass
+    return JsonResponse({'ok': True, 'count': added})
+
+
+@require_POST
+def bulk_favorite(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    Video.objects.filter(pk__in=ids).update(favorite=True)
+    return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+def api_playlists(request):
+    return JsonResponse({'playlists': [{'id': p.pk, 'name': p.name}
+                                       for p in Playlist.objects.all()]})
+
+
+# ---- PWA manifest + icon ---------------------------------------------------
+
+def pwa_manifest(request):
+    return JsonResponse({
+        "name": "HomeFlix",
+        "short_name": "HomeFlix",
+        "description": "Your personal local video library",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#0e0f12",
+        "theme_color": "#f0654a",
+        "icons": [
+            {"src": "/icons/192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/icons/512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }, content_type="application/manifest+json")
+
+
+def pwa_icon(request, size):
+    import struct, zlib
+    if size not in (16, 32, 48, 64, 96, 128, 180, 192, 256, 512):
+        raise Http404
+    br, bg, bb = 240, 101, 74   # #f0654a background
+    fr, fg, fb = 255, 255, 255  # white play triangle
+    x1, y1 = int(size * 0.30), int(size * 0.20)
+    x2, y2 = int(size * 0.30), int(size * 0.80)
+    x3, y3 = int(size * 0.75), int(size * 0.50)
+    rows = []
+    for y in range(size):
+        row = bytearray()
+        for x in range(size):
+            d1 = (x - x2) * (y1 - y2) - (x1 - x2) * (y - y2)
+            d2 = (x - x3) * (y2 - y3) - (x2 - x3) * (y - y3)
+            d3 = (x - x1) * (y3 - y1) - (x3 - x1) * (y - y1)
+            if not ((d1 < 0 or d2 < 0 or d3 < 0) and (d1 > 0 or d2 > 0 or d3 > 0)):
+                row += bytes([fr, fg, fb])
+            else:
+                row += bytes([br, bg, bb])
+        rows.append(b'\x00' + bytes(row))
+    raw = b''.join(rows)
+
+    def _chunk(tag, data):
+        c = tag + data
+        return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+
+    png = (b'\x89PNG\r\n\x1a\n' +
+           _chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)) +
+           _chunk(b'IDAT', zlib.compress(raw, 9)) +
+           _chunk(b'IEND', b''))
+    resp = HttpResponse(png, content_type='image/png')
+    resp['Cache-Control'] = 'public, max-age=86400'
+    return resp

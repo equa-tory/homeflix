@@ -1,9 +1,15 @@
-{% load library_extras %}<!DOCTYPE html>
+{% load library_extras %}{% load static %}<!DOCTYPE html>
 <html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{ spa_title|default:"HomeFlix" }}</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#f0654a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HomeFlix">
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/180.png">
 <style>
 :root{
   --bg:#0e0f12; --surface:#17191e; --surface2:#1f222a; --border:#2a2e38;
@@ -155,6 +161,33 @@ main{overflow-x:hidden}
 .movetbl code{color:var(--text)}
 .arrow{color:var(--accent)}
 .scinfo{color:var(--muted)}
+
+/* ---- bulk select bar ---- */
+#bulkBar{position:fixed;bottom:var(--bottom-nav-h);left:0;right:0;z-index:201;
+  background:var(--surface);border-top:2px solid var(--accent);
+  padding:10px 18px;display:none;align-items:center;gap:8px;flex-wrap:wrap;
+  box-shadow:0 -4px 20px #0008}
+#bulkBar.active{display:flex}
+.bulk-count{font-weight:700;font-size:14px;flex-shrink:0}
+.bulk-aw{position:relative}
+.bulk-pop{position:absolute;bottom:calc(100% + 8px);left:0;min-width:210px;
+  background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  padding:14px;box-shadow:0 8px 30px #000a;display:none;z-index:210}
+.bulk-pop.open{display:block}
+.bulk-pop label{display:block;color:var(--muted);font-size:12px;text-transform:uppercase;
+  letter-spacing:.06em;font-weight:700;margin-bottom:8px}
+.bulk-pop .brow{display:flex;gap:6px;align-items:center;margin-top:4px}
+.bulk-pop input[type=number]{width:72px;padding:7px;border-radius:7px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text)}
+.bulk-pop select{flex:1;padding:7px;border-radius:7px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font-size:13px}
+.bulk-stars span{cursor:pointer;font-size:26px;color:var(--border);padding:2px}
+.bulk-stars span.on{color:var(--accent)}
+.sel-mode .vcard{cursor:pointer}
+.sel-mode .vcard.selected .thumb{outline:2px solid var(--accent);outline-offset:-2px}
+.sel-mode .vcard.selected .thumb::after{content:'✓';position:absolute;top:5px;left:5px;
+  width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
+  font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
 /* ---- SPA top progress bar ---- */
 #spaBar{position:fixed; top:0; left:0; height:3px; width:0; z-index:600;
@@ -464,6 +497,49 @@ html.player-locked{overflow:hidden}
   <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts"><span class="icon">▯</span>Shorts</a>
 </nav>
 
+<!-- ====== BULK SELECT BAR ====== -->
+<div id="bulkBar" role="toolbar" aria-label="Bulk actions">
+  <span class="bulk-count" id="bulkCount">0 selected</span>
+  <button class="btn ghost" id="bulkClearBtn" style="padding:7px 10px">✕ Clear</button>
+  <span style="flex:1"></span>
+
+  <div class="bulk-aw">
+    <button class="btn ghost" id="bulkThumbBtn">🖼 Thumbnail %</button>
+    <div class="bulk-pop" id="bulkThumbPop">
+      <label>Regenerate thumbnail at</label>
+      <div class="brow">
+        <input type="number" id="bulkThumbPct" min="0" max="100" value="0">
+        <span style="color:var(--muted)">%</span>
+        <button class="btn" id="bulkThumbGo">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bulk-aw">
+    <button class="btn ghost" id="bulkPlBtn">☰ Playlist</button>
+    <div class="bulk-pop" id="bulkPlPop">
+      <label>Add to playlist</label>
+      <div class="brow">
+        <select id="bulkPlSel"><option value="">Loading…</option></select>
+        <button class="btn" id="bulkPlGo">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="bulk-aw">
+    <button class="btn ghost" id="bulkRateBtn">★ Rate</button>
+    <div class="bulk-pop" id="bulkRatePop">
+      <label>Set rating for selected</label>
+      <div class="bulk-stars" id="bulkStars">
+        <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span>
+        <span data-v="4">★</span><span data-v="5">★</span>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
+</div>
+
 <!-- ====== PLAYER (single persistent video) ====== -->
 <div id="player" class="ph-hidden" aria-hidden="true">
   <div id="phScroll">
@@ -636,6 +712,101 @@ const ROUTER=(function(){
 /* =========================================================
    PAGE INITIALISERS  (called after each fragment swap)
    ========================================================= */
+/* =========================================================
+   BULK SELECT  (window.SELECT_MODE)
+   ========================================================= */
+const SELECT_MODE=(function(){
+  let active=false;
+  const sel=new Set();
+
+  function updateBar(){
+    const n=sel.size;
+    document.getElementById('bulkBar').classList.toggle('active',n>0&&active);
+    document.getElementById('bulkCount').textContent=n+' selected';
+  }
+
+  function toggle(){
+    active=!active;
+    document.body.classList.toggle('sel-mode',active);
+    if(!active)sel.clear();
+    document.querySelectorAll('.vcard').forEach(card=>{
+      const m=card.href&&card.href.match(/\/watch\/(\d+)\//);
+      if(m)card.classList.toggle('selected',active&&sel.has(parseInt(m[1])));
+    });
+    updateBar();
+  }
+
+  function deactivate(){if(active)toggle();}
+
+  function toggleItem(id,el){
+    if(sel.has(id))sel.delete(id);else sel.add(id);
+    if(el)el.classList.toggle('selected',sel.has(id));
+    updateBar();
+  }
+
+  function isActive(){return active;}
+  function isSelected(id){return sel.has(id);}
+  function getIds(){return[...sel];}
+  function clear(){sel.clear();document.querySelectorAll('.vcard.selected').forEach(c=>c.classList.remove('selected'));updateBar();}
+
+  /* ---- bulk bar wiring ---- */
+  (function initBar(){
+    document.getElementById('bulkClearBtn').onclick=()=>clear();
+
+    // popup toggles
+    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop'};
+    Object.entries(pops).forEach(([btnId,popId])=>{
+      const btn=document.getElementById(btnId),pop=document.getElementById(popId);
+      btn.onclick=e=>{e.stopPropagation();
+        Object.values(pops).forEach(p=>{if(p!==popId)document.getElementById(p).classList.remove('open');});
+        if(pop.classList.toggle('open')&&popId==='bulkPlPop'){
+          fetch('/api/playlists/',{headers:{'X-SPA':'1'}}).then(r=>r.json()).then(d=>{
+            const s=document.getElementById('bulkPlSel');
+            s.innerHTML=d.playlists.length?d.playlists.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''):'<option value="">No playlists</option>';
+          });
+        }
+      };
+    });
+    document.addEventListener('click',()=>document.querySelectorAll('.bulk-pop.open').forEach(p=>p.classList.remove('open')));
+
+    // thumbnail %
+    document.getElementById('bulkThumbGo').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(','); if(!ids)return;
+      const pct=parseFloat(document.getElementById('bulkThumbPct').value)||0;
+      const btn=e.currentTarget;
+      post('/bulk/thumb-regen/',{ids,percent:pct.toFixed(1)}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='Apply',1500);});
+    };
+
+    // playlist
+    document.getElementById('bulkPlGo').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(','); if(!ids)return;
+      const pl=document.getElementById('bulkPlSel').value; if(!pl)return;
+      const btn=e.currentTarget;
+      post('/bulk/playlist/',{ids,playlist:pl}).then(r=>{btn.textContent='✓ +'+r.count;setTimeout(()=>btn.textContent='Add',1500);});
+    };
+
+    // rating stars
+    const stars=document.getElementById('bulkStars');
+    stars.querySelectorAll('span').forEach(s=>{
+      s.onmouseenter=()=>stars.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=+s.dataset.v));
+      s.onmouseleave=()=>stars.querySelectorAll('span').forEach(x=>x.classList.remove('on'));
+      s.onclick=e=>{e.stopPropagation();
+        const ids=getIds().join(',');if(!ids)return;
+        post('/bulk/rating/',{ids,rating:s.dataset.v}).then(()=>{
+          document.getElementById('bulkRatePop').classList.remove('open');});
+      };
+    });
+
+    // favorite
+    document.getElementById('bulkFavBtn').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
+      post('/bulk/favorite/',{ids}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='♥ Favorite',1200);});
+    };
+  })();
+
+  return{toggle,deactivate,toggleItem,isActive,isSelected,getIds,clear};
+})();
+
 const PAGE_INIT={
   /* ----- LIBRARY: virtualised infinite grid ----- */
   library(root){
@@ -669,6 +840,7 @@ const PAGE_INIT={
       el.className='vcard card nav-item';el.tabIndex=0;el.href=item.url;
       el.innerHTML=`<div class="thumb">${thumb}${badge}<span class="dur">${item.dur}</span>${prog}</div>`+
         `<div class="meta"><div class="t">${esc(item.title)}</div><div class="s">${sub}</div></div>`;
+      if(SELECT_MODE.isSelected(item.id))el.classList.add('selected');
       return el;
     }
     function placeCard(el,i){const row=Math.floor(i/cols),col=i%cols;
@@ -695,7 +867,7 @@ const PAGE_INIT={
       fetch('/api/videos/?'+q.toString()).then(r=>{if(!r.ok)throw 0;return r.json();}).then(d=>{
         inflight.delete(p);loadedPages.add(p);
         if(total==null){total=d.total;
-          if(countEl)countEl.textContent=total?('· '+total.toLocaleString()+' videos'):'';
+          if(countEl){const dur=countEl.dataset.duration||'';countEl.textContent=total?('· '+total.toLocaleString()+' videos'+(dur?' · '+dur:'')):'';}
           if(!total){if(emptyEl)emptyEl.style.display='';grid.style.display='none';return;}
           calcMetrics();setHeight();}
         const base=(p-1)*PAGE; d.items.forEach((it,k)=>{data[base+k]=it;}); render();
@@ -716,7 +888,11 @@ const PAGE_INIT={
     if(sortSel)sortSel.onchange=()=>{const q=new URLSearchParams(location.search);
       q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
 
-    return ()=>{scrollEl.removeEventListener('scroll',onScroll);window.removeEventListener('resize',onResize);};
+    // Select mode button
+    const selBtn=root.querySelector('#selModeBtn');
+    if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();selBtn.classList.toggle('active',SELECT_MODE.isActive());selBtn.textContent=SELECT_MODE.isActive()?'✕ Cancel':'☑ Select';};
+
+    return ()=>{scrollEl.removeEventListener('scroll',onScroll);window.removeEventListener('resize',onResize);SELECT_MODE.deactivate();};
   },
 
   /* ----- SMART PLAYLIST: rules editor ----- */
@@ -895,7 +1071,7 @@ const PLAYER=(function(){
       INFO.style.opacity=''; INFO.style.pointerEvents='';
       if(startPos!==undefined)data.position=startPos;
       data._qp=qp||''; // carry queue params through navigate
-      applyData(data,play); SCRL.scrollTop=0;
+      applyData(data, play===null ? data.autoplay : play); SCRL.scrollTop=0;
     });
   }
 
@@ -1118,7 +1294,8 @@ const PLAYER=(function(){
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
       case'm':case'M':V.muted=!V.muted;syncVol();break;
-      case'Escape':minimize();break;}
+      case'Escape':minimize();break;
+      default:if(e.key>='0'&&e.key<='9'&&e.key.length===1){e.preventDefault();if(V.duration)V.currentTime=parseInt(e.key)/10*V.duration;}}
   });
 
   /* touch: swipe-down-to-minimize | Shorts swipe nav | double-tap mini resize */
@@ -1247,7 +1424,7 @@ const PLAYER=(function(){
     SCRL.scrollTop=0;INFO.innerHTML='';SPIN.style.display='flex';
     pushed=push;
     if(push){history.pushState({watch:id},'','/watch/'+id+'/');}
-    fetchApply(id,false,undefined,qp);
+    fetchApply(id,null,undefined,qp);
   }
   function navigate(id,fromZero=false){const playing=!V.paused;
     fetchApply(id,playing||autoplay,fromZero?0:undefined,d?d._qp||'':'');
@@ -1312,6 +1489,7 @@ const PLAYER=(function(){
     const wm=href.match(/^\/watch\/(\d+)\//);
     if(wm && a.classList.contains('card')){
       e.preventDefault();
+      if(SELECT_MODE.isActive()&&!a.closest('#player')){SELECT_MODE.toggleItem(parseInt(wm[1]),a);return;}
       // Cards inside the player = navigate (keep queue); outside = open fresh
       if(a.closest('#player')){PLAYER.navigate(parseInt(wm[1]),false);}
       else{const qp=href.includes('?')?href.split('?')[1]:'';PLAYER.open(parseInt(wm[1]),{qp});}

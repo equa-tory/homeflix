@@ -46,4 +46,15 @@ urlpatterns = [
     path("smart-playlists/<int:pk>/", views.smart_playlist_detail, name="smart_playlist_detail"),
     path("smart-playlists/<int:pk>/rules/", views.save_smart_rules, name="save_smart_rules"),
     path("smart-playlists/<int:pk>/delete/", views.delete_smart_playlist, name="delete_smart_playlist"),
+
+    # Bulk actions
+    path("bulk/thumb-regen/", views.bulk_regen_thumb, name="bulk_regen_thumb"),
+    path("bulk/rating/", views.bulk_rating, name="bulk_rating"),
+    path("bulk/playlist/", views.bulk_add_playlist, name="bulk_add_playlist"),
+    path("bulk/favorite/", views.bulk_favorite, name="bulk_favorite"),
+    path("api/playlists/", views.api_playlists, name="api_playlists"),
+
+    # PWA
+    path("manifest.json", views.pwa_manifest, name="pwa_manifest"),
+    path("icons/<int:size>.png", views.pwa_icon, name="pwa_icon"),
 ]

@@ -1,6 +1,6 @@
 {% extends base_template %}
 {% block content %}
-<h1>Library <span style="color:var(--muted);font-size:14px;font-weight:400" id="vcount"></span></h1>
+<h1>Library <span style="color:var(--muted);font-size:14px;font-weight:400" id="vcount" data-duration="{{ total_duration }}"></span></h1>
 <form class="toolbar" method="get" id="filters" data-no-spa>
   <input type="hidden" name="q" value="{{ q }}">
   <input type="hidden" name="rev" value="{{ rev|yesno:'1,0' }}">
@@ -23,6 +23,7 @@
     <a class="chip nav-item {% if active_tag == t.name %}active{% endif %}" data-spa
        href="?tag={{ t.name }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}">{{ t.name }}</a>
   {% endfor %}
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
 </form>
 
 <div id="vgrid" data-server-total="{{ total_videos }}" data-page-size="{{ page_size }}"></div>
