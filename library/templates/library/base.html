@@ -532,6 +532,9 @@ html.player-locked{overflow:hidden}
         <select id="bulkPlSel"><option value="">Loading…</option></select>
         <button class="btn" id="bulkPlGo">Add</button>
       </div>
+      <input type="text" id="bulkPlNew" placeholder="New playlist name…"
+        style="display:none;margin-top:8px;width:100%;padding:7px 10px;border-radius:7px;
+               border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">
     </div>
   </div>
 
@@ -789,7 +792,9 @@ const SELECT_MODE=(function(){
         if(pop.classList.toggle('open')&&popId==='bulkPlPop'){
           fetch('/api/playlists/',{headers:{'X-SPA':'1'}}).then(r=>r.json()).then(d=>{
             const s=document.getElementById('bulkPlSel');
-            s.innerHTML=d.playlists.length?d.playlists.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''):'<option value="">No playlists</option>';
+            const newOpt='<option value="__new__">＋ New playlist…</option>';
+            s.innerHTML=newOpt+(d.playlists.length?d.playlists.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''):'');
+            s.onchange=()=>{const ni=document.getElementById('bulkPlNew');if(ni)ni.style.display=s.value==='__new__'?'':'none';if(s.value==='__new__'&&ni)ni.focus();};
           });
         }
       };
@@ -807,9 +812,22 @@ const SELECT_MODE=(function(){
     // playlist
     document.getElementById('bulkPlGo').onclick=e=>{e.stopPropagation();
       const ids=getIds().join(','); if(!ids)return;
-      const pl=document.getElementById('bulkPlSel').value; if(!pl)return;
+      const sel=document.getElementById('bulkPlSel');
+      const ni=document.getElementById('bulkPlNew');
       const btn=e.currentTarget;
-      post('/bulk/playlist/',{ids,playlist:pl}).then(r=>{btn.textContent='✓ +'+r.count;setTimeout(()=>btn.textContent='Add',1500);});
+      if(sel.value==='__new__'){
+        const name=(ni?ni.value:'').trim(); if(!name){if(ni)ni.focus();return;}
+        post('/bulk/playlist/',{ids,new_name:name}).then(r=>{
+          if(!r.ok)return;
+          btn.textContent='✓ +'+r.count;
+          if(r.playlist_id){const opt=document.createElement('option');opt.value=r.playlist_id;opt.textContent=r.playlist;sel.appendChild(opt);sel.value=r.playlist_id;}
+          if(ni){ni.value='';ni.style.display='none';}
+          setTimeout(()=>btn.textContent='Add',1500);
+        });
+      }else{
+        if(!sel.value)return;
+        post('/bulk/playlist/',{ids,playlist:sel.value}).then(r=>{btn.textContent='✓ +'+r.count;setTimeout(()=>btn.textContent='Add',1500);});
+      }
     };
 
     // rating stars
@@ -896,12 +914,18 @@ const PAGE_INIT={
         if(total==null){total=d.total;
           if(countEl){const dur=countEl.dataset.duration||'';countEl.textContent=total?('· '+total.toLocaleString()+' videos'+(dur?' · '+dur:'')):'';}
           if(!total){if(emptyEl)emptyEl.style.display='';grid.style.display='none';return;}
-          calcMetrics();setHeight();}
+          calcMetrics();setHeight();
+          try{const rs=JSON.parse(sessionStorage.getItem('hf_lib_scroll')||'null');
+            if(rs&&rs.url===location.pathname+location.search&&rs.pos>0)
+              setTimeout(()=>{if(scrollEl===window)window.scrollTo(0,rs.pos);else scrollEl.scrollTop=rs.pos;},60);
+          }catch{}}
         const base=(p-1)*PAGE; d.items.forEach((it,k)=>{data[base+k]=it;}); render();
       }).catch(()=>{inflight.delete(p);});
     }
     let ticking=false;
-    function onScroll(){if(ticking)return;ticking=true;requestAnimationFrame(()=>{render();ticking=false;});}
+    function onScroll(){
+      try{sessionStorage.setItem('hf_lib_scroll',JSON.stringify({pos:getScroll(),url:location.pathname+location.search}));}catch{}
+      if(ticking)return;ticking=true;requestAnimationFrame(()=>{render();ticking=false;});}
     function onResize(){if(!calcMetrics())return;setHeight();for(const[i,el]of nodes)placeCard(el,i);render();}
 
     function start(){if(grid.clientWidth>0){

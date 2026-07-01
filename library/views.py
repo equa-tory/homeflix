@@ -679,7 +679,11 @@ def bulk_add_playlist(request):
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
     except ValueError:
         return JsonResponse({'ok': False})
-    pl = get_object_or_404(Playlist, pk=request.POST.get('playlist'))
+    new_name = request.POST.get('new_name', '').strip()
+    if new_name:
+        pl, _ = Playlist.objects.get_or_create(name=new_name)
+    else:
+        pl = get_object_or_404(Playlist, pk=request.POST.get('playlist'))
     order = pl.items.count()
     added = 0
     for vid_id in ids:
@@ -691,7 +695,7 @@ def bulk_add_playlist(request):
                 added += 1
         except Video.DoesNotExist:
             pass
-    return JsonResponse({'ok': True, 'count': added})
+    return JsonResponse({'ok': True, 'count': added, 'playlist_id': pl.pk, 'playlist': pl.name})
 
 
 @require_POST

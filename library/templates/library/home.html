@@ -1,5 +1,11 @@
 {% extends base_template %}
 {% block content %}
+<style>
+.home-sec{font-size:18px;font-weight:800;color:var(--text);margin:32px 0 14px;
+  letter-spacing:-.02em;display:flex;align-items:center;gap:10px}
+.home-sec::before{content:'';width:4px;height:22px;background:var(--accent);
+  border-radius:2px;flex-shrink:0}
+</style>
 {% if total == 0 %}
   <div class="empty">
     <div class="big">🎬</div>
@@ -14,18 +20,18 @@
        data-random style="font-size:13px;padding:7px 14px">🎲 Surprise me</a>
   </div>
   {% if continue_watching %}
-    <h2>Continue watching</h2>
+    <div class="home-sec">Continue watching</div>
     <div class="grid">
       {% for video in continue_watching %}{% include "library/_card.html" %}{% endfor %}
     </div>
   {% endif %}
   {% if discovery %}
-    <h2>Discover</h2>
+    <div class="home-sec">Discover</div>
     <div class="grid">
       {% for video in discovery %}{% include "library/_card.html" %}{% endfor %}
     </div>
   {% endif %}
-  <h2>Recently added</h2>
+  <div class="home-sec">Recently added</div>
   <div class="grid">
     {% for video in recent %}{% include "library/_card.html" %}{% endfor %}
   </div>
