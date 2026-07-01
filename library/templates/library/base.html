@@ -189,6 +189,15 @@ main{overflow-x:hidden}
   width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
   font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
+/* ---- select FAB ---- */
+#selFab{position:fixed;right:10px;top:50%;transform:translateY(-50%);z-index:150;
+  background:var(--surface);border:1px solid var(--border);border-radius:20px;
+  padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;color:var(--muted);
+  display:none;box-shadow:0 2px 14px #0006;white-space:nowrap;line-height:1.4}
+#selFab.active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+#selFab:hover{border-color:var(--accent)}
+@media(max-width:700px){#selFab{right:7px;padding:5px 9px;font-size:11px}}
+
 /* ---- SPA top progress bar ---- */
 #spaBar{position:fixed; top:0; left:0; height:3px; width:0; z-index:600;
   background:var(--accent); transition:width .2s ease, opacity .3s ease; opacity:0}
@@ -540,6 +549,9 @@ html.player-locked{overflow:hidden}
   <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
 </div>
 
+<!-- select FAB (visible only on library page) -->
+<button id="selFab">☑ Select</button>
+
 <!-- ====== PLAYER (single persistent video) ====== -->
 <div id="player" class="ph-hidden" aria-hidden="true">
   <div id="phScroll">
@@ -734,6 +746,11 @@ const SELECT_MODE=(function(){
       if(m)card.classList.toggle('selected',active&&sel.has(parseInt(m[1])));
     });
     updateBar();
+    const fab=document.getElementById('selFab');
+    if(fab&&fab.style.display!=='none'){
+      fab.classList.toggle('active',active);
+      fab.textContent=active?'✕ Cancel':'☑ Select';
+    }
   }
 
   function deactivate(){if(active)toggle();}
@@ -751,6 +768,15 @@ const SELECT_MODE=(function(){
 
   /* ---- bulk bar wiring ---- */
   (function initBar(){
+    // Prevent any click inside the bulk bar from reaching document-level handlers
+    // (manage menu close, popup close) — individual buttons manage their own state.
+    document.getElementById('bulkBar').addEventListener('click',e=>{
+      e.stopPropagation();
+      // Close all popups if the click wasn't inside a popup or popup-toggle button
+      if(!e.target.closest('.bulk-pop,.bulk-aw>button'))
+        document.querySelectorAll('.bulk-pop.open').forEach(p=>p.classList.remove('open'));
+    });
+
     document.getElementById('bulkClearBtn').onclick=()=>clear();
 
     // popup toggles
@@ -888,11 +914,25 @@ const PAGE_INIT={
     if(sortSel)sortSel.onchange=()=>{const q=new URLSearchParams(location.search);
       q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
 
-    // Select mode button
+    // Select mode button (toolbar)
     const selBtn=root.querySelector('#selModeBtn');
     if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();selBtn.classList.toggle('active',SELECT_MODE.isActive());selBtn.textContent=SELECT_MODE.isActive()?'✕ Cancel':'☑ Select';};
 
-    return ()=>{scrollEl.removeEventListener('scroll',onScroll);window.removeEventListener('resize',onResize);SELECT_MODE.deactivate();};
+    // Select FAB (sticky right-side button)
+    const selFab=document.getElementById('selFab');
+    if(selFab){
+      selFab.style.display='';
+      selFab.textContent=SELECT_MODE.isActive()?'✕ Cancel':'☑ Select';
+      selFab.classList.toggle('active',SELECT_MODE.isActive());
+      selFab.onclick=()=>{
+        SELECT_MODE.toggle();
+        const on=SELECT_MODE.isActive();
+        if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
+      };
+    }
+
+    return ()=>{scrollEl.removeEventListener('scroll',onScroll);window.removeEventListener('resize',onResize);SELECT_MODE.deactivate();
+      const sf=document.getElementById('selFab');if(sf)sf.style.display='none';};
   },
 
   /* ----- SMART PLAYLIST: rules editor ----- */
@@ -1120,6 +1160,7 @@ const PLAYER=(function(){
       `<span class="dur">${esc(r.dur)}</span>`+(r.progress>1?`<div class="progress" style="width:${r.progress}%"></div>`:'')+
       `</div><div class="meta"><div class="t">${esc(r.title)}</div>`+(r.channel?`<div class="s">${esc(r.channel)}</div>`:'')+`</div></a>`).join('');
     const plOpts=(data.playlists||[]).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    const plNewOpt=`<option value="__new__">＋ New playlist…</option>`;
     const notesHtml=notes.length?notes.map(n=>
       `<div class="note-item" data-id="${n.id}"><button class="note-ts-btn" data-t="${n.ts}">${esc(n.ts_label)}</button>`+
       `<span class="note-text">${esc(n.text)}</span><button class="note-del" data-url="${esc(n.delete_url)}">×</button></div>`).join('')
@@ -1134,7 +1175,8 @@ const PLAYER=(function(){
       `<span class="spacer"></span>`+
       `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${data.autoplay?'▶▶ Auto On':'▶▶ Auto Off'}</button></div>`+
       `<div class="tech">${tech}${data.source_url?`<a href="${esc(data.source_url)}" target="_blank" style="color:var(--accent)">source ↗</a>`:''}</div>`+
-      (plOpts?`<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plOpts}</select><button class="btn ghost" id="phPlBtn">+ Playlist</button></div></div>`:'')+
+      `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
+      `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
       `<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
@@ -1159,10 +1201,29 @@ const PLAYER=(function(){
     const auto=document.getElementById('phAuto');
     if(auto)auto.onclick=()=>post(data.autoplay_toggle_url).then(r=>{autoplay=r.autoplay;
       auto.textContent=autoplay?'▶▶ Auto On':'▶▶ Auto Off';auto.classList.toggle('on',autoplay);});
+    const plSel=document.getElementById('phPlSel');
+    const plNew=document.getElementById('phPlNew');
     const plBtn=document.getElementById('phPlBtn');
-    if(plBtn)plBtn.onclick=()=>{const sel=document.getElementById('phPlSel');
-      if(sel&&sel.value)post(data.playlist_url,{playlist:sel.value}).then(()=>{plBtn.textContent='✓ Added';
-        setTimeout(()=>plBtn.textContent='+ Playlist',1200);});};
+    if(plSel&&plNew)plSel.onchange=()=>{plNew.style.display=plSel.value==='__new__'?'':'none';if(plSel.value==='__new__')plNew.focus();};
+    if(plBtn)plBtn.onclick=()=>{
+      if(!plSel)return;
+      if(plSel.value==='__new__'){
+        const name=(plNew?plNew.value:'').trim();
+        if(!name){if(plNew)plNew.focus();return;}
+        post(data.playlist_url,{new_name:name}).then(r=>{
+          if(!r.ok)return;
+          plBtn.textContent='✓ Added';
+          if(r.playlist_id){
+            const opt=document.createElement('option');opt.value=r.playlist_id;opt.textContent=r.playlist;
+            plSel.appendChild(opt);plSel.value=r.playlist_id;
+          }
+          if(plNew){plNew.value='';plNew.style.display='none';}
+          setTimeout(()=>plBtn.textContent='Add',1200);
+        });
+      }else if(plSel.value){
+        post(data.playlist_url,{playlist:plSel.value}).then(()=>{plBtn.textContent='✓ Added';setTimeout(()=>plBtn.textContent='Add',1200);});
+      }
+    };
     const thBtn=document.getElementById('phThumbBtn');
     if(thBtn)thBtn.onclick=()=>{const p=document.getElementById('phThumbPct').value;
       post(data.regen_thumb_url,{percent:p}).then(()=>{thBtn.textContent='✓';setTimeout(()=>thBtn.textContent='Regenerate',1200);});};

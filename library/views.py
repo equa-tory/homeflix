@@ -452,16 +452,20 @@ def create_playlist(request):
 def add_to_playlist(request, pk):
     video = get_object_or_404(Video, pk=pk)
     pl_pk = request.POST.get("playlist")
-    if not pl_pk:
+    new_name = request.POST.get("new_name", "").strip()
+    if not pl_pk and new_name:
+        pl, _ = Playlist.objects.get_or_create(name=new_name)
+    elif pl_pk:
+        pl = get_object_or_404(Playlist, pk=pl_pk)
+    else:
         if is_spa(request):
             return JsonResponse({"ok": False})
         return redirect(request.META.get("HTTP_REFERER", "/"))
-    pl = get_object_or_404(Playlist, pk=pl_pk)
     order = pl.items.count()
     PlaylistItem.objects.get_or_create(playlist=pl, video=video,
                                        defaults={"order": order})
     if is_spa(request):
-        return JsonResponse({"ok": True, "playlist": pl.name})
+        return JsonResponse({"ok": True, "playlist": pl.name, "playlist_id": pl.pk})
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
