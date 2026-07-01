@@ -190,13 +190,13 @@ main{overflow-x:hidden}
   font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
 /* ---- select FAB ---- */
-#selFab{position:fixed;right:10px;top:50%;transform:translateY(-50%);z-index:150;
-  background:var(--surface);border:1px solid var(--border);border-radius:20px;
-  padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;color:var(--muted);
-  display:none;box-shadow:0 2px 14px #0006;white-space:nowrap;line-height:1.4}
+#selFab{position:fixed;left:10px;top:50%;transform:translateY(-50%);z-index:150;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  width:36px;height:36px;font-size:17px;font-weight:700;cursor:pointer;color:var(--muted);
+  display:none;box-shadow:0 2px 12px #0005;align-items:center;justify-content:center;padding:0}
 #selFab.active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
 #selFab:hover{border-color:var(--accent)}
-@media(max-width:700px){#selFab{right:7px;padding:5px 9px;font-size:11px}}
+@media(max-width:700px){#selFab{left:7px;width:32px;height:32px;font-size:15px}}
 
 /* ---- SPA top progress bar ---- */
 #spaBar{position:fixed; top:0; left:0; height:3px; width:0; z-index:600;
@@ -749,7 +749,8 @@ const SELECT_MODE=(function(){
     const fab=document.getElementById('selFab');
     if(fab&&fab.style.display!=='none'){
       fab.classList.toggle('active',active);
-      fab.textContent=active?'✕ Cancel':'☑ Select';
+      fab.textContent=active?'✕':'☑';
+      fab.title=active?'Cancel select (S)':'Select videos (S)';
     }
   }
 
@@ -916,23 +917,36 @@ const PAGE_INIT={
 
     // Select mode button (toolbar)
     const selBtn=root.querySelector('#selModeBtn');
-    if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();selBtn.classList.toggle('active',SELECT_MODE.isActive());selBtn.textContent=SELECT_MODE.isActive()?'✕ Cancel':'☑ Select';};
 
-    // Select FAB (sticky right-side button)
+    // Select FAB (sticky left-side square button)
     const selFab=document.getElementById('selFab');
-    if(selFab){
-      selFab.style.display='';
-      selFab.textContent=SELECT_MODE.isActive()?'✕ Cancel':'☑ Select';
-      selFab.classList.toggle('active',SELECT_MODE.isActive());
-      selFab.onclick=()=>{
-        SELECT_MODE.toggle();
-        const on=SELECT_MODE.isActive();
-        if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
-      };
+    function syncSelUI(){
+      const on=SELECT_MODE.isActive();
+      if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
     }
+    if(selFab){
+      selFab.style.display='flex';
+      selFab.textContent=SELECT_MODE.isActive()?'✕':'☑';
+      selFab.title=SELECT_MODE.isActive()?'Cancel select (S)':'Select videos (S)';
+      selFab.classList.toggle('active',SELECT_MODE.isActive());
+      selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
+    }
+    if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
 
-    return ()=>{scrollEl.removeEventListener('scroll',onScroll);window.removeEventListener('resize',onResize);SELECT_MODE.deactivate();
-      const sf=document.getElementById('selFab');if(sf)sf.style.display='none';};
+    // 's' key toggles select mode
+    function onSelKey(e){
+      if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))return;
+      if(e.key==='s'||e.key==='S'){e.preventDefault();SELECT_MODE.toggle();syncSelUI();}
+    }
+    document.addEventListener('keydown',onSelKey);
+
+    return ()=>{
+      scrollEl.removeEventListener('scroll',onScroll);
+      window.removeEventListener('resize',onResize);
+      document.removeEventListener('keydown',onSelKey);
+      SELECT_MODE.deactivate();
+      const sf=document.getElementById('selFab');if(sf)sf.style.display='none';
+    };
   },
 
   /* ----- SMART PLAYLIST: rules editor ----- */
