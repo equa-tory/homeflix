@@ -470,7 +470,7 @@ def add_to_playlist(request, pk):
 
 
 # ---- Infinite-scroll JSON API ----------------------------------------------
-def _serialize(video):
+def _serialize(video, qs_suffix=""):
     state = getattr(video, "playback", None)
     progress = 0
     if state and video.duration_seconds:
@@ -480,7 +480,7 @@ def _serialize(video):
         "id": video.id, "title": video.title,
         "dur": fmt_dur(video.duration_seconds),
         "thumb": f"/thumb/{video.id}/" if video.thumbnail_path else "",
-        "url": f"/watch/{video.id}/",
+        "url": f"/watch/{video.id}/{qs_suffix}",
         "quality": video.aspect_label,
         "needs_convert": not video.browser_playable and video.convert_status != Video.CONVERT_DONE,
         "channel": video.channel,
@@ -500,7 +500,10 @@ def api_videos(request):
     size = settings.PAGE_SIZE
     start = (page - 1) * size
     total = qs.count()
-    items = [_serialize(v) for v in qs[start:start + size]]
+    filt = request.GET.copy()
+    filt.pop("page", None)
+    qs_suffix = f"?{filt.urlencode()}" if filt else ""
+    items = [_serialize(v, qs_suffix) for v in qs[start:start + size]]
     return JsonResponse({
         "items": items, "page": page, "total": total,
         "has_more": start + size < total,
@@ -563,13 +566,24 @@ def shorts(request):
 
 def random_video(request):
     import random as _rnd
-    count = Video.objects.filter(missing=False).count()
-    if not count:
-        return redirect("library")
-    video = Video.objects.filter(missing=False)[_rnd.randrange(count)]
+    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts"))
+    if has_filter:
+        qs, _q, _s, _r = _filtered_videos(request)
+        ids = list(qs.values_list("pk", flat=True))
+        if not ids:
+            return redirect("library")
+        pk = _rnd.choice(ids)
+    else:
+        count = Video.objects.filter(missing=False).count()
+        if not count:
+            return redirect("library")
+        pk = Video.objects.filter(missing=False)[_rnd.randrange(count)].pk
+    filt = request.GET.copy()
+    filt.pop("json", None)
+    watch_url = f"/watch/{pk}/" + (f"?{filt.urlencode()}" if filt else "")
     if is_spa(request) or request.GET.get("json") == "1":
-        return JsonResponse({"id": video.pk, "watch_url": f"/watch/{video.pk}/"})
-    return redirect("watch", pk=video.pk)
+        return JsonResponse({"id": pk, "watch_url": watch_url})
+    return redirect(watch_url)
 
 
 # ---- Notes -----------------------------------------------------------------

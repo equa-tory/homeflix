@@ -19,6 +19,9 @@
   </a>
   <a class="chip nav-item {% if fav %}active{% endif %}" data-spa
      href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q }}">★ Favorites</a>
+  <a class="btn ghost nav-item" data-random
+     href="{% url 'random_video' %}?q={{ q }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if active_tag %}&tag={{ active_tag }}{% endif %}{% if fav %}&fav=1{% endif %}"
+     title="Play a random video from these results" style="font-size:13px;padding:7px 10px">🎲 Random</a>
   {% for t in tags %}
     <a class="chip nav-item {% if active_tag == t.name %}active{% endif %}" data-spa
        href="?tag={{ t.name }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}">{{ t.name }}</a>

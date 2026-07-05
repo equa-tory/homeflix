@@ -246,6 +246,12 @@ main{overflow-x:hidden}
 .ph-min-btn{background:none;border:0;color:var(--muted);font-size:20px;cursor:pointer;
   padding:2px 6px;line-height:1;flex-shrink:0}
 .ph-min-btn:hover{color:var(--text)}
+.ph-search{width:110px; min-width:0; flex-shrink:0; background:var(--surface2);
+  border:1px solid var(--border); border-radius:20px; color:var(--text);
+  font-size:13px; padding:6px 12px; outline:none; transition:width .18s ease}
+.ph-search:focus{width:200px; border-color:var(--accent)}
+@media(max-width:700px){.ph-search{width:70px}.ph-search:focus{width:140px}}
+#player.ph-mini .ph-search{display:none}
 
 /* stage = the player box wrapping the ONE video */
 .ph-stage-wrap{max-width:none;margin:0;width:100%}
@@ -271,7 +277,7 @@ main{overflow-x:hidden}
   #player.ph-expanded .ph-stage{height:min(56.25vw, calc(100svh - 220px));border-radius:0}
   #player.ph-expanded.ph-shorts .ph-stage{height:min(calc(100svh - 56px), calc(177.78vw));}
 }
-#player.ph-mini .ph-stage{border-radius:14px 14px 0 0}
+#player.ph-mini .ph-stage{border-radius:14px}
 .ph-stage video{width:100%; height:100%; display:block; background:#000; object-fit:contain}
 #player.ph-mini .ph-stage video{object-fit:cover}
 /* Force video repaint context on older TV WebKit */
@@ -336,16 +342,36 @@ main{overflow-x:hidden}
 #player.ph-mini .conv-overlay{font-size:11px; padding:8px}
 #player.ph-mini .conv-overlay h3{font-size:12px}
 
-/* mini bar (mini only) */
-.ph-minibar{display:none; align-items:center; padding:7px 10px; gap:6px;
-  background:var(--surface)}
-#player.ph-mini .ph-minibar{display:flex}
-.ph-minibar .mt{flex:1; font-size:12px; font-weight:600; color:var(--text);
-  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
-.ph-minibar .mts{font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap}
-.ph-minibar button,.ph-minibar a{background:none; border:0; color:var(--text); cursor:pointer;
-  padding:4px 7px; border-radius:6px; font-size:14px; line-height:1; flex-shrink:0}
-.ph-minibar button:hover,.ph-minibar a:hover{background:var(--surface2)}
+/* mini overlay (mini only): covers bottom half of the stage, hover-reveal on
+   devices with a mouse; always visible on touch (no hover to reveal it with) */
+.ph-minibar{display:none}
+#player.ph-mini .ph-minibar{
+  display:flex; flex-direction:column; justify-content:flex-end;
+  position:absolute; left:0; right:0; bottom:0; height:50%; z-index:2;
+  padding:8px 8px 0; gap:6px;
+  background:linear-gradient(transparent,#000c 65%);
+  opacity:0; pointer-events:none; transition:opacity .15s ease;
+}
+@media(hover:hover){
+  #player.ph-mini:hover .ph-minibar{opacity:1; pointer-events:auto}
+}
+@media(hover:none){
+  #player.ph-mini .ph-minibar{opacity:1; pointer-events:auto}
+}
+.ph-minibar .mt-row{display:flex; align-items:baseline; gap:8px; padding:0 2px}
+.ph-minibar .mt{flex:1; font-size:12px; font-weight:600; color:#fff;
+  text-shadow:0 1px 3px #000a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+.ph-minibar .mts{font-size:11px; color:#fffc; font-variant-numeric:tabular-nums; white-space:nowrap}
+.mini-ctrls{display:flex; align-items:center; justify-content:center; gap:2px}
+.mini-ctrls button{background:none; border:0; color:#fff; cursor:pointer;
+  padding:5px 7px; border-radius:6px; font-size:15px; line-height:1; flex-shrink:0;
+  -webkit-tap-highlight-color:transparent}
+.mini-ctrls button:hover{background:#fff3}
+.mini-spacer{flex:1}
+.mini-timeline{position:relative; height:4px; margin:0 2px 8px; border-radius:2px;
+  background:rgba(255,255,255,.28); cursor:pointer; flex-shrink:0}
+.mini-fill{position:absolute; top:0; left:0; height:100%; width:0;
+  background:var(--accent); border-radius:2px; pointer-events:none}
 
 /* info panel (expanded only) */
 #phInfo{display:block}
@@ -561,6 +587,7 @@ html.player-locked{overflow:hidden}
     <div class="ph-topbar">
       <button class="ph-back" id="phBack" title="Close">‹</button>
       <span class="ph-hdr-title" id="phHdr"></span>
+      <input type="search" id="phSearch" class="ph-search" placeholder="Search…">
       <button class="ph-min-btn" id="phMinBtn" title="Minimize">▾</button>
     </div>
 
@@ -605,16 +632,25 @@ html.player-locked{overflow:hidden}
             <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- mini bar -->
-    <div class="ph-minibar" id="phMiniBar">
-      <span class="mt" id="phMiniTitle">…</span>
-      <span class="mts" id="phMiniTs">0:00</span>
-      <button id="phMiniPlay" title="Play/pause">▶</button>
-      <button id="phMiniExpand" title="Expand">⤢</button>
-      <button id="phMiniClose" title="Close">×</button>
+        <!-- mini overlay: bottom-half hover-reveal controls + always-visible timeline.
+             Top half of the stage stays plain so it remains the drag handle. -->
+        <div class="ph-minibar" id="phMiniBar">
+          <div class="mt-row">
+            <span class="mt" id="phMiniTitle">…</span>
+            <span class="mts" id="phMiniTs">0:00</span>
+          </div>
+          <div class="mini-ctrls">
+            <button id="phMiniSeekB" title="Back 10s">⏪</button>
+            <button id="phMiniPlay" title="Play/pause">▶</button>
+            <button id="phMiniSeekF" title="Forward 10s">⏩</button>
+            <span class="mini-spacer"></span>
+            <button id="phMiniExpand" title="Expand">⤢</button>
+            <button id="phMiniClose" title="Close">×</button>
+          </div>
+          <div class="mini-timeline" id="phMiniTimeline"><div class="mini-fill" id="phMiniFill"></div></div>
+        </div>
+      </div>
     </div>
 
     <!-- dynamic info -->
@@ -708,10 +744,13 @@ const ROUTER=(function(){
       })
       .then(res=>{
         if(!res)return;
-        apply(res.t);
+        // pushState BEFORE apply(): PAGE_INIT.library reads location.search
+        // synchronously to build its AJAX query params, so the URL must
+        // already reflect the new query or the first load uses stale filters.
         const target=res.finalUrl&&res.finalUrl!==location.href?res.finalUrl:url;
         if(replace)history.replaceState({spa:target},'',target);
         else if(push)history.pushState({spa:target},'',target);
+        apply(res.t);
         doneBar();
       })
       .catch(err=>{console.error('SPA nav failed',err);doneBar();location.href=url;});
@@ -1083,6 +1122,10 @@ const PLAYER=(function(){
   const MBAR_P= document.getElementById('phMiniPlay');
   const MBAR_E= document.getElementById('phMiniExpand');
   const MBAR_C= document.getElementById('phMiniClose');
+  const MBAR_SB=document.getElementById('phMiniSeekB');
+  const MBAR_SF=document.getElementById('phMiniSeekF');
+  const MBAR_FILL=document.getElementById('phMiniFill');
+  const MBAR_TL=document.getElementById('phMiniTimeline');
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
@@ -1318,7 +1361,7 @@ const PLAYER=(function(){
 
   let clickT=null;
   STAGE.addEventListener('click',e=>{
-    if(e.target.closest('.ctrls,.conv-overlay,button,input,select,a,.autopill'))return;
+    if(e.target.closest('.ctrls,.conv-overlay,.ph-minibar,button,input,select,a,.autopill'))return;
     if(state()==='mini'){expand();return;} // single click/tap = expand (double-tap from touchend overrides)
     if(clickT){clearTimeout(clickT);clickT=null;goFull();}
     else clickT=setTimeout(()=>{clickT=null;toggle();},260);
@@ -1336,6 +1379,7 @@ const PLAYER=(function(){
   V.addEventListener('timeupdate',()=>{
     const pct=V.duration?V.currentTime/V.duration*100:0;
     PLAYD.style.width=pct+'%';KNOB.style.left=pct+'%';
+    if(MBAR_FILL)MBAR_FILL.style.width=pct+'%';
     CUR.textContent=fmt(V.currentTime);MBAR_TS.textContent=fmt(V.currentTime);
     const nts=document.getElementById('phNoteTs');if(nts)nts.textContent='at '+fmt(V.currentTime);
     if(V.currentTime-lastSave>=10)savePos();
@@ -1460,17 +1504,40 @@ const PLAYER=(function(){
   /* mini bar buttons */
   MBAR_E.onclick=e=>{e.stopPropagation();expand();};
   MBAR_C.onclick=e=>{e.stopPropagation();close();};
+  if(MBAR_SB)MBAR_SB.onclick=e=>{e.stopPropagation();V.currentTime=Math.max(0,V.currentTime-10);};
+  if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();V.currentTime=Math.min(V.duration||1/0,V.currentTime+10);};
+  if(MBAR_TL)MBAR_TL.addEventListener('pointerdown',e=>{
+    e.stopPropagation();
+    if(!V.duration)return;
+    const r=MBAR_TL.getBoundingClientRect();
+    V.currentTime=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*V.duration;
+  });
   MINBTN.onclick=e=>{e.stopPropagation();minimize();};
   BACK.onclick=e=>{e.stopPropagation();back();};
 
-  /* drag mini box */
+  /* topbar search: minimize (keep playing) and jump to library results */
+  const PHSEARCH=document.getElementById('phSearch');
+  if(PHSEARCH){
+    PHSEARCH.onclick=e=>e.stopPropagation();
+    PHSEARCH.addEventListener('keydown',e=>{
+      if(e.key!=='Enter')return;
+      e.preventDefault();e.stopPropagation();
+      const val=PHSEARCH.value.trim();
+      minimize();
+      ROUTER.go('/library/?q='+encodeURIComponent(val));
+    });
+  }
+
+  /* drag mini box — only from the top half of the stage; the bottom half is the
+     hover-reveal control overlay (.ph-minibar), so it must never start a drag. */
   let dragging=false,moved=false,ox,oy,sl,st2;
   EL.addEventListener('pointerdown',e=>{
     if(state()!=='mini')return;
-    if(e.target.closest('.ph-minibar')&&e.target.tagName==='BUTTON')return;
-    if(e.target.closest('.ctrls'))return;
+    if(e.target.closest('.ph-minibar,.ctrls'))return;
+    const r=EL.getBoundingClientRect();
+    if(e.clientY-r.top>r.height/2)return; // bottom half: not a drag handle
     dragging=true;moved=false;EL.setPointerCapture(e.pointerId);EL.classList.add('grabbing');
-    ox=e.clientX;oy=e.clientY;const r=EL.getBoundingClientRect();sl=r.left;st2=r.top;
+    ox=e.clientX;oy=e.clientY;sl=r.left;st2=r.top;
   });
   EL.addEventListener('pointermove',e=>{
     if(!dragging)return;const dx=e.clientX-ox,dy=e.clientY-oy;
@@ -1479,9 +1546,7 @@ const PLAYER=(function(){
     const nt=Math.max(0,Math.min(window.innerHeight-EL.offsetHeight,st2+dy));
     EL.style.right='auto';EL.style.bottom='auto';EL.style.left=nl+'px';EL.style.top=nt+'px';
   });
-  EL.addEventListener('pointerup',e=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');
-    if(!moved&&state()==='mini'&&pointerOnStage&&e.pointerType!=='touch')expand();
-    pointerOnStage=false;});
+  EL.addEventListener('pointerup',()=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');});
 
   /* Mini resize: 4 corners + persist size */
   const MINI_MIN_W=160,MINI_MAX_W=580;
@@ -1600,11 +1665,14 @@ const PLAYER=(function(){
       else{const qp=href.includes('?')?href.split('?')[1]:'';PLAYER.open(parseInt(wm[1]),{qp});}
       return;
     }
-    // "Surprise me" / random
+    // "Surprise me" / random (carries current search/filter query so it
+    // picks — and then queues prev/next — from the filtered result set)
     if(/\/random\/?$/.test(href.split('?')[0])){
       e.preventDefault();
-      fetch('/random/?json=1',{headers:{'X-SPA':'1'}}).then(r=>r.json())
-        .then(d=>{if(d.id)PLAYER.open(d.id);}).catch(()=>{location.href=href;});
+      const rqs=href.includes('?')?href.split('?')[1]+'&json=1':'json=1';
+      fetch('/random/?'+rqs,{headers:{'X-SPA':'1'}}).then(r=>r.json())
+        .then(d=>{if(d.id){const qp=d.watch_url&&d.watch_url.includes('?')?d.watch_url.split('?')[1]:'';PLAYER.open(d.id,{qp});}})
+        .catch(()=>{location.href=href;});
       return;
     }
     // generic watch link (non-card) -> open player
