@@ -1096,6 +1096,14 @@ const PLAYER=(function(){
     EL.setAttribute('aria-hidden', s==='hidden'?'true':'false');
     document.documentElement.classList.toggle('player-locked', s==='expanded');
     if(s!=='hidden'){EL.style.left='';EL.style.top='';EL.style.right='';EL.style.bottom='';}
+    // mini corner-resize sets inline width on EL; must clear it leaving mini or
+    // expanded/hidden inherit a leftover narrow width -> tall/portrait-looking box.
+    if(s==='mini'){
+      let sw=0;try{sw=parseInt(sessionStorage.getItem('homeflix_mini_w'));}catch{}
+      EL.style.width=(sw>=MINI_MIN_W&&sw<=MINI_MAX_W?sw:288)+'px';
+    }else{
+      EL.style.width='';EL.style.height='';
+    }
   }
   function persist(){
     if(!d)return;
@@ -1501,8 +1509,6 @@ const PLAYER=(function(){
   }
   setupRH('phRhTl',false);setupRH('phRhTr',true);
   setupRH('phRhBl',false);setupRH('phRhBr',true);
-  try{const sw=parseInt(sessionStorage.getItem('homeflix_mini_w'));
-    if(sw>=MINI_MIN_W&&sw<=MINI_MAX_W)EL.style.width=sw+'px';}catch{}
 
   /* ---- transitions ---- */
   function expand(){setState('expanded');SCRL.scrollTop=0;persist();
