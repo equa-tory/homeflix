@@ -370,6 +370,7 @@ main{overflow-x:hidden}
   -webkit-tap-highlight-color:transparent}
 .mini-ctrls button:hover{background:#fff2}
 .mini-ctrls button:active{background:#fff3}
+.mini-ctrls button:disabled{opacity:.3; pointer-events:none}
 .mini-spacer{display:none}
 .mini-timeline{position:relative; height:5px; margin:0 2px 8px; border-radius:2px;
   background:rgba(255,255,255,.28); cursor:pointer; flex-shrink:0}
@@ -442,7 +443,7 @@ main{overflow-x:hidden}
 html.player-locked{overflow:hidden}
 
 /* Mini player corner resize handles (4 corners) */
-.ph-rh{position:absolute;width:18px;height:18px;z-index:20;display:none;
+.ph-rh{position:absolute;width:28px;height:28px;z-index:20;display:none;
   touch-action:none;pointer-events:auto;opacity:.45}
 .ph-rh:hover{opacity:.85}
 #player.ph-mini .ph-rh{display:block}
@@ -644,9 +645,9 @@ html.player-locked{overflow:hidden}
             <span class="mts" id="phMiniTs">0:00</span>
           </div>
           <div class="mini-ctrls">
-            <button id="phMiniSeekB" title="Back 10s">⏪</button>
+            <button id="phMiniSeekB" title="Previous video">⏮</button>
             <button id="phMiniPlay" title="Play/pause">▶</button>
-            <button id="phMiniSeekF" title="Forward 10s">⏩</button>
+            <button id="phMiniSeekF" title="Next video">⏭</button>
             <span class="mini-spacer"></span>
             <button id="phMiniExpand" title="Expand">⤢</button>
             <button id="phMiniClose" title="Close">×</button>
@@ -1186,6 +1187,7 @@ const PLAYER=(function(){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
     HDR.textContent=data.title; MBAR_T.textContent=data.title;
     PREV.disabled=!data.prev_id; NEXT.disabled=!data.next_id;
+    if(MBAR_SB)MBAR_SB.disabled=!data.prev_id; if(MBAR_SF)MBAR_SF.disabled=!data.next_id;
     DURLB.textContent=data.duration_label;
     document.title=data.title+' — HomeFlix';
     // ph-shorts: portrait fullscreen + swipe nav only on mobile phones.
@@ -1507,8 +1509,8 @@ const PLAYER=(function(){
   /* mini bar buttons */
   MBAR_E.onclick=e=>{e.stopPropagation();expand();};
   MBAR_C.onclick=e=>{e.stopPropagation();close();};
-  if(MBAR_SB)MBAR_SB.onclick=e=>{e.stopPropagation();V.currentTime=Math.max(0,V.currentTime-10);};
-  if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();V.currentTime=Math.min(V.duration||1/0,V.currentTime+10);};
+  if(MBAR_SB)MBAR_SB.onclick=e=>{e.stopPropagation();if(d&&d.prev_id)navigate(d.prev_id,true);};
+  if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();if(d&&d.next_id)navigate(d.next_id,true);};
   if(MBAR_TL)MBAR_TL.addEventListener('pointerdown',e=>{
     e.stopPropagation();
     if(!V.duration)return;
@@ -1551,8 +1553,9 @@ const PLAYER=(function(){
   });
   EL.addEventListener('pointerup',()=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');});
 
-  /* Mini resize: 4 corners + persist size */
-  const MINI_MIN_W=160,MINI_MAX_W=580;
+  /* Mini resize: 4 corners + persist size
+     Bump MINI_MAX_W to allow a bigger mini player (drag-resize cap in px). */
+  const MINI_MIN_W=160,MINI_MAX_W=900;
   let rzDrag=false,rzW0=0,rzX0=0,rzR0=0,rzFromRight=true;
   function setupRH(id,fromRight){
     const h=document.getElementById(id);if(!h)return;
