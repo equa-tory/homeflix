@@ -288,11 +288,12 @@ main{overflow-x:hidden}
     height:calc(100svh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px) - 8px);
   }
 }
-/* TV overscan: real screen crops the outer edge of the picture, so scale the
-   whole stage (video + controls) up ~5% and let overflow spill past the
-   panel edge — matches PC sizing exactly, this only kicks in on tv-mode. */
-html.tv-mode #player.ph-expanded{overflow:visible}
-html.tv-mode #player.ph-expanded .ph-stage{transform:scale(1.05)}
+/* TV: the -220px reserve below (topbar + scrollable info panel) doesn't apply on
+   TV — it just shrank the picture to ~80%. A transform:scale() compensation was
+   tried but transform on an element containing <video> is a black-screen bug on
+   TV WebKit (see the translateZ note above) — drop the reserve instead so the
+   stage renders at its natural 16:9 size (100%, no cap, no transform). */
+html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 #player.ph-mini .ph-stage{border-radius:14px}
 .ph-stage video{width:100%; height:100%; display:block; background:#000; object-fit:contain}
 #player.ph-mini .ph-stage video{object-fit:cover}
@@ -715,10 +716,6 @@ const CSRF=getCookie('csrftoken');
 if(/webOS|Tizen|SmartTV|GoogleTV|AFTT|AFTM|AFTB|AFTS|BRAVIA|NetCast|CrKey|HbbTV/i.test(navigator.userAgent)){
   document.documentElement.classList.add('tv-mode');
 }
-/* iOS Safari (incl. installed home-screen apps) ignores the <a download> attribute
-   and Content-Disposition for video — it just opens the file as a page. Used to
-   route the download button through the share sheet instead on those devices. */
-const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
   'X-SPA':'1','Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams(d||{})}).then(r=>r.json());}
@@ -1472,23 +1469,7 @@ const PLAYER=(function(){
     VOL.addEventListener('pointerdown',e=>e.stopPropagation());}
   V.addEventListener('volumechange',syncVol);
   LOOP.onclick=e=>{e.stopPropagation();V.loop=!V.loop;LOOP.classList.toggle('looping',V.loop);};
-
-  /* iOS: <a download> / Content-Disposition are ignored for video, so fetch the
-     file ourselves and hand it to the native share sheet (Save Video / Save to Files). */
-  if(DL&&IS_IOS){
-    DL.addEventListener('click',e=>{
-      e.preventDefault();e.stopPropagation();
-      if(!d||DL.dataset.busy)return;
-      DL.dataset.busy='1';const prevText=DL.textContent;DL.textContent='…';
-      fetch(d.download_url).then(r=>r.blob()).then(blob=>{
-        const ext=(d.ext||'mp4').toLowerCase();
-        const file=new File([blob],(d.title||'video')+'.'+ext,{type:blob.type||'video/mp4'});
-        if(navigator.canShare&&navigator.canShare({files:[file]}))return navigator.share({files:[file],title:d.title});
-        location.href=d.download_url;
-      }).catch(()=>{location.href=d.download_url;})
-        .finally(()=>{delete DL.dataset.busy;DL.textContent=prevText;});
-    });
-  }
+  if(DL)DL.onclick=e=>e.stopPropagation();
 
   /* prev/next: swap source on the SAME element -> iOS keeps autoplay */
   PREV.onclick=e=>{e.stopPropagation();if(d&&d.prev_id)navigate(d.prev_id,true);};
