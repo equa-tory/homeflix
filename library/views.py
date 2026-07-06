@@ -17,6 +17,20 @@ from . import services
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 CHUNK = 8192
 
+# Python's mimetypes module has no entry for these containers, so guess_type()
+# falls back to application/octet-stream — iOS Safari's download-attribute
+# handling treats "unknown" types differently from recognized video/* types,
+# so an unrecognized type is what breaks the download button for these.
+EXTRA_MIME_TYPES = {
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".wmv": "video/x-ms-wmv",
+    ".flv": "video/x-flv",
+    ".ts": "video/mp2t",
+    ".m4v": "video/mp4",
+}
+
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -336,7 +350,9 @@ def stream(request, pk):
         raise Http404("File missing")
 
     size = os.path.getsize(path)
-    content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+    content_type = (mimetypes.guess_type(path)[0]
+                     or EXTRA_MIME_TYPES.get(os.path.splitext(path)[1].lower())
+                     or "application/octet-stream")
     download = request.GET.get("download") == "1"
     range_header = "" if download else request.META.get("HTTP_RANGE", "")
     match = RANGE_RE.match(range_header)
