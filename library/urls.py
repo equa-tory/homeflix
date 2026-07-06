@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     path("", views.home, name="home"),
     path("library/", views.library, name="library"),
+    path("hidden/", views.hidden_videos, name="hidden_videos"),
     path("history/", views.history, name="history"),
     path("playlists/", views.playlists, name="playlists"),
     path("playlists/<int:pk>/", views.playlist_detail, name="playlist_detail"),
@@ -32,6 +33,8 @@ urlpatterns = [
     path("video/<int:pk>/thumb/regen/", views.regen_thumb, name="regen_thumb"),
     path("video/<int:pk>/progress/", views.save_progress, name="save_progress"),
     path("video/<int:pk>/favorite/", views.toggle_favorite, name="toggle_favorite"),
+    path("video/<int:pk>/hide/", views.toggle_hidden, name="toggle_hidden"),
+    path("video/<int:pk>/delete/", views.delete_video, name="delete_video"),
     path("video/<int:pk>/rating/", views.set_rating, name="set_rating"),
     path("video/<int:pk>/playlist/", views.add_to_playlist, name="add_to_playlist"),
     path("theme/", views.toggle_theme, name="toggle_theme"),
@@ -52,6 +55,9 @@ urlpatterns = [
     path("bulk/rating/", views.bulk_rating, name="bulk_rating"),
     path("bulk/playlist/", views.bulk_add_playlist, name="bulk_add_playlist"),
     path("bulk/favorite/", views.bulk_favorite, name="bulk_favorite"),
+    path("bulk/hide/", views.bulk_hide, name="bulk_hide"),
+    path("bulk/unhide/", views.bulk_unhide, name="bulk_unhide"),
+    path("bulk/delete/", views.bulk_delete, name="bulk_delete"),
     path("api/playlists/", views.api_playlists, name="api_playlists"),
 
     # PWA

@@ -70,6 +70,10 @@ class Video(models.Model):
     last_seen = models.DateTimeField(auto_now=True)
     missing = models.BooleanField(default=False)
 
+    # User-hidden (not deleted): excluded from Home/Library/search/shorts/random,
+    # only listed on the Hidden page so it can be unhidden or deleted later.
+    hidden = models.BooleanField(default=False, db_index=True)
+
     class Meta:
         ordering = ["-date_added"]
 

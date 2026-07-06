@@ -1,10 +1,12 @@
 import os
 import re
 import json
+import difflib
 import mimetypes
 
 from django.conf import settings
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, F, Value
+from django.db.models.functions import Replace
 from django.http import (
     StreamingHttpResponse, HttpResponse, JsonResponse, Http404, FileResponse,
 )
@@ -65,11 +67,50 @@ SORTS = {
 }
 
 
+_SEP_RE = re.compile(r"[-_.\s]+")
+
+
+def _normalize_field(name):
+    """DB-side expression stripping -, _, ., and whitespace from a field,
+    so 'r-906'/'r_906'/'r 906' all match a search for 'r906'."""
+    expr = F(name)
+    for ch in ("-", "_", ".", " "):
+        expr = Replace(expr, Value(ch), Value(""))
+    return expr
+
+
+def _search_filter(qs, q):
+    """Loose title/filename search: separator-insensitive (ignores -, _, .,
+    space) and AND's multiple words. Falls back to typo-tolerant fuzzy
+    matching (stdlib difflib) when the loose search finds nothing at all."""
+    tokens = [t for t in (_SEP_RE.sub("", w).lower() for w in q.split()) if t]
+    if not tokens:
+        return qs
+    loose = qs.annotate(_title_n=_normalize_field("title"), _filename_n=_normalize_field("filename"))
+    cond = Q()
+    for tok in tokens:
+        cond &= (Q(_title_n__icontains=tok) | Q(_filename_n__icontains=tok))
+    matched = loose.filter(cond)
+    if matched.exists():
+        return matched
+
+    # Fuzzy fallback for typos (e.g. "vidoe" -> "video") — small single-user
+    # library, so a plain Python pass over title+filename is cheap enough.
+    norm_q = _SEP_RE.sub("", q).lower()
+    hits = []
+    for pk, title, filename in qs.values_list("pk", "title", "filename"):
+        name = _SEP_RE.sub("", f"{title} {filename}").lower()
+        ratio = difflib.SequenceMatcher(None, norm_q, name).ratio()
+        if ratio >= 0.6:
+            hits.append(pk)
+    return qs.filter(pk__in=hits) if hits else qs.none()
+
+
 def _filtered_videos(request):
-    qs = Video.objects.filter(missing=False)
+    qs = Video.objects.filter(missing=False, hidden=False)
     q = request.GET.get("q", "").strip()
     if q:
-        qs = qs.filter(Q(title__icontains=q) | Q(filename__icontains=q))
+        qs = _search_filter(qs, q)
     tag = request.GET.get("tag", "").strip()
     if tag:
         qs = qs.filter(tags__name=tag)
@@ -90,9 +131,9 @@ def _filtered_videos(request):
 # ---- pages -----------------------------------------------------------------
 
 def home(request):
-    recent = Video.objects.filter(missing=False).order_by("-date_added")[:12]
+    recent = Video.objects.filter(missing=False, hidden=False).order_by("-date_added")[:12]
     continue_watching = (
-        Video.objects.filter(missing=False, playback__finished=False,
+        Video.objects.filter(missing=False, hidden=False, playback__finished=False,
                              playback__position_seconds__gt=5)
         .select_related("playback").order_by("-playback__updated_at")[:12]
     )
@@ -109,7 +150,7 @@ def home(request):
     discovery = []
     if tag_ids:
         discovery = list(
-            Video.objects.filter(tags__in=tag_ids, missing=False)
+            Video.objects.filter(tags__in=tag_ids, missing=False, hidden=False)
             .exclude(pk__in=recent_watch_ids)
             .exclude(playback__finished=True)
             .distinct().order_by("?")[:12]
@@ -117,7 +158,7 @@ def home(request):
     if len(discovery) < 6 and recent_watch_ids:
         excl = set(recent_watch_ids) | {v.pk for v in discovery}
         discovery += list(
-            Video.objects.filter(missing=False).exclude(pk__in=excl)
+            Video.objects.filter(missing=False, hidden=False).exclude(pk__in=excl)
             .exclude(playback__finished=True).order_by("-date_added")
             [:12 - len(discovery)]
         )
@@ -126,13 +167,13 @@ def home(request):
         request, active_nav="home", page_id="home", spa_title="HomeFlix",
         recent=recent, continue_watching=continue_watching,
         discovery=discovery,
-        total=Video.objects.filter(missing=False).count(),
+        total=Video.objects.filter(missing=False, hidden=False).count(),
     ))
 
 
 def library(request):
     qs, q, sort, rev = _filtered_videos(request)
-    total_secs = Video.objects.filter(missing=False).aggregate(s=Sum('duration_seconds'))['s'] or 0
+    total_secs = Video.objects.filter(missing=False, hidden=False).aggregate(s=Sum('duration_seconds'))['s'] or 0
     h, rem = divmod(int(total_secs), 3600)
     m = rem // 60
     total_duration = f"{h}h {m}m" if h else (f"{m}m" if m else "")
@@ -142,8 +183,16 @@ def library(request):
         page_size=settings.PAGE_SIZE,
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
         active_tag=request.GET.get("tag", ""),
-        total_videos=Video.objects.filter(missing=False).count(),
+        total_videos=Video.objects.filter(missing=False, hidden=False).count(),
         total_duration=total_duration,
+    ))
+
+
+def hidden_videos(request):
+    videos = Video.objects.filter(missing=False, hidden=True).order_by("-date_added")
+    return render(request, "library/hidden.html", base_ctx(
+        request, active_nav="", page_id="hidden", spa_title="Hidden — HomeFlix",
+        videos=videos, total_hidden=videos.count(),
     ))
 
 
@@ -205,21 +254,21 @@ def _build_watch_data(request, pk):
     recommended = []
     if tag_ids:
         recommended += list(
-            Video.objects.filter(tags__in=tag_ids, missing=False)
+            Video.objects.filter(tags__in=tag_ids, missing=False, hidden=False)
             .exclude(pk=video.pk).exclude(playback__finished=True)
             .distinct().order_by("?")[:8]
         )
     if video.channel and len(recommended) < 8:
         excl = {video.pk} | {v.pk for v in recommended}
         recommended += list(
-            Video.objects.filter(channel=video.channel, missing=False)
+            Video.objects.filter(channel=video.channel, missing=False, hidden=False)
             .exclude(pk__in=excl).exclude(playback__finished=True)
             .order_by("?")[:4]
         )
     if len(recommended) < 12:
         excl = {video.pk} | {v.pk for v in recommended}
         recommended += list(
-            Video.objects.filter(missing=False).exclude(pk__in=excl)
+            Video.objects.filter(missing=False, hidden=False).exclude(pk__in=excl)
             .order_by("?")[:12 - len(recommended)]
         )
     _rnd.shuffle(recommended)
@@ -253,6 +302,11 @@ def _build_watch_data(request, pk):
         tech.append(c)
     if video.size_bytes:
         tech.append(fmt_size(video.size_bytes))
+
+    if settings.REMOTE_ROOT:
+        remote_path = settings.REMOTE_ROOT.rstrip("\\/") + "\\" + video.rel_path.replace("/", "\\")
+    else:
+        remote_path = video.file_path
 
     return {
         "id": video.pk, "title": video.title,
@@ -292,6 +346,10 @@ def _build_watch_data(request, pk):
         "is_portrait": bool(video.height and video.width and video.height > video.width),
         "frame_url_base": f"/frame/{pk}/",
         "pl": pl_id or "",
+        "remote_path": remote_path,
+        "hidden": video.hidden,
+        "hide_url": f"/video/{pk}/hide/",
+        "delete_url": f"/video/{pk}/delete/",
     }
 
 
@@ -435,6 +493,21 @@ def toggle_favorite(request, pk):
 
 
 @require_POST
+def toggle_hidden(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    video.hidden = not video.hidden
+    video.save(update_fields=["hidden"])
+    return JsonResponse({"hidden": video.hidden})
+
+
+@require_POST
+def delete_video(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    _delete_videos([video], delete_file=request.POST.get("mode") == "file")
+    return JsonResponse({"ok": True})
+
+
+@require_POST
 def set_rating(request, pk):
     video = get_object_or_404(Video, pk=pk)
     try:
@@ -575,8 +648,7 @@ def reset_library(request):
 
 # ---- Random video ----------------------------------------------------------
 def shorts(request):
-    from django.db.models import F
-    videos = (Video.objects.filter(missing=False, height__gt=F("width"), width__gt=0)
+    videos = (Video.objects.filter(missing=False, hidden=False, height__gt=F("width"), width__gt=0)
               .order_by("-date_added"))
     return render(request, "library/shorts.html", base_ctx(
         request, active_nav="shorts", page_id="shorts", spa_title="Shorts — HomeFlix",
@@ -594,10 +666,10 @@ def random_video(request):
             return redirect("library")
         pk = _rnd.choice(ids)
     else:
-        count = Video.objects.filter(missing=False).count()
+        count = Video.objects.filter(missing=False, hidden=False).count()
         if not count:
             return redirect("library")
-        pk = Video.objects.filter(missing=False)[_rnd.randrange(count)].pk
+        pk = Video.objects.filter(missing=False, hidden=False)[_rnd.randrange(count)].pk
     filt = request.GET.copy()
     filt.pop("json", None)
     watch_url = f"/watch/{pk}/" + (f"?{filt.urlencode()}" if filt else "")
@@ -740,6 +812,60 @@ def bulk_favorite(request):
         return JsonResponse({'ok': False})
     Video.objects.filter(pk__in=ids).update(favorite=True)
     return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+@require_POST
+def bulk_hide(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    Video.objects.filter(pk__in=ids).update(hidden=True)
+    return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+@require_POST
+def bulk_unhide(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    Video.objects.filter(pk__in=ids).update(hidden=False)
+    return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+def _delete_videos(videos, delete_file):
+    """Shared by the single-video and bulk delete endpoints. Always removes
+    the DB row + thumbnail; only touches the real file when delete_file=True
+    (the default is DB-only, for files that are just unwanted from the
+    library but shouldn't be destroyed on disk)."""
+    count = 0
+    for video in videos:
+        if delete_file:
+            for p in (video.file_path, video.converted_path):
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+        if video.thumbnail_path and os.path.exists(video.thumbnail_path):
+            try:
+                os.remove(video.thumbnail_path)
+            except OSError:
+                pass
+        video.delete()
+        count += 1
+    return count
+
+
+@require_POST
+def bulk_delete(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    count = _delete_videos(Video.objects.filter(pk__in=ids), request.POST.get('mode') == 'file')
+    return JsonResponse({'ok': True, 'count': count})
 
 
 def api_playlists(request):

@@ -2,7 +2,7 @@
 <html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>{{ spa_title|default:"HomeFlix" }}</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#f0654a">
@@ -21,7 +21,11 @@
   --text:#1a1c20; --muted:#6b7280; --accent:#e2553c; --accent-soft:#e2553c1a;
 }
 *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
-html,body{margin:0}
+/* maximum-scale/user-scalable in the viewport meta blocks pinch-zoom on most
+   browsers; touch-action:manipulation additionally kills the double-tap-to-zoom
+   gesture (and its ~300ms tap delay) that the meta tag alone doesn't cover. */
+html,body{margin:0; touch-action:manipulation}
+input,select,textarea{touch-action:manipulation}
 body{background:var(--bg); color:var(--text); min-height:100vh;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
@@ -169,6 +173,9 @@ main{overflow-x:hidden}
   padding:10px 18px;display:none;align-items:center;gap:8px;flex-wrap:wrap;
   box-shadow:0 -4px 20px #0008}
 #bulkBar.active{display:flex}
+/* Hidden page: swap Hide for Unhide in the bulk bar (Delete stays either way) */
+body[data-page="hidden"] #bulkHideBtn{display:none}
+body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 .bulk-count{font-weight:700;font-size:14px;flex-shrink:0}
 .bulk-aw{position:relative}
 .bulk-pop{position:absolute;bottom:calc(100% + 8px);left:0;min-width:210px;
@@ -252,7 +259,9 @@ main{overflow-x:hidden}
   border:1px solid var(--border); border-radius:20px; color:var(--text);
   font-size:13px; padding:6px 12px; outline:none; transition:width .18s ease}
 .ph-search:focus{width:200px; border-color:var(--accent)}
-@media(max-width:700px){.ph-search{width:70px}.ph-search:focus{width:140px}}
+/* font-size:16px is belt-and-suspenders against iOS's focus-zoom: it still zooms
+   into any focused input under 16px even with user-scalable=no on some versions. */
+@media(max-width:700px){.ph-search{width:70px; font-size:16px}.ph-search:focus{width:140px}}
 #player.ph-mini .ph-search{display:none}
 
 /* stage = the player box wrapping the ONE video */
@@ -361,14 +370,12 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
   .ctime{font-size:10px;min-width:28px}
 }
 
-/* conversion overlay */
-.conv-overlay{position:absolute; inset:0; display:grid; place-items:center; text-align:center;
-  background:#000d; color:#fff; padding:20px}
-.conv-overlay h3{margin:0 0 8px; font-size:17px}
-.cbar{width:220px; height:7px; background:#fff3; border-radius:4px; margin:14px auto 8px}
+/* conversion: small inline control in the info panel (not a blocking overlay —
+   see renderInfo's #phConvInline / setupConversion) */
+.conv-inline{display:flex; align-items:center; gap:10px; margin:8px 0; flex-wrap:wrap}
+.conv-note{color:var(--muted); font-size:13px}
+.cbar{width:160px; height:7px; background:var(--border); border-radius:4px}
 .cbar>div{height:100%; width:0; background:var(--accent); border-radius:4px; transition:width .4s}
-#player.ph-mini .conv-overlay{font-size:11px; padding:8px}
-#player.ph-mini .conv-overlay h3{font-size:12px}
 
 /* mini overlay (mini only): covers bottom half of the stage, hover-reveal on
    devices with a mouse; always visible on touch (no hover to reveal it with) */
@@ -421,6 +428,10 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .star.on{color:var(--accent)}
 .spacer{flex:1}
 .tech{color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; margin-top:4px}
+.remote-path{margin-top:8px; padding:8px 12px; background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; font-family:monospace; font-size:12px; color:var(--muted); cursor:pointer;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; user-select:text}
+.remote-path:hover,.remote-path:active{color:var(--text); border-color:var(--accent)}
 .desc{margin-top:14px; padding:14px; background:var(--surface); border-radius:var(--radius);
   border:1px solid var(--border); white-space:pre-wrap; font-size:13.5px}
 .row-inline{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
@@ -500,6 +511,7 @@ html.player-locked{overflow:hidden}
   nav.topnav{display:none}
   header{gap:10px; padding:calc(9px + env(safe-area-inset-top,0px)) 14px 9px}
   .hdr-search{max-width:none}
+  .hdr-search input{font-size:16px}
   html, body { height:100%; overflow:hidden }
   /* dvh tracks the real visible viewport as Safari's toolbar shows/hides;
      vh first as a fallback for browsers without dvh support (last-valid-wins). */
@@ -549,6 +561,7 @@ html.player-locked{overflow:hidden}
       <form action="{% url 'scan' %}" method="post">{% csrf_token %}
         <button class="nav-item">↻ Rescan library</button></form>
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
+      <a href="{% url 'hidden_videos' %}" class="nav-item spa-link">🙈 Hidden videos</a>
       <hr>
       <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
         <button class="nav-item">🧹 Remove missing files</button></form>
@@ -613,6 +626,19 @@ html.player-locked{overflow:hidden}
   </div>
 
   <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
+  <button class="btn ghost" id="bulkHideBtn">🙈 Hide</button>
+  <button class="btn ghost" id="bulkUnhideBtn" style="display:none">👁 Unhide</button>
+
+  <div class="bulk-aw">
+    <button class="btn ghost" id="bulkDelBtn">🗑 Delete</button>
+    <div class="bulk-pop" id="bulkDelPop">
+      <label>Delete selected</label>
+      <div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">
+        <button class="btn ghost" id="bulkDelEntryGo">Remove from library (keep file)</button>
+        <button class="btn" id="bulkDelFileGo" style="background:#c0392b">Delete file permanently</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- select FAB (visible only on library page) -->
@@ -632,18 +658,6 @@ html.player-locked{overflow:hidden}
       <div class="ph-stage paused" id="phStage" tabindex="0">
         <video id="theVideo" playsinline preload="metadata"></video>
         <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">▶</span></div>
-
-        <div class="conv-overlay" id="phConv" style="display:none">
-          <div>
-            <h3 id="phConvTitle"></h3>
-            <p id="phConvDesc" style="color:#ccc;margin:0 0 16px;font-size:14px"></p>
-            <div id="phConvIdle"><button class="btn" id="phConvBtn">Convert to MP4</button></div>
-            <div id="phConvProg" style="display:none">
-              <div class="cbar"><div id="phConvFill"></div></div>
-              <span id="phConvText" style="color:#ccc;font-size:13px">Converting…</span>
-            </div>
-          </div>
-        </div>
 
         <div class="ctrls">
           <div class="bar" id="phBar" tabindex="0">
@@ -868,7 +882,7 @@ const SELECT_MODE=(function(){
     document.getElementById('bulkClearBtn').onclick=()=>clear();
 
     // popup toggles
-    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop'};
+    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop',bulkDelBtn:'bulkDelPop'};
     Object.entries(pops).forEach(([btnId,popId])=>{
       const btn=document.getElementById(btnId),pop=document.getElementById(popId);
       btn.onclick=e=>{e.stopPropagation();
@@ -931,10 +945,63 @@ const SELECT_MODE=(function(){
       const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
       post('/bulk/favorite/',{ids}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='♥ Favorite',1200);});
     };
+
+    // After hide/unhide/delete the selected items no longer belong in the
+    // current listing — clear the selection and refresh in place (SPA nav,
+    // no full page reload) so the grid reflects it immediately.
+    function refreshAfter(promise){
+      promise.then(()=>{clear();ROUTER.go(location.pathname+location.search,{push:false});});
+    }
+    document.getElementById('bulkHideBtn').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;
+      refreshAfter(post('/bulk/hide/',{ids}));
+    };
+    document.getElementById('bulkUnhideBtn').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;
+      refreshAfter(post('/bulk/unhide/',{ids}));
+    };
+    document.getElementById('bulkDelEntryGo').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;
+      refreshAfter(post('/bulk/delete/',{ids,mode:'entry'}));
+    };
+    document.getElementById('bulkDelFileGo').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;
+      if(!confirm('Delete '+ids.split(',').length+' file(s) from disk permanently? This cannot be undone.'))return;
+      refreshAfter(post('/bulk/delete/',{ids,mode:'file'}));
+    };
   })();
 
   return{toggle,deactivate,toggleItem,isActive,isSelected,getIds,clear};
 })();
+
+/* Shared by any page with select-mode: the toolbar's "Select" button + the
+   floating FAB + the 's' keyboard shortcut. Returns a cleanup fn. */
+function wireSelectUI(root){
+  const selBtn=root.querySelector('#selModeBtn');
+  const selFab=document.getElementById('selFab');
+  function syncSelUI(){
+    const on=SELECT_MODE.isActive();
+    if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
+  }
+  if(selFab){
+    selFab.style.display='flex';
+    selFab.textContent=SELECT_MODE.isActive()?'✕':'☑';
+    selFab.title=SELECT_MODE.isActive()?'Cancel select (S)':'Select videos (S)';
+    selFab.classList.toggle('active',SELECT_MODE.isActive());
+    selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
+  }
+  if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
+  function onSelKey(e){
+    if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))return;
+    if(e.key==='s'||e.key==='S'){e.preventDefault();SELECT_MODE.toggle();syncSelUI();}
+  }
+  document.addEventListener('keydown',onSelKey);
+  return ()=>{
+    document.removeEventListener('keydown',onSelKey);
+    SELECT_MODE.deactivate();
+    const sf=document.getElementById('selFab');if(sf)sf.style.display='none';
+  };
+}
 
 const PAGE_INIT={
   /* ----- LIBRARY: virtualised infinite grid ----- */
@@ -1023,38 +1090,17 @@ const PAGE_INIT={
     if(sortSel)sortSel.onchange=()=>{const q=new URLSearchParams(location.search);
       q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
 
-    // Select mode button (toolbar)
-    const selBtn=root.querySelector('#selModeBtn');
-
-    // Select FAB (sticky left-side square button)
-    const selFab=document.getElementById('selFab');
-    function syncSelUI(){
-      const on=SELECT_MODE.isActive();
-      if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
-    }
-    if(selFab){
-      selFab.style.display='flex';
-      selFab.textContent=SELECT_MODE.isActive()?'✕':'☑';
-      selFab.title=SELECT_MODE.isActive()?'Cancel select (S)':'Select videos (S)';
-      selFab.classList.toggle('active',SELECT_MODE.isActive());
-      selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
-    }
-    if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
-
-    // 's' key toggles select mode
-    function onSelKey(e){
-      if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))return;
-      if(e.key==='s'||e.key==='S'){e.preventDefault();SELECT_MODE.toggle();syncSelUI();}
-    }
-    document.addEventListener('keydown',onSelKey);
-
+    const selCleanup=wireSelectUI(root);
     return ()=>{
       scrollEl.removeEventListener('scroll',onScroll);
       window.removeEventListener('resize',onResize);
-      document.removeEventListener('keydown',onSelKey);
-      SELECT_MODE.deactivate();
-      const sf=document.getElementById('selFab');if(sf)sf.style.display='none';
+      selCleanup();
     };
+  },
+
+  /* ----- HIDDEN: plain server-rendered grid, just needs select-mode ----- */
+  hidden(root){
+    return wireSelectUI(root);
   },
 
   /* ----- SMART PLAYLIST: rules editor ----- */
@@ -1160,7 +1206,6 @@ const PLAYER=(function(){
   const SP    = document.getElementById('phSP');
   const SPIMG = document.getElementById('phSPImg');
   const SPTM  = document.getElementById('phSPTime');
-  const CONV  = document.getElementById('phConv');
   const INFO  = document.getElementById('phInfo');
   const SPIN  = document.getElementById('phSpin');
   const MBAR_T= document.getElementById('phMiniTitle');
@@ -1236,9 +1281,12 @@ const PLAYER=(function(){
     // ph-shorts: portrait fullscreen + swipe nav only on mobile phones.
     // On PC/TV keep normal layout so portrait videos don't hijack the left side.
     EL.classList.toggle('ph-shorts', data.is_portrait===true && window.innerWidth<=700);
-    if(data.playable!==false) loadSource(data.stream_url, parseFloat(data.position)||0, play);
-    setupConversion(data); setupMediaSession(data);
-    SPIN.style.display='none'; renderInfo(data);
+    // Always attempt playback — some browsers can actually decode mkv/hevc even
+    // though the scanner flagged them as non-browser-playable by default; the
+    // convert button (rendered below, in the info panel) stays available either way.
+    loadSource(data.stream_url, parseFloat(data.position)||0, play);
+    setupMediaSession(data);
+    SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }
 
   function fetchApply(id,play,startPos,qp){
@@ -1252,24 +1300,23 @@ const PLAYER=(function(){
     });
   }
 
-  /* ---- conversion ---- */
+  /* ---- conversion ----
+     Small inline control in the info panel (rendered by renderInfo just before
+     this runs) — never blocks playback, just offers a one-click convert for
+     browsers that can't decode this file's codec/container. */
   function setupConversion(data){
-    if(!data.needs_convert){CONV.style.display='none';return;}
-    CONV.style.display='';
+    if(!data.needs_convert)return;
     const idle=document.getElementById('phConvIdle'),prog=document.getElementById('phConvProg');
     const fill=document.getElementById('phConvFill'),ctext=document.getElementById('phConvText');
-    let btn=document.getElementById('phConvBtn');
-    if(idle)idle.style.display='';if(prog)prog.style.display='none';
-    document.getElementById('phConvTitle').textContent='This '+data.ext+" won't play in a browser";
-    document.getElementById('phConvDesc').textContent='Convert once to MP4 — your original is never deleted.';
+    const btn=document.getElementById('phConvBtn'), inline=document.getElementById('phConvInline');
+    if(!inline)return;
     function showProg(p){if(idle)idle.style.display='none';if(prog)prog.style.display='';
       if(fill)fill.style.width=(p||0)+'%';if(ctext)ctext.textContent='Converting… '+(p||0)+'%';}
     function poll(){fetch(data.convert_status_url).then(r=>r.json()).then(r=>{
-      if(r.ready){CONV.style.display='none';loadSource(data.stream_url,0,true);return;}
+      if(r.ready){inline.style.display='none';loadSource(data.stream_url,0,true);return;}
       if(r.status==='failed'){if(ctext)ctext.textContent='Conversion failed.';return;}
       if(r.status==='running'||r.status==='queued'){showProg(r.progress);setTimeout(poll,1500);}});}
-    if(btn){const nb=btn.cloneNode(true);btn.parentNode.replaceChild(nb,btn);
-      nb.onclick=e=>{e.stopPropagation();showProg(0);post(data.convert_url).then(()=>poll());};}
+    if(btn)btn.onclick=e=>{e.stopPropagation();showProg(0);post(data.convert_url).then(()=>poll());};
     if(data.convert_status==='queued'||data.convert_status==='running'){showProg(data.convert_progress);poll();}
   }
 
@@ -1309,9 +1356,24 @@ const PLAYER=(function(){
       `<div class="wbar"><span id="phStars" data-url="${esc(data.rating_url)}">${stars}</span>`+
       `<button class="iconbtn" id="phFav" data-url="${esc(data.favorite_url)}" title="Favorite"`+
         (data.favorite?' style="color:var(--accent);border-color:var(--accent)"':'')+`>♥</button>`+
+      `<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
+        (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`+
+      `<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
+        `<div class="bulk-pop" id="phDelPop" style="left:auto;right:0">`+
+          `<label>Delete this video</label>`+
+          `<div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">`+
+            `<button class="btn ghost" id="phDelEntryGo">Remove from library (keep file)</button>`+
+            `<button class="btn" id="phDelFileGo" style="background:#c0392b">Delete file permanently</button>`+
+          `</div></div></div>`+
       `<span class="spacer"></span>`+
       `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${data.autoplay?'▶▶ Auto On':'▶▶ Auto Off'}</button></div>`+
       `<div class="tech">${tech}${data.source_url?`<a href="${esc(data.source_url)}" target="_blank" style="color:var(--accent)">source ↗</a>`:''}</div>`+
+      (data.needs_convert?`<div class="conv-inline" id="phConvInline">`+
+        `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
+        `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+
+        `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
+          `<span id="phConvText" class="sub"></span></div></div>`:'')+
+      `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
       `<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
@@ -1335,6 +1397,23 @@ const PLAYER=(function(){
     const fav=document.getElementById('phFav');
     if(fav)fav.onclick=e=>{e.stopPropagation();post(data.favorite_url).then(r=>{
       fav.style.color=r.favorite?'var(--accent)':'';fav.style.borderColor=r.favorite?'var(--accent)':'';});};
+    const hideBtn=document.getElementById('phHide');
+    if(hideBtn)hideBtn.onclick=e=>{e.stopPropagation();post(data.hide_url).then(r=>{
+      data.hidden=r.hidden;
+      hideBtn.title=r.hidden?'Unhide':'Hide from library';hideBtn.textContent=r.hidden?'👁':'🙈';
+      hideBtn.style.color=r.hidden?'var(--accent)':'';hideBtn.style.borderColor=r.hidden?'var(--accent)':'';});};
+    const delBtn=document.getElementById('phDelBtn'),delPop=document.getElementById('phDelPop');
+    if(delBtn)delBtn.onclick=e=>{e.stopPropagation();delPop.classList.toggle('open');};
+    const delEntry=document.getElementById('phDelEntryGo'),delFile=document.getElementById('phDelFileGo');
+    if(delEntry)delEntry.onclick=e=>{e.stopPropagation();post(data.delete_url,{mode:'entry'}).then(()=>close());};
+    if(delFile)delFile.onclick=e=>{e.stopPropagation();
+      if(!confirm('Delete this file from disk permanently? This cannot be undone.'))return;
+      post(data.delete_url,{mode:'file'}).then(()=>close());};
+    const remote=document.getElementById('phRemotePath');
+    if(remote)remote.onclick=e=>{e.stopPropagation();
+      navigator.clipboard&&navigator.clipboard.writeText(data.remote_path).then(()=>{
+        const old=remote.textContent;remote.textContent='Copied ✓';setTimeout(()=>remote.textContent=old,1200);
+      }).catch(()=>{});};
     const auto=document.getElementById('phAuto');
     if(auto)auto.onclick=()=>post(data.autoplay_toggle_url).then(r=>{autoplay=r.autoplay;
       auto.textContent=autoplay?'▶▶ Auto On':'▶▶ Auto Off';auto.classList.toggle('on',autoplay);});
@@ -1409,7 +1488,7 @@ const PLAYER=(function(){
 
   let clickT=null;
   STAGE.addEventListener('click',e=>{
-    if(e.target.closest('.ctrls,.conv-overlay,.ph-minibar,button,input,select,a,.autopill'))return;
+    if(e.target.closest('.ctrls,.ph-minibar,button,input,select,a,.autopill'))return;
     if(state()==='mini'){expand();return;} // single click/tap = expand (double-tap from touchend overrides)
     if(clickT){clearTimeout(clickT);clickT=null;goFull();}
     else clickT=setTimeout(()=>{clickT=null;toggle();},260);

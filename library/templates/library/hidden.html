@@ -1,0 +1,15 @@
+{% extends base_template %}
+{% load library_extras %}
+{% block content %}
+<h1>Hidden <span style="color:var(--muted);font-size:14px;font-weight:400">{% if total_hidden %}· {{ total_hidden }} video{{ total_hidden|pluralize }}{% endif %}</span></h1>
+<div class="toolbar">
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
+</div>
+{% if videos %}
+  <div class="grid" style="margin-top:18px">
+    {% for video in videos %}{% include "library/_card.html" %}{% endfor %}
+  </div>
+{% else %}
+  <div class="empty"><p>Nothing hidden. Hide a video from the Library's select menu to see it here.</p></div>
+{% endif %}
+{% endblock %}

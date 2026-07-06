@@ -4,8 +4,8 @@ from .models import Video, Tag, Playlist, PlaylistItem, PlaybackState, WatchEven
 
 @admin.register(Video)
 class VideoAdmin(admin.ModelAdmin):
-    list_display = ("title", "ext", "aspect_label", "favorite", "rating", "date_added", "missing")
-    list_filter = ("ext", "favorite", "missing", "browser_playable")
+    list_display = ("title", "ext", "aspect_label", "favorite", "rating", "date_added", "missing", "hidden")
+    list_filter = ("ext", "favorite", "missing", "hidden", "browser_playable")
     search_fields = ("title", "filename", "rel_path")
     filter_horizontal = ("tags",)
 

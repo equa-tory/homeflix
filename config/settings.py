@@ -154,5 +154,10 @@ os.makedirs(CONVERTED_DIR, exist_ok=True)
 # Library page size for infinite scroll.
 PAGE_SIZE = 60
 
+# UNC path shown (and copied) under the player so you can jump to the file
+# from another machine on the LAN, e.g. \\192.168.1.39\YouTube\2026-01\05\name.mp4.
+# Override with HOMEFLIX_REMOTE_ROOT; leave blank to just show the real local path.
+REMOTE_ROOT = os.environ.get("HOMEFLIX_REMOTE_ROOT", r"\\192.168.1.39\YouTube")
+
 # Background scan interval (minutes). Set 0 to disable.
 SCAN_INTERVAL_MINUTES = 30
