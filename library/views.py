@@ -244,6 +244,7 @@ def _build_watch_data(request, pk):
         "id": video.pk, "title": video.title,
         "description": video.description or "", "channel": video.channel or "",
         "stream_url": f"/stream/{pk}/", "watch_url": f"/watch/{pk}/",
+        "download_url": f"/stream/{pk}/?download=1",
         "save_url": f"/video/{pk}/progress/",
         "position": state.position_seconds,
         "duration_label": fmt_dur(video.duration_seconds),
@@ -336,7 +337,8 @@ def stream(request, pk):
 
     size = os.path.getsize(path)
     content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
-    range_header = request.META.get("HTTP_RANGE", "")
+    download = request.GET.get("download") == "1"
+    range_header = "" if download else request.META.get("HTTP_RANGE", "")
     match = RANGE_RE.match(range_header)
 
     if match:
@@ -364,6 +366,8 @@ def stream(request, pk):
         resp["Content-Length"] = str(size)
 
     resp["Accept-Ranges"] = "bytes"
+    if download:
+        resp["Content-Disposition"] = f'attachment; filename="{os.path.basename(path)}"'
     return resp
 
 
