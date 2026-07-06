@@ -288,6 +288,11 @@ main{overflow-x:hidden}
     height:calc(100svh - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px) - 8px);
   }
 }
+/* TV overscan: real screen crops the outer edge of the picture, so scale the
+   whole stage (video + controls) up ~5% and let overflow spill past the
+   panel edge — matches PC sizing exactly, this only kicks in on tv-mode. */
+html.tv-mode #player.ph-expanded{overflow:visible}
+html.tv-mode #player.ph-expanded .ph-stage{transform:scale(1.05)}
 #player.ph-mini .ph-stage{border-radius:14px}
 .ph-stage video{width:100%; height:100%; display:block; background:#000; object-fit:contain}
 #player.ph-mini .ph-stage video{object-fit:cover}
@@ -304,12 +309,16 @@ main{overflow-x:hidden}
 #player.ph-mini .ripple{display:none}
 
 /* big controls (expanded only) */
-.ctrls{position:absolute; left:0; right:0; bottom:0;
-  padding:8px 14px calc(14px + env(safe-area-inset-bottom,0px));
+.ctrls{position:absolute; left:0; right:0; bottom:0; padding:8px 14px 14px;
   background:linear-gradient(transparent,#000c 70%); display:flex; flex-direction:column;
   gap:7px; opacity:0; transition:opacity .22s; pointer-events:none}
 .ph-stage.show-ctrls .ctrls, .ph-stage.paused .ctrls{opacity:1; pointer-events:all}
 #player.ph-mini .ctrls{display:none}
+/* Shorts mode only: the stage fills the true screen edge-to-edge, so this bar
+   really does sit over the home-indicator area and needs the safe-area padding.
+   The regular capped-height stage sits mid-page above a scrollable info panel —
+   adding it there just left a dead gap under the controls. */
+#player.ph-expanded.ph-shorts .ctrls{padding-bottom:calc(14px + env(safe-area-inset-bottom,0px))}
 
 .bar{width:100%; height:4px; background:transparent; border-radius:3px;
   position:relative; cursor:pointer; padding:12px 0; margin:-12px 0; flex-shrink:0;
@@ -343,7 +352,13 @@ main{overflow-x:hidden}
 .ctime{color:#fff; font-size:13px; font-variant-numeric:tabular-nums; min-width:38px}
 .csep{color:#fff4; font-size:11px}
 .cflex{flex:1}
-@media(max-width:700px){.cbtn{font-size:22px;padding:8px 9px}.ctime{font-size:11px;min-width:34px}}
+/* scaled to ~85%: the download button added one more icon to this row and it
+   started overflowing off the right edge on phone at the old 100% sizing */
+@media(max-width:700px){
+  .btn-row{gap:1px}
+  .cbtn{font-size:19px;padding:6px 5px}
+  .ctime{font-size:10px;min-width:28px}
+}
 
 /* conversion overlay */
 .conv-overlay{position:absolute; inset:0; display:grid; place-items:center; text-align:center;
@@ -482,12 +497,15 @@ html.player-locked{overflow:hidden}
 @media (max-width:700px){
   :root{--bottom-nav-h:62px}
   nav.topnav{display:none}
-  header{gap:10px; padding:9px 14px}
+  header{gap:10px; padding:calc(9px + env(safe-area-inset-top,0px)) 14px 9px}
   .hdr-search{max-width:none}
   html, body { height:100%; overflow:hidden }
   /* dvh tracks the real visible viewport as Safari's toolbar shows/hides;
      vh first as a fallback for browsers without dvh support (last-valid-wins). */
-  body { display:flex; flex-direction:column; height:100vh; height:100dvh; }
+  /* padding-bottom:0 — bottom-nav is a real flex item here (not fixed), it already
+     takes its own space; the base rule's --bottom-nav-h padding would double-reserve
+     it and leave a dead gap under the bar. */
+  body { display:flex; flex-direction:column; height:100vh; height:100dvh; padding-bottom:0; }
   header{ flex-shrink:0; position:static }
   main  { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
           overscroll-behavior-y:contain; padding-bottom:16px }
@@ -690,6 +708,17 @@ html.player-locked{overflow:hidden}
    ========================================================= */
 function getCookie(n){const m=document.cookie.match('(^|;)\s*'+n+'\s*=\s*([^;]+)');return m?m.pop():'';}
 const CSRF=getCookie('csrftoken');
+
+/* Smart-TV browsers (LG webOS, Tizen, etc.) render the expanded player capped
+   to the PC/phone-safe size, which overscan then crops down to ~80% of the
+   screen. Flag them so CSS can scale the stage up to fill the panel. */
+if(/webOS|Tizen|SmartTV|GoogleTV|AFTT|AFTM|AFTB|AFTS|BRAVIA|NetCast|CrKey|HbbTV/i.test(navigator.userAgent)){
+  document.documentElement.classList.add('tv-mode');
+}
+/* iOS Safari (incl. installed home-screen apps) ignores the <a download> attribute
+   and Content-Disposition for video — it just opens the file as a page. Used to
+   route the download button through the share sheet instead on those devices. */
+const IS_IOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
   'X-SPA':'1','Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams(d||{})}).then(r=>r.json());}
@@ -1443,6 +1472,23 @@ const PLAYER=(function(){
     VOL.addEventListener('pointerdown',e=>e.stopPropagation());}
   V.addEventListener('volumechange',syncVol);
   LOOP.onclick=e=>{e.stopPropagation();V.loop=!V.loop;LOOP.classList.toggle('looping',V.loop);};
+
+  /* iOS: <a download> / Content-Disposition are ignored for video, so fetch the
+     file ourselves and hand it to the native share sheet (Save Video / Save to Files). */
+  if(DL&&IS_IOS){
+    DL.addEventListener('click',e=>{
+      e.preventDefault();e.stopPropagation();
+      if(!d||DL.dataset.busy)return;
+      DL.dataset.busy='1';const prevText=DL.textContent;DL.textContent='…';
+      fetch(d.download_url).then(r=>r.blob()).then(blob=>{
+        const ext=(d.ext||'mp4').toLowerCase();
+        const file=new File([blob],(d.title||'video')+'.'+ext,{type:blob.type||'video/mp4'});
+        if(navigator.canShare&&navigator.canShare({files:[file]}))return navigator.share({files:[file],title:d.title});
+        location.href=d.download_url;
+      }).catch(()=>{location.href=d.download_url;})
+        .finally(()=>{delete DL.dataset.busy;DL.textContent=prevText;});
+    });
+  }
 
   /* prev/next: swap source on the SAME element -> iOS keeps autoplay */
   PREV.onclick=e=>{e.stopPropagation();if(d&&d.prev_id)navigate(d.prev_id,true);};
