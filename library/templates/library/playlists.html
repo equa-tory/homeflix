@@ -54,7 +54,13 @@
   {% for sp in smart_playlists %}
   <div class="pl-wrap">
     <a class="card nav-item" tabindex="0" href="{% url 'smart_playlist_detail' sp.pk %}" data-spa>
-      <div class="thumb"><div class="placeholder" style="font-size:16px">⚙ Auto</div></div>
+      <div class="thumb">
+        {% if sp.thumbnail_path %}
+          <div class="thumb-bg" style="background-image:url({% url 'smart_playlist_thumb' sp.pk %})"></div>
+        {% else %}
+          <div class="placeholder" style="font-size:16px">⚙ Auto</div>
+        {% endif %}
+      </div>
       <div class="meta"><div class="t">{{ sp.name }}</div>
         <div class="s">Smart · {{ sp.get_videos.count }} video{{ sp.get_videos.count|pluralize }}</div>
       </div>

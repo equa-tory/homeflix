@@ -342,6 +342,7 @@ def _build_watch_data(request, pk):
         "convert_progress": video.convert_progress,
         "convert_url": f"/video/{pk}/convert/",
         "convert_status_url": f"/video/{pk}/convert/status/",
+        "convert_cancel_url": f"/video/{pk}/convert/cancel/",
         "needs_convert": video.needs_convert_ui,
         "next_id": next_id, "prev_id": prev_id,
         "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
@@ -517,26 +518,49 @@ _PLAYLIST_THUMB_EXTS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                         ".png": "image/png", ".webp": "image/webp"}
 
 
-def _clear_playlist_thumb_file(pl):
-    if pl.thumbnail_path and os.path.exists(pl.thumbnail_path):
+def _clear_thumb_file(obj):
+    if obj.thumbnail_path and os.path.exists(obj.thumbnail_path):
         try:
-            os.remove(pl.thumbnail_path)
+            os.remove(obj.thumbnail_path)
         except OSError:
             pass
+
+
+def _upload_thumb(request, obj, out_prefix):
+    f = request.FILES.get("image")
+    if not f:
+        return JsonResponse({"ok": False, "error": "No file"})
+    ext = os.path.splitext(f.name)[1].lower()
+    if ext not in _PLAYLIST_THUMB_EXTS:
+        return JsonResponse({"ok": False, "error": "Unsupported image type"})
+    _clear_thumb_file(obj)
+    os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
+    out_path = os.path.join(settings.THUMBNAIL_DIR, f"{out_prefix}{ext}")
+    with open(out_path, "wb") as out:
+        for chunk in f.chunks():
+            out.write(chunk)
+    obj.thumbnail_path = out_path
+    obj.save(update_fields=["thumbnail_path"])
+    return JsonResponse({"ok": True})
 
 
 @require_POST
 def playlist_thumb_generate(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
-    _clear_playlist_thumb_file(pl)
-    path = services.generate_playlist_thumbnail(pl)
-    return JsonResponse({"ok": bool(path), "thumb_url": f"/playlists/{pk}/thumbnail/" if path else ""})
+    _clear_thumb_file(pl)
+    # Not filtering by video__missing here: a video already added to the
+    # playlist should still count toward its cover even if flagged missing
+    # (it already has a cached thumbnail from before it went missing).
+    videos = [it.video for it in pl.items.select_related("video")[:4]]
+    out_path = os.path.join(settings.THUMBNAIL_DIR, f"playlist_{pk}.jpg")
+    path, error = services.generate_collage_thumbnail(pl, videos, out_path)
+    return JsonResponse({"ok": bool(path), "error": error})
 
 
 @require_POST
 def playlist_thumb_remove(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
-    _clear_playlist_thumb_file(pl)
+    _clear_thumb_file(pl)
     pl.thumbnail_path = ""
     pl.save(update_fields=["thumbnail_path"])
     return JsonResponse({"ok": True})
@@ -545,21 +569,40 @@ def playlist_thumb_remove(request, pk):
 @require_POST
 def playlist_thumb_upload(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
-    f = request.FILES.get("image")
-    if not f:
-        return JsonResponse({"ok": False, "error": "No file"})
-    ext = os.path.splitext(f.name)[1].lower()
-    if ext not in _PLAYLIST_THUMB_EXTS:
-        return JsonResponse({"ok": False, "error": "Unsupported image type"})
-    _clear_playlist_thumb_file(pl)
-    os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
-    out_path = os.path.join(settings.THUMBNAIL_DIR, f"playlist_{pk}{ext}")
-    with open(out_path, "wb") as out:
-        for chunk in f.chunks():
-            out.write(chunk)
-    pl.thumbnail_path = out_path
-    pl.save(update_fields=["thumbnail_path"])
-    return JsonResponse({"ok": True, "thumb_url": f"/playlists/{pk}/thumbnail/"})
+    return _upload_thumb(request, pl, f"playlist_{pk}")
+
+
+def smart_playlist_thumb(request, pk):
+    sp = get_object_or_404(SmartPlaylist, pk=pk)
+    if sp.thumbnail_path and os.path.exists(sp.thumbnail_path):
+        content_type = mimetypes.guess_type(sp.thumbnail_path)[0] or "image/jpeg"
+        return FileResponse(open(sp.thumbnail_path, "rb"), content_type=content_type)
+    raise Http404("No thumbnail")
+
+
+@require_POST
+def smart_playlist_thumb_generate(request, pk):
+    sp = get_object_or_404(SmartPlaylist, pk=pk)
+    _clear_thumb_file(sp)
+    videos = list(sp.get_videos()[:4])
+    out_path = os.path.join(settings.THUMBNAIL_DIR, f"smart_playlist_{pk}.jpg")
+    path, error = services.generate_collage_thumbnail(sp, videos, out_path)
+    return JsonResponse({"ok": bool(path), "error": error})
+
+
+@require_POST
+def smart_playlist_thumb_remove(request, pk):
+    sp = get_object_or_404(SmartPlaylist, pk=pk)
+    _clear_thumb_file(sp)
+    sp.thumbnail_path = ""
+    sp.save(update_fields=["thumbnail_path"])
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+def smart_playlist_thumb_upload(request, pk):
+    sp = get_object_or_404(SmartPlaylist, pk=pk)
+    return _upload_thumb(request, sp, f"smart_playlist_{pk}")
 
 
 @require_POST
@@ -713,6 +756,13 @@ def convert_status(request, pk):
         "progress": video.convert_progress,
         "ready": video.convert_status == Video.CONVERT_DONE,
     })
+
+
+@require_POST
+def cancel_convert(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    services.cancel_conversion(video)
+    return JsonResponse({"ok": True})
 
 
 # ---- Organize / maintenance -------------------------------------------------

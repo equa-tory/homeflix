@@ -977,6 +977,28 @@ const SELECT_MODE=(function(){
   return{toggle,deactivate,toggleItem,isActive,isSelected,getIds,clear};
 })();
 
+/* Shared by Playlist / Smart Playlist detail pages: the cover-image
+   Generate/Remove/Upload controls (#plThumbTool, see playlist_detail.html /
+   smart_playlist_detail.html — same ids, only one is ever in the DOM at once
+   since the SPA swaps #app's whole content). */
+function wireThumbTool(root){
+  const tool=root.querySelector('#plThumbTool');
+  if(!tool)return;
+  const gen=document.getElementById('plThumbGen'),rem=document.getElementById('plThumbRemove'),
+        up=document.getElementById('plThumbUpload');
+  const refresh=()=>ROUTER.go(location.pathname,{push:false});
+  if(gen)gen.onclick=()=>{gen.textContent='…';post(tool.dataset.generateUrl).then(r=>{
+    if(!r.ok){gen.textContent='🖼 Generate';alert(r.error||'Could not build a cover.');return;}
+    refresh();});};
+  if(rem)rem.onclick=()=>{post(tool.dataset.removeUrl).then(refresh);};
+  if(up)up.onchange=()=>{
+    if(!up.files||!up.files[0])return;
+    const fd=new FormData();fd.append('image',up.files[0]);
+    fetch(tool.dataset.uploadUrl,{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
+      .then(r=>r.json()).then(r=>{if(r.ok)refresh();else alert(r.error||'Upload failed');});
+  };
+}
+
 /* Shared by any page with select-mode: the toolbar's "Select" button + the
    floating FAB + the 's' keyboard shortcut. Returns a cleanup fn. */
 function wireSelectUI(root){
@@ -1108,27 +1130,13 @@ const PAGE_INIT={
 
   /* ----- PLAYLIST DETAIL: select-mode + cover image tool ----- */
   playlist_detail(root){
-    const tool=root.querySelector('#plThumbTool');
-    if(tool){
-      const gen=document.getElementById('plThumbGen'),rem=document.getElementById('plThumbRemove'),
-            up=document.getElementById('plThumbUpload');
-      const refresh=()=>ROUTER.go(location.pathname,{push:false});
-      if(gen)gen.onclick=()=>{gen.textContent='…';post(tool.dataset.generateUrl).then(r=>{
-        if(!r.ok){gen.textContent='🖼 Generate';alert('No videos to build a cover from yet.');return;}
-        refresh();});};
-      if(rem)rem.onclick=()=>{post(tool.dataset.removeUrl).then(refresh);};
-      if(up)up.onchange=()=>{
-        if(!up.files||!up.files[0])return;
-        const fd=new FormData();fd.append('image',up.files[0]);
-        fetch(tool.dataset.uploadUrl,{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
-          .then(r=>r.json()).then(r=>{if(r.ok)refresh();else alert(r.error||'Upload failed');});
-      };
-    }
+    wireThumbTool(root);
     return wireSelectUI(root);
   },
 
-  /* ----- SMART PLAYLIST: rules editor ----- */
+  /* ----- SMART PLAYLIST: rules editor + cover image tool ----- */
   smart_playlist(root){
+    wireThumbTool(root);
     const form=root.querySelector('#rulesForm');
     if(!form)return null;
     const FIELDS=[{v:'title',l:'Title'},{v:'filename',l:'Filename'},{v:'channel',l:'Channel'},
@@ -1260,7 +1268,7 @@ const PLAYER=(function(){
     if(d.remux){
       remuxOffset=t;
       const resume=!V.paused;
-      loadSource(d.stream_url+'?t='+t.toFixed(2),0,resume);
+      loadRemuxSource(d.stream_url+'?t='+t.toFixed(2),resume);
     }else{
       if(V.duration)t=Math.min(t,V.duration);
       V.currentTime=t;
@@ -1315,6 +1323,68 @@ const PLAYER=(function(){
     },{once:true});
   }
 
+  /* ---- live-remux playback via MediaSource (see Video.needs_remux) ----
+     The ffmpeg pipe (services.iter_remux / views.stream()'s ?t= branch) emits
+     fragmented mp4 — that's the format MediaSource/SourceBuffer expects, NOT
+     what a plain <video src> progressive demuxer can parse (that mismatch was
+     the whole black-screen bug: no error, just bytes the built-in demuxer
+     didn't understand). Feed it through MSE instead. */
+  let remuxSession=null; // {reader, aborted} for the in-flight fetch, so a new
+                         // load/seek can cleanly cancel the previous one.
+  function teardownRemux(){
+    if(remuxSession){
+      remuxSession.aborted=true;
+      if(remuxSession.reader)remuxSession.reader.cancel().catch(()=>{});
+      remuxSession=null;
+    }
+  }
+  const REMUX_MIME_CANDIDATES=[
+    'video/mp4; codecs="avc1.640028,mp4a.40.2"', // High profile — most common
+    'video/mp4; codecs="avc1.4d4028,mp4a.40.2"', // Main profile fallback
+    'video/mp4', // last resort — some engines accept no codecs string
+  ];
+  function loadRemuxSource(url,play){
+    teardownRemux();
+    V.pause(); V.removeAttribute('src'); V.load();
+    STAGE.classList.add('paused'); PLAY.textContent='▶';
+    const session={reader:null,aborted:false};
+    remuxSession=session;
+    const ms=new MediaSource();
+    V.src=URL.createObjectURL(ms);
+    ms.addEventListener('sourceopen',function onOpen(){
+      ms.removeEventListener('sourceopen',onOpen);
+      if(session.aborted)return;
+      let sb=null;
+      for(const mime of REMUX_MIME_CANDIDATES){
+        try{sb=ms.addSourceBuffer(mime);break;}catch(e){}
+      }
+      if(!sb)return; // browser can't do MSE mp4 at all — nothing more to try
+      sb.mode='sequence';
+      fetch(url).then(r=>{
+        if(session.aborted)return;
+        const reader=r.body.getReader();
+        session.reader=reader;
+        function pump(){
+          if(session.aborted)return;
+          reader.read().then(({done,value})=>{
+            if(session.aborted)return;
+            if(done){try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}return;}
+            append(value);
+          }).catch(()=>{});
+        }
+        function append(chunk){
+          if(session.aborted)return;
+          try{sb.appendBuffer(chunk);}catch(e){return;}
+          sb.addEventListener('updateend',pump,{once:true});
+        }
+        pump();
+      }).catch(()=>{});
+    });
+    if(play){
+      V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
+    }
+  }
+
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
@@ -1335,8 +1405,9 @@ const PLAYER=(function(){
       // Live remux: resume position means "start the pipe at t=<pos>", not an
       // in-element seek — the element itself always starts fresh at time 0.
       remuxOffset=startPos;
-      loadSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),0,play);
+      loadRemuxSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),play);
     }else{
+      teardownRemux();
       remuxOffset=0;
       loadSource(data.stream_url,startPos,play);
     }
@@ -1364,14 +1435,20 @@ const PLAYER=(function(){
     const idle=document.getElementById('phConvIdle'),prog=document.getElementById('phConvProg');
     const fill=document.getElementById('phConvFill'),ctext=document.getElementById('phConvText');
     const btn=document.getElementById('phConvBtn'), inline=document.getElementById('phConvInline');
+    const cancelBtn=document.getElementById('phConvCancel');
     if(!inline)return;
+    let cancelled=false;
+    function showIdle(){if(idle)idle.style.display='';if(prog)prog.style.display='none';}
     function showProg(p){if(idle)idle.style.display='none';if(prog)prog.style.display='';
       if(fill)fill.style.width=(p||0)+'%';if(ctext)ctext.textContent='Converting… '+(p||0)+'%';}
     function poll(){fetch(data.convert_status_url).then(r=>r.json()).then(r=>{
+      if(cancelled)return;
       if(r.ready){inline.style.display='none';loadSource(data.stream_url,0,true);return;}
       if(r.status==='failed'){if(ctext)ctext.textContent='Conversion failed.';return;}
       if(r.status==='running'||r.status==='queued'){showProg(r.progress);setTimeout(poll,1500);}});}
-    if(btn)btn.onclick=e=>{e.stopPropagation();showProg(0);post(data.convert_url).then(()=>poll());};
+    if(btn)btn.onclick=e=>{e.stopPropagation();cancelled=false;showProg(0);post(data.convert_url).then(()=>poll());};
+    if(cancelBtn)cancelBtn.onclick=e=>{e.stopPropagation();cancelled=true;
+      post(data.convert_cancel_url).then(()=>showIdle());};
     if(data.convert_status==='queued'||data.convert_status==='running'){showProg(data.convert_progress);poll();}
   }
 
@@ -1427,7 +1504,8 @@ const PLAYER=(function(){
         `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
         `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+
         `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
-          `<span id="phConvText" class="sub"></span></div></div>`:'')+
+          `<span id="phConvText" class="sub"></span>`+
+          `<button class="btn ghost" id="phConvCancel" style="margin-left:8px">✕ Cancel</button></div></div>`:'')+
       `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
@@ -1791,7 +1869,7 @@ const PLAYER=(function(){
   function minimize(){savePos();setState('mini');persist();
     // restore underlying URL if we were on a /watch/ url
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
-  function close(){savePos();V.pause();V.removeAttribute('src');V.load();
+  function close(){savePos();teardownRemux();V.pause();V.removeAttribute('src');V.load();
     setState('hidden');d=null;clearPersist();
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
   function back(){ // back arrow in expanded -> minimize (keep playing)

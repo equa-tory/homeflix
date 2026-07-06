@@ -83,17 +83,19 @@ def generate_thumbnail(video, percent=0.0):
     return ""
 
 
-def generate_playlist_thumbnail(playlist):
-    """Build a 2x2 collage from (up to) 4 of the playlist's videos and save it
-    as the playlist's cover. Returns the path, or '' if the playlist is empty.
-    Fewer than 4 videos still fills all four corners by cycling what's there.
+def generate_collage_thumbnail(obj, videos, out_path):
+    """Build a 2x2 collage from (up to) 4 given videos and save it as `obj`'s
+    (a Playlist or SmartPlaylist) cover at `out_path`. Fewer than 4 videos
+    still fills all four corners by cycling what's there.
+
+    Returns (path, error) — path is '' on failure, with error one of
+    "no_videos", "no_thumbnails", or "ffmpeg: <stderr>" so the caller can
+    show the *real* reason instead of guessing.
     """
     import itertools
 
-    videos = [it.video for it in playlist.items.select_related("video")
-              .filter(video__missing=False)[:4]]
     if not videos:
-        return ""
+        return "", "no_videos"
 
     thumbs = []
     for v in videos:
@@ -102,11 +104,10 @@ def generate_playlist_thumbnail(playlist):
         if v.thumbnail_path and os.path.exists(v.thumbnail_path):
             thumbs.append(v.thumbnail_path)
     if not thumbs:
-        return ""
+        return "", "no_thumbnails"
     corners = list(itertools.islice(itertools.cycle(thumbs), 4))
 
     os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
-    out_path = os.path.join(settings.THUMBNAIL_DIR, f"playlist_{playlist.id}.jpg")
     cmd = ["ffmpeg", "-y"]
     for c in corners:
         cmd += ["-i", c]
@@ -118,12 +119,12 @@ def generate_playlist_thumbnail(playlist):
     )
     cmd += ["-filter_complex", filt, "-map", "[out]", "-frames:v", "1", "-q:v", "3", out_path]
 
-    code, _, _ = _run(cmd)
+    code, _, err = _run(cmd)
     if code == 0 and os.path.exists(out_path):
-        playlist.thumbnail_path = out_path
-        playlist.save(update_fields=["thumbnail_path"])
-        return out_path
-    return ""
+        obj.thumbnail_path = out_path
+        obj.save(update_fields=["thumbnail_path"])
+        return out_path, None
+    return "", f"ffmpeg: {(err or '').strip()[:200] or f'exit {code}'}"
 
 
 def read_sidecar(path):
@@ -230,6 +231,14 @@ SIDECAR_EXTS = (".srt", ".vtt", ".ass", ".info.json", ".json",
                 ".nfo", ".jpg", ".jpeg", ".png", ".webp")
 
 
+# Track the running ffmpeg Popen per video so cancel_conversion() can stop it,
+# and which video ids were just explicitly cancelled so _ffmpeg_convert's own
+# post-process status update (which runs in the background thread, racing
+# with cancel_conversion()'s reset) doesn't clobber it back to "failed".
+_CONVERT_PROCS = {}
+_CANCELLED = set()
+
+
 def _ffmpeg_convert(video_id):
     from .models import Video
     video = Video.objects.filter(id=video_id).first()
@@ -256,18 +265,29 @@ def _ffmpeg_convert(video_id):
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 text=True)
-        for line in proc.stdout:
-            if line.startswith("out_time_ms=") and duration:
-                try:
-                    secs = int(line.strip().split("=")[1]) / 1_000_000
-                    pct = max(0, min(99, int(secs / duration * 100)))
-                    Video.objects.filter(id=video.id).update(convert_progress=pct)
-                except (ValueError, ZeroDivisionError):
-                    pass
-        proc.wait()
-        ok = proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        _CONVERT_PROCS[video.id] = proc
+        try:
+            for line in proc.stdout:
+                if line.startswith("out_time_ms=") and duration:
+                    try:
+                        secs = int(line.strip().split("=")[1]) / 1_000_000
+                        pct = max(0, min(99, int(secs / duration * 100)))
+                        Video.objects.filter(id=video.id).update(convert_progress=pct)
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            proc.wait()
+            ok = proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        finally:
+            _CONVERT_PROCS.pop(video.id, None)
     except Exception:
         ok = False
+
+    if video.id in _CANCELLED:
+        # cancel_conversion() already reset status + cleaned up the partial
+        # file — don't overwrite that with a stale "failed" from the process
+        # we just killed.
+        _CANCELLED.discard(video.id)
+        return
 
     video.refresh_from_db()
     if ok:
@@ -277,6 +297,29 @@ def _ffmpeg_convert(video_id):
     else:
         video.convert_status = Video.CONVERT_FAILED
     video.save(update_fields=["convert_status", "converted_path", "convert_progress"])
+
+
+def cancel_conversion(video):
+    """Stop a running/queued conversion and reset state so the user can retry
+    or the file just goes back to needing (or not needing) conversion."""
+    proc = _CONVERT_PROCS.get(video.id)
+    if proc:
+        _CANCELLED.add(video.id)
+        try:
+            proc.terminate()
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    out_path = os.path.join(settings.CONVERTED_DIR, f"video_{video.id}.mp4")
+    if os.path.exists(out_path):
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass  # e.g. Windows still holding the handle until ffmpeg exits
+    Video.objects.filter(id=video.id).update(
+        convert_status=Video.CONVERT_NONE, convert_progress=0)
 
 
 def start_conversion(video):

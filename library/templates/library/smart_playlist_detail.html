@@ -15,6 +15,21 @@
 </div>
 <p class="sub">{{ videos|length }} video{{ videos|length|pluralize }} match current rules</p>
 
+<div class="thumb-tool" id="plThumbTool" data-pl="{{ sp.pk }}" data-generate-url="{% url 'smart_playlist_thumb_generate' sp.pk %}"
+     data-remove-url="{% url 'smart_playlist_thumb_remove' sp.pk %}" data-upload-url="{% url 'smart_playlist_thumb_upload' sp.pk %}">
+  <div class="row-inline">
+    <strong>Cover image</strong>
+    {% if sp.thumbnail_path %}
+      <img src="{% url 'smart_playlist_thumb' sp.pk %}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
+    {% endif %}
+    <button type="button" class="btn ghost" id="plThumbGen">🖼 Generate</button>
+    <button type="button" class="btn ghost" id="plThumbRemove"{% if not sp.thumbnail_path %} style="display:none"{% endif %}>✕ Remove</button>
+    <label class="btn ghost" style="cursor:pointer;margin:0">⬆ Upload
+      <input type="file" id="plThumbUpload" accept="image/png,image/jpeg,image/webp" style="display:none">
+    </label>
+  </div>
+</div>
+
 <form method="post" action="{% url 'save_smart_rules' sp.pk %}" id="rulesForm"
       data-rules="{{ sp.rules }}">
   {% csrf_token %}

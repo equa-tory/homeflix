@@ -194,6 +194,9 @@ class SmartPlaylist(models.Model):
     # JSON list of {"field","op","value"} dicts
     rules = models.TextField(default="[]")
 
+    # Generated (2x2 collage of its videos' thumbnails) or user-uploaded cover image.
+    thumbnail_path = models.CharField(max_length=1024, blank=True, default="")
+
     class Meta:
         ordering = ["name"]
 

@@ -26,6 +26,7 @@ urlpatterns = [
     # conversion
     path("video/<int:pk>/convert/", views.convert, name="convert"),
     path("video/<int:pk>/convert/status/", views.convert_status, name="convert_status"),
+    path("video/<int:pk>/convert/cancel/", views.cancel_convert, name="cancel_convert"),
 
     # organize / maintenance
     path("organize/", views.organize, name="organize"),
@@ -53,6 +54,10 @@ urlpatterns = [
     path("smart-playlists/<int:pk>/", views.smart_playlist_detail, name="smart_playlist_detail"),
     path("smart-playlists/<int:pk>/rules/", views.save_smart_rules, name="save_smart_rules"),
     path("smart-playlists/<int:pk>/delete/", views.delete_smart_playlist, name="delete_smart_playlist"),
+    path("smart-playlists/<int:pk>/thumbnail/", views.smart_playlist_thumb, name="smart_playlist_thumb"),
+    path("smart-playlists/<int:pk>/thumbnail/generate/", views.smart_playlist_thumb_generate, name="smart_playlist_thumb_generate"),
+    path("smart-playlists/<int:pk>/thumbnail/remove/", views.smart_playlist_thumb_remove, name="smart_playlist_thumb_remove"),
+    path("smart-playlists/<int:pk>/thumbnail/upload/", views.smart_playlist_thumb_upload, name="smart_playlist_thumb_upload"),
 
     # Bulk actions
     path("bulk/thumb-regen/", views.bulk_regen_thumb, name="bulk_regen_thumb"),
