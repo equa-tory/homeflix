@@ -7,7 +7,7 @@
     {% else %}
       <div class="placeholder">▶</div>
     {% endif %}
-    {% if not video.browser_playable %}
+    {% if video.needs_convert_ui %}
       <span class="warn" title="May not play in a desktop browser">MKV/HEVC</span>
     {% elif video.aspect_label %}
       <span class="qbadge">{{ video.aspect_label }}</span>

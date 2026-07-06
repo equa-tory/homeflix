@@ -79,6 +79,10 @@ def _normalize_field(name):
     return expr
 
 
+_WORD_RE = re.compile(r"\w+")
+_FUZZY_THRESHOLD = 0.72
+
+
 def _search_filter(qs, q):
     """Loose title/filename search: separator-insensitive (ignores -, _, .,
     space) and AND's multiple words. Falls back to typo-tolerant fuzzy
@@ -96,12 +100,25 @@ def _search_filter(qs, q):
 
     # Fuzzy fallback for typos (e.g. "vidoe" -> "video") — small single-user
     # library, so a plain Python pass over title+filename is cheap enough.
-    norm_q = _SEP_RE.sub("", q).lower()
+    #
+    # Compare PER WORD, not the whole title: matching a short query against an
+    # entire "title filename" string dilutes the ratio no matter how good the
+    # local match is (a 5-letter typo inside a 40-letter title barely moves the
+    # needle) — that's why a query like "toboe" failed to find "tooboe" when it
+    # was just one word inside a longer title. Instead, a video matches if every
+    # query token is a close match (ratio >= threshold) to *some* word in its
+    # name — same tolerance YouTube-style search gives a single typo'd word.
+    query_words = [w for w in (_WORD_RE.findall(q.lower())) if w] or tokens
     hits = []
     for pk, title, filename in qs.values_list("pk", "title", "filename"):
-        name = _SEP_RE.sub("", f"{title} {filename}").lower()
-        ratio = difflib.SequenceMatcher(None, norm_q, name).ratio()
-        if ratio >= 0.6:
+        name_words = _WORD_RE.findall(f"{title} {filename}".lower())
+        if not name_words:
+            continue
+        if all(
+            max((difflib.SequenceMatcher(None, qw, nw).ratio() for nw in name_words), default=0)
+            >= _FUZZY_THRESHOLD
+            for qw in query_words
+        ):
             hits.append(pk)
     return qs.filter(pk__in=hits) if hits else qs.none()
 
@@ -208,14 +225,16 @@ def playlists(request):
     return render(request, "library/playlists.html", base_ctx(
         request, active_nav="playlists", page_id="playlists", spa_title="Playlists — HomeFlix",
         playlists=Playlist.objects.all(),
-        smart_playlists=SmartPlaylist.objects.all()))
+        smart_playlists=SmartPlaylist.objects.all(),
+        total_hidden=Video.objects.filter(missing=False, hidden=True).count()))
 
 
 def playlist_detail(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
     items = pl.items.select_related("video").filter(video__missing=False)
     return render(request, "library/playlist_detail.html", base_ctx(
-        request, active_nav="playlists", spa_title=f"{pl.name} — HomeFlix",
+        request, active_nav="playlists", page_id="playlist_detail",
+        spa_title=f"{pl.name} — HomeFlix",
         playlist=pl, items=items))
 
 
@@ -289,7 +308,7 @@ def _build_watch_data(request, pk):
             "watch_url": f"/watch/{v.pk}/",
             "dur": fmt_dur(v.duration_seconds), "channel": v.channel or "",
             "progress": round(progress, 1), "quality": v.aspect_label or "",
-            "needs_convert": not v.browser_playable and v.convert_status != Video.CONVERT_DONE,
+            "needs_convert": v.needs_convert_ui,
         }
 
     tech = []
@@ -317,11 +336,13 @@ def _build_watch_data(request, pk):
         "position": state.position_seconds,
         "duration_label": fmt_dur(video.duration_seconds),
         "playable": video.playable_now,
+        "remux": video.needs_remux,
+        "duration_seconds": video.duration_seconds or 0,
         "convert_status": video.convert_status,
         "convert_progress": video.convert_progress,
         "convert_url": f"/video/{pk}/convert/",
         "convert_status_url": f"/video/{pk}/convert/status/",
-        "needs_convert": video.needs_conversion,
+        "needs_convert": video.needs_convert_ui,
         "next_id": next_id, "prev_id": prev_id,
         "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
         "regen_thumb_url": f"/video/{pk}/thumb/regen/",
@@ -378,6 +399,14 @@ def thumb(request, pk):
     raise Http404("No thumbnail")
 
 
+def playlist_thumb(request, pk):
+    pl = get_object_or_404(Playlist, pk=pk)
+    if pl.thumbnail_path and os.path.exists(pl.thumbnail_path):
+        content_type = mimetypes.guess_type(pl.thumbnail_path)[0] or "image/jpeg"
+        return FileResponse(open(pl.thumbnail_path, "rb"), content_type=content_type)
+    raise Http404("No thumbnail")
+
+
 def frame_thumb(request, pk, t):
     video = get_object_or_404(Video, pk=pk)
     dur = int(video.duration_seconds or 0)
@@ -407,11 +436,28 @@ def stream(request, pk):
     if not os.path.exists(path):
         raise Http404("File missing")
 
+    download = request.GET.get("download") == "1"
+
+    # Container-only problem (e.g. h264/aac wrapped in mkv) -> stream a live
+    # ffmpeg remux instead of the on-disk Convert flow (see Video.needs_remux).
+    # ?t=<seconds> is this path's substitute for Range-based seeking — the
+    # player reloads the src with a new t instead of relying on native Range
+    # requests, since a live single-pass pipe can't serve arbitrary byte
+    # ranges. Downloading always gets the real original bytes regardless.
+    if video.needs_remux and not download:
+        try:
+            start_time = float(request.GET.get("t", 0))
+        except ValueError:
+            start_time = 0.0
+        resp = StreamingHttpResponse(services.iter_remux(path, start_time), content_type="video/mp4")
+        resp["Accept-Ranges"] = "none"
+        resp["Cache-Control"] = "no-store"
+        return resp
+
     size = os.path.getsize(path)
     content_type = (mimetypes.guess_type(path)[0]
                      or EXTRA_MIME_TYPES.get(os.path.splitext(path)[1].lower())
                      or "application/octet-stream")
-    download = request.GET.get("download") == "1"
     range_header = "" if download else request.META.get("HTTP_RANGE", "")
     match = RANGE_RE.match(range_header)
 
@@ -465,6 +511,55 @@ def regen_thumb(request, pk):
     if is_spa(request):
         return JsonResponse({"ok": True})
     return redirect(request.META.get("HTTP_REFERER", "/"))
+
+
+_PLAYLIST_THUMB_EXTS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                        ".png": "image/png", ".webp": "image/webp"}
+
+
+def _clear_playlist_thumb_file(pl):
+    if pl.thumbnail_path and os.path.exists(pl.thumbnail_path):
+        try:
+            os.remove(pl.thumbnail_path)
+        except OSError:
+            pass
+
+
+@require_POST
+def playlist_thumb_generate(request, pk):
+    pl = get_object_or_404(Playlist, pk=pk)
+    _clear_playlist_thumb_file(pl)
+    path = services.generate_playlist_thumbnail(pl)
+    return JsonResponse({"ok": bool(path), "thumb_url": f"/playlists/{pk}/thumbnail/" if path else ""})
+
+
+@require_POST
+def playlist_thumb_remove(request, pk):
+    pl = get_object_or_404(Playlist, pk=pk)
+    _clear_playlist_thumb_file(pl)
+    pl.thumbnail_path = ""
+    pl.save(update_fields=["thumbnail_path"])
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+def playlist_thumb_upload(request, pk):
+    pl = get_object_or_404(Playlist, pk=pk)
+    f = request.FILES.get("image")
+    if not f:
+        return JsonResponse({"ok": False, "error": "No file"})
+    ext = os.path.splitext(f.name)[1].lower()
+    if ext not in _PLAYLIST_THUMB_EXTS:
+        return JsonResponse({"ok": False, "error": "Unsupported image type"})
+    _clear_playlist_thumb_file(pl)
+    os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
+    out_path = os.path.join(settings.THUMBNAIL_DIR, f"playlist_{pk}{ext}")
+    with open(out_path, "wb") as out:
+        for chunk in f.chunks():
+            out.write(chunk)
+    pl.thumbnail_path = out_path
+    pl.save(update_fields=["thumbnail_path"])
+    return JsonResponse({"ok": True, "thumb_url": f"/playlists/{pk}/thumbnail/"})
 
 
 @require_POST
@@ -575,7 +670,7 @@ def _serialize(video, qs_suffix=""):
         "thumb": f"/thumb/{video.id}/" if video.thumbnail_path else "",
         "url": f"/watch/{video.id}/{qs_suffix}",
         "quality": video.aspect_label,
-        "needs_convert": not video.browser_playable and video.convert_status != Video.CONVERT_DONE,
+        "needs_convert": video.needs_convert_ui,
         "channel": video.channel,
         "date": video.date_added.strftime("%b %-d, %Y"),
         "favorite": video.favorite,
@@ -658,8 +753,21 @@ def shorts(request):
 
 def random_video(request):
     import random as _rnd
+    pl_id = request.GET.get("pl")
+    sp_id = request.GET.get("sp")
     has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts"))
-    if has_filter:
+    if pl_id:
+        ids = list(PlaylistItem.objects.filter(playlist_id=pl_id).values_list("video_id", flat=True))
+        if not ids:
+            return redirect("playlist_detail", pk=pl_id)
+        pk = _rnd.choice(ids)
+    elif sp_id:
+        sp = get_object_or_404(SmartPlaylist, pk=sp_id)
+        ids = list(sp.get_videos().values_list("pk", flat=True))
+        if not ids:
+            return redirect("smart_playlist_detail", pk=sp_id)
+        pk = _rnd.choice(ids)
+    elif has_filter:
         qs, _q, _s, _r = _filtered_videos(request)
         ids = list(qs.values_list("pk", flat=True))
         if not ids:

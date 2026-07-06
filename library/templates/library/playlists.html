@@ -8,12 +8,26 @@
   <button class="btn nav-item">+ Playlist</button>
 </form>
 
+<div class="grid">
+  <a class="card nav-item" tabindex="0" href="{% url 'hidden_videos' %}" data-spa>
+    <div class="thumb"><div class="placeholder">🙈</div></div>
+    <div class="meta"><div class="t">Hidden</div>
+      <div class="s">{{ total_hidden }} video{{ total_hidden|pluralize }}</div></div>
+  </a>
+</div>
+
 {% if playlists %}
 <div class="grid">
   {% for p in playlists %}
   <div class="pl-wrap">
     <a class="card nav-item" tabindex="0" href="{% url 'playlist_detail' p.pk %}" data-spa>
-      <div class="thumb"><div class="placeholder">☰ {{ p.items.count }}</div></div>
+      <div class="thumb">
+        {% if p.thumbnail_path %}
+          <div class="thumb-bg" style="background-image:url({% url 'playlist_thumb' p.pk %})"></div>
+        {% else %}
+          <div class="placeholder">☰ {{ p.items.count }}</div>
+        {% endif %}
+      </div>
       <div class="meta"><div class="t">{{ p.name }}</div>
         <div class="s">{{ p.items.count }} video{{ p.items.count|pluralize }}</div></div>
     </a>

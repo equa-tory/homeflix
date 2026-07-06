@@ -4,11 +4,31 @@
 <h1>{{ playlist.name }}</h1>
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
   <p class="sub" style="margin:0">{{ items|length }} video{{ items|length|pluralize }}</p>
+  {% if items %}
+    <a class="btn ghost nav-item" data-random
+       href="{% url 'random_video' %}?pl={{ playlist.pk }}" title="Play a random video from this playlist"
+       style="font-size:13px;padding:7px 10px">🎲 Random</a>
+  {% endif %}
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
   <form method="post" action="{% url 'delete_playlist' playlist.pk %}"
         data-confirm="Delete this playlist? Videos are kept." style="margin:0">
     {% csrf_token %}
     <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete playlist</button>
   </form>
+</div>
+<div class="thumb-tool" id="plThumbTool" data-pl="{{ playlist.pk }}" data-generate-url="{% url 'playlist_thumb_generate' playlist.pk %}"
+     data-remove-url="{% url 'playlist_thumb_remove' playlist.pk %}" data-upload-url="{% url 'playlist_thumb_upload' playlist.pk %}">
+  <div class="row-inline">
+    <strong>Cover image</strong>
+    {% if playlist.thumbnail_path %}
+      <img src="{% url 'playlist_thumb' playlist.pk %}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
+    {% endif %}
+    <button type="button" class="btn ghost" id="plThumbGen">🖼 Generate</button>
+    <button type="button" class="btn ghost" id="plThumbRemove"{% if not playlist.thumbnail_path %} style="display:none"{% endif %}>✕ Remove</button>
+    <label class="btn ghost" style="cursor:pointer;margin:0">⬆ Upload
+      <input type="file" id="plThumbUpload" accept="image/png,image/jpeg,image/webp" style="display:none">
+    </label>
+  </div>
 </div>
 {% if items %}
   <div class="grid" style="margin-top:18px">

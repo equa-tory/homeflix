@@ -561,7 +561,6 @@ html.player-locked{overflow:hidden}
       <form action="{% url 'scan' %}" method="post">{% csrf_token %}
         <button class="nav-item">↻ Rescan library</button></form>
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
-      <a href="{% url 'hidden_videos' %}" class="nav-item spa-link">🙈 Hidden videos</a>
       <hr>
       <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
         <button class="nav-item">🧹 Remove missing files</button></form>
@@ -893,6 +892,10 @@ const SELECT_MODE=(function(){
             const newOpt='<option value="__new__">＋ New playlist…</option>';
             s.innerHTML=newOpt+(d.playlists.length?d.playlists.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''):'');
             s.onchange=()=>{const ni=document.getElementById('bulkPlNew');if(ni)ni.style.display=s.value==='__new__'?'':'none';if(s.value==='__new__'&&ni)ni.focus();};
+            // The freshly-set <select> defaults to its first option ("__new__")
+            // without firing 'change' — show the name box now, don't wait for an
+            // event that will never come (this was the "does nothing" bug).
+            s.onchange();
           });
         }
       };
@@ -1103,6 +1106,27 @@ const PAGE_INIT={
     return wireSelectUI(root);
   },
 
+  /* ----- PLAYLIST DETAIL: select-mode + cover image tool ----- */
+  playlist_detail(root){
+    const tool=root.querySelector('#plThumbTool');
+    if(tool){
+      const gen=document.getElementById('plThumbGen'),rem=document.getElementById('plThumbRemove'),
+            up=document.getElementById('plThumbUpload');
+      const refresh=()=>ROUTER.go(location.pathname,{push:false});
+      if(gen)gen.onclick=()=>{gen.textContent='…';post(tool.dataset.generateUrl).then(r=>{
+        if(!r.ok){gen.textContent='🖼 Generate';alert('No videos to build a cover from yet.');return;}
+        refresh();});};
+      if(rem)rem.onclick=()=>{post(tool.dataset.removeUrl).then(refresh);};
+      if(up)up.onchange=()=>{
+        if(!up.files||!up.files[0])return;
+        const fd=new FormData();fd.append('image',up.files[0]);
+        fetch(tool.dataset.uploadUrl,{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
+          .then(r=>r.json()).then(r=>{if(r.ok)refresh();else alert(r.error||'Upload failed');});
+      };
+    }
+    return wireSelectUI(root);
+  },
+
   /* ----- SMART PLAYLIST: rules editor ----- */
   smart_playlist(root){
     const form=root.querySelector('#rulesForm');
@@ -1220,6 +1244,28 @@ const PLAYER=(function(){
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
+  // Live-remux mode (see Video.needs_remux / views.stream()): the piped
+  // fragmented-mp4 has no known duration and starts each load at element-time
+  // 0, so real playback position = remuxOffset + V.currentTime. Seeking can't
+  // just set V.currentTime — it has to reload the src at a new ?t=. These two
+  // helpers + seekTo() are the only places that should read/change position;
+  // everything else (progress bar, save-position, media session, etc.) goes
+  // through them so it works the same whether this video is remuxed or not.
+  let remuxOffset=0;
+  function curTime(){return d&&d.remux?(V.currentTime||0)+remuxOffset:V.currentTime;}
+  function totalDur(){return d&&d.remux?(d.duration_seconds||0):V.duration;}
+  function seekTo(t){
+    if(!d)return;
+    t=Math.max(0,t);
+    if(d.remux){
+      remuxOffset=t;
+      const resume=!V.paused;
+      loadSource(d.stream_url+'?t='+t.toFixed(2),0,resume);
+    }else{
+      if(V.duration)t=Math.min(t,V.duration);
+      V.currentTime=t;
+    }
+  }
 
   /* ---- state helpers ---- */
   function state(){return EL.classList.contains('ph-expanded')?'expanded':
@@ -1243,7 +1289,7 @@ const PLAYER=(function(){
     if(!d)return;
     try{sessionStorage.setItem(SKEY,JSON.stringify({
       id:d.id,title:d.title,stream_url:d.stream_url,watch_url:d.watch_url,
-      position:V.currentTime, state:state()}));}catch{}
+      position:curTime(), state:state()}));}catch{}
   }
   function clearPersist(){try{sessionStorage.removeItem(SKEY);}catch{}}
 
@@ -1284,7 +1330,16 @@ const PLAYER=(function(){
     // Always attempt playback — some browsers can actually decode mkv/hevc even
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
-    loadSource(data.stream_url, parseFloat(data.position)||0, play);
+    const startPos=parseFloat(data.position)||0;
+    if(data.remux){
+      // Live remux: resume position means "start the pipe at t=<pos>", not an
+      // in-element seek — the element itself always starts fresh at time 0.
+      remuxOffset=startPos;
+      loadSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),0,play);
+    }else{
+      remuxOffset=0;
+      loadSource(data.stream_url,startPos,play);
+    }
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }
@@ -1327,8 +1382,8 @@ const PLAYER=(function(){
       artwork:data.thumb_url?[{src:data.thumb_url,sizes:'512x512',type:'image/jpeg'}]:[]});
     const ms=navigator.mediaSession;
     ms.setActionHandler('play',()=>V.play());ms.setActionHandler('pause',()=>V.pause());
-    ms.setActionHandler('seekbackward',()=>{V.currentTime-=10;});ms.setActionHandler('seekforward',()=>{V.currentTime+=10;});
-    ms.setActionHandler('seekto',ev=>{if(ev.seekTime!=null)V.currentTime=ev.seekTime;});
+    ms.setActionHandler('seekbackward',()=>seekTo(curTime()-10));ms.setActionHandler('seekforward',()=>seekTo(curTime()+10));
+    ms.setActionHandler('seekto',ev=>{if(ev.seekTime!=null)seekTo(ev.seekTime);});
     ms.setActionHandler('previoustrack',data.prev_id?()=>navigate(data.prev_id):null);
     ms.setActionHandler('nexttrack',data.next_id?()=>navigate(data.next_id,true):null);
   }
@@ -1420,7 +1475,14 @@ const PLAYER=(function(){
     const plSel=document.getElementById('phPlSel');
     const plNew=document.getElementById('phPlNew');
     const plBtn=document.getElementById('phPlBtn');
-    if(plSel&&plNew)plSel.onchange=()=>{plNew.style.display=plSel.value==='__new__'?'':'none';if(plSel.value==='__new__')plNew.focus();};
+    if(plSel&&plNew){
+      plSel.onchange=()=>{plNew.style.display=plSel.value==='__new__'?'':'none';if(plSel.value==='__new__')plNew.focus();};
+      // <select>'s default option is "__new__" (see plNewOpt) but that never fires
+      // 'change' on render, so the name box stayed hidden and "Add" looked broken —
+      // just sync the visibility now (no .focus() here, this runs on every player
+      // open, not just a user click, so don't steal keyboard focus).
+      plNew.style.display=plSel.value==='__new__'?'':'none';
+    }
     if(plBtn)plBtn.onclick=()=>{
       if(!plSel)return;
       if(plSel.value==='__new__'){
@@ -1446,7 +1508,7 @@ const PLAYER=(function(){
     const nl=document.getElementById('phNoteList'),ni=document.getElementById('phNoteIn'),na=document.getElementById('phNoteAdd');
     if(ni&&na){
       ni.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();na.click();}});
-      na.onclick=()=>{const text=ni.value.trim();if(!text)return;const ts=V.currentTime;
+      na.onclick=()=>{const text=ni.value.trim();if(!text)return;const ts=curTime();
         post(data.note_add_url,{text,timestamp:ts.toFixed(1)}).then(r=>{if(!r.ok)return;
           const empty=nl.querySelector('#phEmptyNotes,p.sub');if(empty)empty.remove();
           const el=document.createElement('div');el.className='note-item';el.dataset.id=r.id;
@@ -1461,7 +1523,7 @@ const PLAYER=(function(){
     if(nl)nl.querySelectorAll('.note-item').forEach(bindNote);
   }
   function bindNote(el){
-    el.querySelector('.note-ts-btn').onclick=e=>{V.currentTime=parseFloat(e.currentTarget.dataset.t);V.play().catch(()=>{});};
+    el.querySelector('.note-ts-btn').onclick=e=>{seekTo(parseFloat(e.currentTarget.dataset.t));V.play().catch(()=>{});};
     el.querySelector('.note-del').onclick=()=>post(el.querySelector('.note-del').dataset.url).then(r=>{
       if(!r.ok)return;const id=parseInt(el.dataset.id);const i=notes.findIndex(n=>n.id===id);if(i!==-1)notes.splice(i,1);
       el.remove();renderNoteDots();const nl=document.getElementById('phNoteList');
@@ -1469,11 +1531,12 @@ const PLAYER=(function(){
   }
   function renderNoteDots(){
     BAR.querySelectorAll('.note-dot').forEach(x=>x.remove());
-    if(!V.duration||!notes.length)return;
-    notes.forEach(n=>{const pct=Math.max(0,Math.min(100,n.ts/V.duration*100));
+    const dur=totalDur();
+    if(!dur||!notes.length)return;
+    notes.forEach(n=>{const pct=Math.max(0,Math.min(100,n.ts/dur*100));
       const el=document.createElement('div');el.className='note-dot';el.style.left=pct+'%';
       el.innerHTML=`<span class="note-tip">${fmt(n.ts)} — ${esc(n.text)}</span>`;
-      el.addEventListener('click',ev=>{ev.stopPropagation();V.currentTime=n.ts;});BAR.appendChild(el);});
+      el.addEventListener('click',ev=>{ev.stopPropagation();seekTo(n.ts);});BAR.appendChild(el);});
   }
 
   /* ---- player controls ---- */
@@ -1504,28 +1567,29 @@ const PLAYER=(function(){
   FULL.onclick=e=>{e.stopPropagation();goFull();};
 
   V.addEventListener('timeupdate',()=>{
-    const pct=V.duration?V.currentTime/V.duration*100:0;
+    const dur=totalDur(),cur=curTime();
+    const pct=dur?cur/dur*100:0;
     PLAYD.style.width=pct+'%';KNOB.style.left=pct+'%';
     if(MBAR_FILL)MBAR_FILL.style.width=pct+'%';
-    CUR.textContent=fmt(V.currentTime);MBAR_TS.textContent=fmt(V.currentTime);
-    const nts=document.getElementById('phNoteTs');if(nts)nts.textContent='at '+fmt(V.currentTime);
-    if(V.currentTime-lastSave>=10)savePos();
-    if(V.currentTime>1)persist();
-    if('mediaSession' in navigator&&V.duration){try{navigator.mediaSession.setPositionState(
-      {duration:V.duration,playbackRate:V.playbackRate,position:V.currentTime});}catch(e){}}
+    CUR.textContent=fmt(cur);MBAR_TS.textContent=fmt(cur);
+    const nts=document.getElementById('phNoteTs');if(nts)nts.textContent='at '+fmt(cur);
+    if(cur-lastSave>=10)savePos();
+    if(cur>1)persist();
+    if('mediaSession' in navigator&&dur){try{navigator.mediaSession.setPositionState(
+      {duration:dur,playbackRate:V.playbackRate,position:cur});}catch(e){}}
   });
-  V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(V.duration);renderNoteDots();});
-  V.addEventListener('progress',()=>{if(V.buffered.length)
-    BUF.style.width=(V.buffered.end(V.buffered.length-1)/(V.duration||1)*100)+'%';});
+  V.addEventListener('loadedmetadata',()=>{if(!d||!d.remux)DURLB.textContent=fmt(V.duration);renderNoteDots();});
+  V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
+    BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
   V.addEventListener('ended',()=>{savePos();if(autoplay&&d&&d.next_id)setTimeout(()=>navigate(d.next_id,true),800);});
 
   /* seek bar */
   function frac(e){const r=BAR.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX;
     return Math.max(0,Math.min(1,(cx-r.left)/r.width));}
-  function seekFrac(f){if(V.duration)V.currentTime=Math.max(0,Math.min(V.duration,f*V.duration));}
+  function seekFrac(f){const dur=totalDur();if(dur)seekTo(Math.max(0,Math.min(dur,f*dur)));}
   let spTimer=null,lastSnap=-1;
-  function showSP(f){if(!V.duration||!d)return;
-    const t=Math.max(0,Math.min(Math.floor(V.duration),Math.round(f*V.duration)));
+  function showSP(f){const dur=totalDur();if(!dur||!d)return;
+    const t=Math.max(0,Math.min(Math.floor(dur),Math.round(f*dur)));
     SP.style.left=Math.max(8,Math.min(92,f*100))+'%';SPTM.textContent=fmt(t);SP.style.display='block';
     const snap=Math.round(t/5)*5;if(snap!==lastSnap){lastSnap=snap;clearTimeout(spTimer);
       spTimer=setTimeout(()=>{SPIMG.src=d.frame_url_base+snap+'/';},90);}}
@@ -1533,11 +1597,16 @@ const PLAYER=(function(){
   BAR.addEventListener('click',e=>{e.stopPropagation();seekFrac(frac(e));});
   let barDrag=false;
   BAR.addEventListener('pointerdown',e=>{barDrag=true;BAR.classList.add('dragging');BAR.setPointerCapture(e.pointerId);showSP(frac(e));});
-  BAR.addEventListener('pointermove',e=>{if(barDrag){seekFrac(frac(e));showSP(frac(e));}else if(e.pointerType==='mouse')showSP(frac(e));});
-  BAR.addEventListener('pointerup',()=>{barDrag=false;BAR.classList.remove('dragging');setTimeout(hideSP,400);});
+  // Live-remux mode: don't reload the stream on every drag tick (that would
+  // respawn ffmpeg dozens of times a second) — just show the hover/drag
+  // preview (time label + frame thumbnail, no actual seek) and commit the
+  // real seek once on release. Normal videos keep live-scrub-while-dragging.
+  BAR.addEventListener('pointermove',e=>{if(barDrag){if(!d||!d.remux)seekFrac(frac(e));showSP(frac(e));}else if(e.pointerType==='mouse')showSP(frac(e));});
+  BAR.addEventListener('pointerup',e=>{barDrag=false;BAR.classList.remove('dragging');
+    if(d&&d.remux)seekFrac(frac(e));setTimeout(hideSP,400);});
   BAR.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse'&&!barDrag)hideSP();});
-  BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();V.currentTime+=10;}
-    if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();V.currentTime-=10;}});
+  BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();seekTo(curTime()+10);}
+    if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-10);}});
 
   /* volume */
   function volIcon(v,m){return(m||v===0)?'🔇':v<.5?'🔉':'🔊';}
@@ -1566,15 +1635,15 @@ const PLAYER=(function(){
     if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)&&e.key!=='Escape')return;
     switch(e.key){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
-      case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();V.currentTime=Math.min(V.duration||0,V.currentTime+10);}break;
-      case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();V.currentTime=Math.max(0,V.currentTime-10);}break;
+      case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+10);}break;
+      case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-10);}break;
       case'ArrowUp':e.preventDefault();if(d&&d.next_id)navigate(d.next_id,true);break;
       case'ArrowDown':e.preventDefault();if(d&&d.prev_id)navigate(d.prev_id);break;
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
       case'm':case'M':V.muted=!V.muted;syncVol();break;
       case'Escape':minimize();break;
-      default:if(e.key>='0'&&e.key<='9'&&e.key.length===1){e.preventDefault();if(V.duration)V.currentTime=parseInt(e.key)/10*V.duration;}}
+      default:if(e.key>='0'&&e.key<='9'&&e.key.length===1){e.preventDefault();const dur=totalDur();if(dur)seekTo(parseInt(e.key)/10*dur);}}
   });
 
   /* touch: swipe-down-to-minimize | Shorts swipe nav | double-tap mini resize */
@@ -1623,11 +1692,11 @@ const PLAYER=(function(){
   },{passive:false});
 
   /* save progress */
-  function savePos(){if(!V.duration||!d)return;if(Math.abs(V.currentTime-lastSave)<2)return;
-    lastSave=V.currentTime;post(d.save_url,{position:V.currentTime.toFixed(1)});}
-  window.addEventListener('pagehide',()=>{if(!d||V.currentTime<1)return;persist();
+  function savePos(){if(!d)return;const t=curTime();if(Math.abs(t-lastSave)<2)return;
+    lastSave=t;post(d.save_url,{position:t.toFixed(1)});}
+  window.addEventListener('pagehide',()=>{if(!d||curTime()<1)return;persist();
     navigator.sendBeacon&&navigator.sendBeacon(d.save_url,
-      new URLSearchParams({position:V.currentTime.toFixed(1),csrfmiddlewaretoken:CSRF}));});
+      new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF}));});
 
   /* iOS: backgrounding the tab/PWA suspends <video> unless it's handed off to the
      native PiP window first — without this, playback just stops when minimized. */
@@ -1647,9 +1716,9 @@ const PLAYER=(function(){
   if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();if(d&&d.next_id)navigate(d.next_id,true);};
   if(MBAR_TL)MBAR_TL.addEventListener('pointerdown',e=>{
     e.stopPropagation();
-    if(!V.duration)return;
+    const dur=totalDur();if(!dur)return;
     const r=MBAR_TL.getBoundingClientRect();
-    V.currentTime=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*V.duration;
+    seekTo(Math.max(0,Math.min(1,(e.clientX-r.left)/r.width))*dur);
   });
   MINBTN.onclick=e=>{e.stopPropagation();minimize();};
   BACK.onclick=e=>{e.stopPropagation();back();};

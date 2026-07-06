@@ -2,6 +2,11 @@
 {% block content %}
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
   <h1 style="margin:0">{{ sp.name }}</h1>
+  {% if videos %}
+    <a class="btn ghost nav-item" data-random
+       href="{% url 'random_video' %}?sp={{ sp.pk }}" title="Play a random video from this smart playlist"
+       style="font-size:13px;padding:7px 10px">🎲 Random</a>
+  {% endif %}
   <form method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
         data-confirm="Delete smart playlist?" style="margin:0">
     {% csrf_token %}

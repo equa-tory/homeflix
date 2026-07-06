@@ -8,6 +8,10 @@ urlpatterns = [
     path("history/", views.history, name="history"),
     path("playlists/", views.playlists, name="playlists"),
     path("playlists/<int:pk>/", views.playlist_detail, name="playlist_detail"),
+    path("playlists/<int:pk>/thumbnail/", views.playlist_thumb, name="playlist_thumb"),
+    path("playlists/<int:pk>/thumbnail/generate/", views.playlist_thumb_generate, name="playlist_thumb_generate"),
+    path("playlists/<int:pk>/thumbnail/remove/", views.playlist_thumb_remove, name="playlist_thumb_remove"),
+    path("playlists/<int:pk>/thumbnail/upload/", views.playlist_thumb_upload, name="playlist_thumb_upload"),
     path("watch/<int:pk>/", views.watch, name="watch"),
 
     # media

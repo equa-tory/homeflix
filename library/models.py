@@ -46,9 +46,31 @@ class Video(models.Model):
         return not self.browser_playable and self.convert_status != self.CONVERT_DONE
 
     @property
+    def needs_remux(self):
+        """True if only the *container* is the problem (e.g. h264/aac wrapped
+        in mkv) — those can be streamed live via a fast lossless ffmpeg remux
+        instead of writing a full converted copy to disk. Real codec problems
+        (HEVC etc.) still need the on-disk Convert flow (needs_conversion)."""
+        from django.conf import settings
+        if not self.needs_conversion:
+            return False
+        if f".{(self.ext or '').lower()}" not in settings.NON_BROWSER_CONTAINERS:
+            return False
+        return ((self.video_codec or "").lower() in settings.REMUX_SAFE_VCODECS
+                and (self.audio_codec or "").lower() in settings.REMUX_SAFE_ACODECS)
+
+    @property
+    def needs_convert_ui(self):
+        """Whether the UI should show the 'MKV/HEVC, convert?' nudge — false
+        for videos handled transparently via live remux (needs_remux), since
+        those already just play with no action needed."""
+        return self.needs_conversion and not self.needs_remux
+
+    @property
     def playable_now(self):
-        """True if the browser can play it directly OR a converted copy is ready."""
-        return self.browser_playable or self.convert_status == self.CONVERT_DONE
+        """True if the browser can play it directly, a converted copy is
+        ready, or it can be streamed live via remux."""
+        return self.browser_playable or self.convert_status == self.CONVERT_DONE or self.needs_remux
 
     # Thumbnail
     thumbnail_path = models.CharField(max_length=1024, blank=True, default="")
@@ -115,6 +137,9 @@ class Playlist(models.Model):
     name = models.CharField(max_length=256)
     created = models.DateTimeField(auto_now_add=True)
     videos = models.ManyToManyField(Video, through="PlaylistItem", related_name="playlists")
+
+    # Generated (2x2 collage of its videos' thumbnails) or user-uploaded cover image.
+    thumbnail_path = models.CharField(max_length=1024, blank=True, default="")
 
     class Meta:
         ordering = ["name"]

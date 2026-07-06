@@ -83,6 +83,49 @@ def generate_thumbnail(video, percent=0.0):
     return ""
 
 
+def generate_playlist_thumbnail(playlist):
+    """Build a 2x2 collage from (up to) 4 of the playlist's videos and save it
+    as the playlist's cover. Returns the path, or '' if the playlist is empty.
+    Fewer than 4 videos still fills all four corners by cycling what's there.
+    """
+    import itertools
+
+    videos = [it.video for it in playlist.items.select_related("video")
+              .filter(video__missing=False)[:4]]
+    if not videos:
+        return ""
+
+    thumbs = []
+    for v in videos:
+        if not v.thumbnail_path or not os.path.exists(v.thumbnail_path):
+            generate_thumbnail(v, percent=0.0)
+        if v.thumbnail_path and os.path.exists(v.thumbnail_path):
+            thumbs.append(v.thumbnail_path)
+    if not thumbs:
+        return ""
+    corners = list(itertools.islice(itertools.cycle(thumbs), 4))
+
+    os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
+    out_path = os.path.join(settings.THUMBNAIL_DIR, f"playlist_{playlist.id}.jpg")
+    cmd = ["ffmpeg", "-y"]
+    for c in corners:
+        cmd += ["-i", c]
+    filt = (
+        "[0:v]scale=240:135[a];[1:v]scale=240:135[b];"
+        "[2:v]scale=240:135[c];[3:v]scale=240:135[d];"
+        "[a][b]hstack=inputs=2[top];[c][d]hstack=inputs=2[bottom];"
+        "[top][bottom]vstack=inputs=2[out]"
+    )
+    cmd += ["-filter_complex", filt, "-map", "[out]", "-frames:v", "1", "-q:v", "3", out_path]
+
+    code, _, _ = _run(cmd)
+    if code == 0 and os.path.exists(out_path):
+        playlist.thumbnail_path = out_path
+        playlist.save(update_fields=["thumbnail_path"])
+        return out_path
+    return ""
+
+
 def read_sidecar(path):
     """If a yt-dlp .info.json sits next to the video, pull title/desc/channel/url/date."""
     base = os.path.splitext(path)[0]
@@ -202,9 +245,9 @@ def _ffmpeg_convert(video_id):
     # Copy streams the browser already supports; transcode only what it can't.
     vcodec = (video.video_codec or "").lower()
     acodec = (video.audio_codec or "").lower()
-    v_args = ["-c:v", "copy"] if vcodec in ("h264", "avc1") else \
+    v_args = ["-c:v", "copy"] if vcodec in settings.REMUX_SAFE_VCODECS else \
              ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
-    a_args = ["-c:a", "copy"] if acodec in ("aac", "mp4a") else ["-c:a", "aac", "-b:a", "192k"]
+    a_args = ["-c:a", "copy"] if acodec in settings.REMUX_SAFE_ACODECS else ["-c:a", "aac", "-b:a", "192k"]
 
     cmd = ["ffmpeg", "-y", "-i", video.file_path, *v_args, *a_args,
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out_path]
@@ -246,6 +289,40 @@ def start_conversion(video):
     video.save(update_fields=["convert_status", "convert_progress"])
     t = threading.Thread(target=_ffmpeg_convert, args=(video.id,), daemon=True)
     t.start()
+
+
+# ---- Live remux streaming (container-only fix, e.g. h264/aac-in-mkv) -------
+REMUX_CHUNK = 65536
+
+
+def iter_remux(path, start_time=0.0):
+    """Yield a browser-playable MP4 bitstream remuxed live from `path`,
+    starting at `start_time` seconds in — no re-encode (-c copy, so it's fast
+    and lossless) and nothing written to disk. Used instead of the on-disk
+    Convert flow when only the *container* is the problem (Video.needs_remux).
+
+    Seeking with this is approximate: -ss before -i can only land on a nearby
+    keyframe (no re-encode means no re-authoring frames to seek precisely),
+    and the fragmented-mp4 output has no known total duration, so the caller
+    can't do HTTP Range/206 with this — see stream() in views.py.
+    """
+    cmd = [
+        "ffmpeg", "-ss", f"{max(0.0, start_time):.3f}", "-i", path,
+        "-c", "copy", "-f", "mp4",
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "pipe:1",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        while True:
+            chunk = proc.stdout.read(REMUX_CHUNK)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        proc.kill()
+        proc.stdout.close()
+        proc.wait()
 
 
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------
