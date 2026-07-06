@@ -327,6 +327,10 @@ def _build_watch_data(request, pk):
     else:
         remote_path = video.file_path
 
+    # Real (not guessed) MediaSource codecs string for live-remux playback —
+    # only worth the extra ffprobe call for videos that actually use it.
+    remux_mime = services.probe_remux_mime(video.file_path) if video.needs_remux else ""
+
     return {
         "id": video.pk, "title": video.title,
         "description": video.description or "", "channel": video.channel or "",
@@ -337,6 +341,7 @@ def _build_watch_data(request, pk):
         "duration_label": fmt_dur(video.duration_seconds),
         "playable": video.playable_now,
         "remux": video.needs_remux,
+        "remux_mime": remux_mime,
         "duration_seconds": video.duration_seconds or 0,
         "convert_status": video.convert_status,
         "convert_progress": video.convert_progress,

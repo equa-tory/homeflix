@@ -1,8 +1,12 @@
 """Media handling: probing, thumbnails, scanning, sidecar metadata."""
 import json
+import logging
 import os
+import re
 import subprocess
 from datetime import datetime, date
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.utils import timezone
@@ -16,6 +20,21 @@ def _run(cmd):
         return out.returncode, out.stdout, out.stderr
     except Exception as e:  # ffmpeg missing, timeout, etc.
         return 1, "", str(e)
+
+
+_FFMPEG_BANNER_RE = re.compile(
+    r"^(ffmpeg version|built with|configuration:|lib\w+\s+\d)"
+)
+
+
+def _ffmpeg_error_tail(stderr, n=300):
+    """ffmpeg always prints its version/build banner as the *first* lines of
+    stderr, success or failure — the actual fatal error is always further
+    down. Strip the banner lines and return the last `n` chars of what's left
+    so callers show the real reason instead of the banner."""
+    lines = [ln for ln in (stderr or "").splitlines() if not _FFMPEG_BANNER_RE.match(ln.strip())]
+    text = "\n".join(lines).strip()
+    return text[-n:] if text else (stderr or "").strip()[-n:]
 
 
 def probe(path):
@@ -111,9 +130,16 @@ def generate_collage_thumbnail(obj, videos, out_path):
     cmd = ["ffmpeg", "-y"]
     for c in corners:
         cmd += ["-i", c]
+    # setsar=1 + format=yuv420p: hstack/vstack hard-fail ("parameters do not
+    # match") if the combined inputs disagree on sample-aspect-ratio or pixel
+    # format, which happens easily here since scale alone doesn't reset SAR
+    # and these thumbnails often came from source videos of different
+    # original aspect ratios/pixel formats.
     filt = (
-        "[0:v]scale=240:135[a];[1:v]scale=240:135[b];"
-        "[2:v]scale=240:135[c];[3:v]scale=240:135[d];"
+        "[0:v]scale=240:135,setsar=1,format=yuv420p[a];"
+        "[1:v]scale=240:135,setsar=1,format=yuv420p[b];"
+        "[2:v]scale=240:135,setsar=1,format=yuv420p[c];"
+        "[3:v]scale=240:135,setsar=1,format=yuv420p[d];"
         "[a][b]hstack=inputs=2[top];[c][d]hstack=inputs=2[bottom];"
         "[top][bottom]vstack=inputs=2[out]"
     )
@@ -124,7 +150,7 @@ def generate_collage_thumbnail(obj, videos, out_path):
         obj.thumbnail_path = out_path
         obj.save(update_fields=["thumbnail_path"])
         return out_path, None
-    return "", f"ffmpeg: {(err or '').strip()[:200] or f'exit {code}'}"
+    return "", f"ffmpeg: {_ffmpeg_error_tail(err)}" if err else f"ffmpeg exit {code}"
 
 
 def read_sidecar(path):
@@ -353,9 +379,24 @@ def iter_remux(path, start_time=0.0):
         "ffmpeg", "-ss", f"{max(0.0, start_time):.3f}", "-i", path,
         "-c", "copy", "-f", "mp4",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        # frag_keyframe alone only cuts a new fragment at video keyframes —
+        # on a long-GOP source ffmpeg buffers several seconds internally then
+        # dumps one big fragment (burst-then-stall = choppy playback). Cap
+        # fragments by time too so output trickles out steadily.
+        "-frag_duration", "1000000",  # 1s, in microseconds
         "pipe:1",
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def _drain_stderr(pipe):
+        try:
+            for line in iter(pipe.readline, b""):
+                if line:
+                    logger.warning("iter_remux ffmpeg: %s", line.decode(errors="replace").rstrip())
+        except Exception:
+            pass
+
+    threading.Thread(target=_drain_stderr, args=(proc.stderr,), daemon=True).start()
     try:
         while True:
             chunk = proc.stdout.read(REMUX_CHUNK)
@@ -365,7 +406,63 @@ def iter_remux(path, start_time=0.0):
     finally:
         proc.kill()
         proc.stdout.close()
+        try:
+            proc.stderr.close()
+        except Exception:
+            pass
         proc.wait()
+
+
+# H.264 profile name -> profile_idc, and AAC profile name -> MPEG-4 audio
+# object type — used to build a real (not guessed) MediaSource codecs string.
+_H264_PROFILE_IDC = {
+    "Constrained Baseline": 0x42, "Baseline": 0x42,
+    "Main": 0x4D,
+    "Extended": 0x58,
+    "High": 0x64,
+    "High 10": 0x6E,
+    "High 4:2:2": 0x7A,
+    "High 4:4:4 Predictive": 0xF4,
+}
+_AAC_OBJECT_TYPE = {
+    "LC": 2, "Low Complexity": 2,
+    "HE-AAC": 5, "HEV1": 5,
+    "HE-AACv2": 29, "HEV2": 29,
+    "ELD": 39,
+}
+
+
+def probe_remux_mime(path):
+    """Best-effort *real* codecs string for MediaSource.addSourceBuffer(),
+    instead of a hardcoded guess — reads the actual H.264 profile/level and
+    AAC profile via ffprobe. A declared-vs-actual codec mismatch is a
+    plausible reason a SourceBuffer accepts video but rejects/mishandles
+    audio, so this replaces guessing with the real values where available,
+    falling back to broadly-compatible defaults (High profile / level 4.0 /
+    AAC-LC) when ffprobe doesn't report something recognized."""
+    vprofile = vlevel = aprofile = None
+    code, out, _ = _run([
+        "ffprobe", "-v", "quiet", "-print_format", "json", "-show_streams", path,
+    ])
+    if code == 0 and out:
+        try:
+            data = json.loads(out)
+            for s in data.get("streams", []):
+                if s.get("codec_type") == "video" and vprofile is None:
+                    vprofile, vlevel = s.get("profile"), s.get("level")
+                elif s.get("codec_type") == "audio" and aprofile is None:
+                    aprofile = s.get("profile")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    profile_idc = _H264_PROFILE_IDC.get(vprofile, 0x64)
+    level_idc = vlevel if isinstance(vlevel, int) else 40
+    video_str = f"avc1.{profile_idc:02x}00{level_idc:02x}"
+
+    obj_type = _AAC_OBJECT_TYPE.get(aprofile, 2)
+    audio_str = f"mp4a.40.{obj_type}"
+
+    return f'video/mp4; codecs="{video_str},{audio_str}"'
 
 
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------

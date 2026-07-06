@@ -1268,7 +1268,7 @@ const PLAYER=(function(){
     if(d.remux){
       remuxOffset=t;
       const resume=!V.paused;
-      loadRemuxSource(d.stream_url+'?t='+t.toFixed(2),resume);
+      loadRemuxSource(d.stream_url+'?t='+t.toFixed(2),resume,d.remux_mime);
     }else{
       if(V.duration)t=Math.min(t,V.duration);
       V.currentTime=t;
@@ -1338,12 +1338,12 @@ const PLAYER=(function(){
       remuxSession=null;
     }
   }
-  const REMUX_MIME_CANDIDATES=[
+  const REMUX_MIME_FALLBACKS=[
     'video/mp4; codecs="avc1.640028,mp4a.40.2"', // High profile — most common
     'video/mp4; codecs="avc1.4d4028,mp4a.40.2"', // Main profile fallback
     'video/mp4', // last resort — some engines accept no codecs string
   ];
-  function loadRemuxSource(url,play){
+  function loadRemuxSource(url,play,mimeHint){
     teardownRemux();
     V.pause(); V.removeAttribute('src'); V.load();
     STAGE.classList.add('paused'); PLAY.textContent='▶';
@@ -1351,34 +1351,60 @@ const PLAYER=(function(){
     remuxSession=session;
     const ms=new MediaSource();
     V.src=URL.createObjectURL(ms);
+    // Prefer the server-computed real codec string (views._build_watch_data's
+    // remux_mime, from actual ffprobe profile/level) over the hardcoded
+    // guesses — a declared-vs-actual codec mismatch is a plausible reason a
+    // SourceBuffer would accept video but reject/mishandle audio.
+    const candidates=mimeHint?[mimeHint,...REMUX_MIME_FALLBACKS]:REMUX_MIME_FALLBACKS;
     ms.addEventListener('sourceopen',function onOpen(){
       ms.removeEventListener('sourceopen',onOpen);
       if(session.aborted)return;
       let sb=null;
-      for(const mime of REMUX_MIME_CANDIDATES){
-        try{sb=ms.addSourceBuffer(mime);break;}catch(e){}
+      for(const mime of candidates){
+        try{sb=ms.addSourceBuffer(mime);break;}catch(e){console.warn('[player] SourceBuffer rejected',mime,e.message);}
       }
-      if(!sb)return; // browser can't do MSE mp4 at all — nothing more to try
+      if(!sb){console.error('[player] no supported MSE mp4 codec string worked for this browser');return;}
       sb.mode='sequence';
+      sb.addEventListener('error',e=>console.error('[player] SourceBuffer error',e));
+      // Pipeline: keep reading network chunks into a queue continuously,
+      // independent of appendBuffer's updateend — the old version read one
+      // chunk, appended it, then only asked for the NEXT chunk after the
+      // append finished (zero read-ahead), so any network/append latency
+      // stalled playback immediately. That serialization was the "choppy,
+      // low fps" bug.
+      const queue=[];
+      let fetchDone=false;
+      function drain(){
+        if(session.aborted||sb.updating||!queue.length)return;
+        try{sb.appendBuffer(queue.shift());}
+        catch(e){console.error('[player] appendBuffer failed',e.message);return;}
+      }
+      sb.addEventListener('updateend',()=>{
+        drain();
+        if(!queue.length&&fetchDone&&!sb.updating){
+          try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}
+        }
+      });
+      function pump(reader){
+        if(session.aborted)return;
+        reader.read().then(({done,value})=>{
+          if(session.aborted)return;
+          if(done){fetchDone=true;if(!queue.length&&!sb.updating){
+            try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}}return;}
+          queue.push(value);
+          drain();
+          // keep the queue from growing unbounded if appends can't keep up
+          if(queue.length<8)pump(reader);
+          else setTimeout(()=>pump(reader),200);
+        }).catch(e=>{if(!session.aborted)console.error('[player] remux fetch/read failed',e);});
+      }
       fetch(url).then(r=>{
         if(session.aborted)return;
+        if(!r.ok){console.error('[player] remux stream fetch failed',r.status);return;}
         const reader=r.body.getReader();
         session.reader=reader;
-        function pump(){
-          if(session.aborted)return;
-          reader.read().then(({done,value})=>{
-            if(session.aborted)return;
-            if(done){try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}return;}
-            append(value);
-          }).catch(()=>{});
-        }
-        function append(chunk){
-          if(session.aborted)return;
-          try{sb.appendBuffer(chunk);}catch(e){return;}
-          sb.addEventListener('updateend',pump,{once:true});
-        }
-        pump();
-      }).catch(()=>{});
+        pump(reader);
+      }).catch(e=>{if(!session.aborted)console.error('[player] remux fetch failed',e);});
     });
     if(play){
       V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
@@ -1405,7 +1431,7 @@ const PLAYER=(function(){
       // Live remux: resume position means "start the pipe at t=<pos>", not an
       // in-element seek — the element itself always starts fresh at time 0.
       remuxOffset=startPos;
-      loadRemuxSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),play);
+      loadRemuxSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),play,data.remux_mime);
     }else{
       teardownRemux();
       remuxOffset=0;
@@ -1660,6 +1686,10 @@ const PLAYER=(function(){
   V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
     BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
   V.addEventListener('ended',()=>{savePos();if(autoplay&&d&&d.next_id)setTimeout(()=>navigate(d.next_id,true),800);});
+  // Diagnostic only — was previously silent, made debugging the mkv-remux
+  // black-screen/no-audio issue impossible. MediaError codes: 1=ABORTED,
+  // 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED.
+  V.addEventListener('error',()=>{if(V.error)console.error('[player] video error',V.error.code,V.error.message);});
 
   /* seek bar */
   function frac(e){const r=BAR.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX;
