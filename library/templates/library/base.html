@@ -1252,27 +1252,17 @@ const PLAYER=(function(){
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
-  // Live-remux mode (see Video.needs_remux / views.stream()): the piped
-  // fragmented-mp4 has no known duration and starts each load at element-time
-  // 0, so real playback position = remuxOffset + V.currentTime. Seeking can't
-  // just set V.currentTime — it has to reload the src at a new ?t=. These two
-  // helpers + seekTo() are the only places that should read/change position;
-  // everything else (progress bar, save-position, media session, etc.) goes
-  // through them so it works the same whether this video is remuxed or not.
-  let remuxOffset=0;
-  function curTime(){return d&&d.remux?(V.currentTime||0)+remuxOffset:V.currentTime;}
-  function totalDur(){return d&&d.remux?(d.duration_seconds||0):V.duration;}
+  // Small wrappers around V.currentTime/V.duration/seeking — kept as the one
+  // place everything (progress bar, save-position, media session, notes,
+  // keyboard seek) reads/writes position through, rather than scattering
+  // V.currentTime everywhere.
+  function curTime(){return V.currentTime;}
+  function totalDur(){return V.duration;}
   function seekTo(t){
     if(!d)return;
     t=Math.max(0,t);
-    if(d.remux){
-      remuxOffset=t;
-      const resume=!V.paused;
-      loadRemuxSource(d.stream_url+'?t='+t.toFixed(2),resume,d.remux_mime);
-    }else{
-      if(V.duration)t=Math.min(t,V.duration);
-      V.currentTime=t;
-    }
+    if(V.duration)t=Math.min(t,V.duration);
+    V.currentTime=t;
   }
 
   /* ---- state helpers ---- */
@@ -1323,94 +1313,6 @@ const PLAYER=(function(){
     },{once:true});
   }
 
-  /* ---- live-remux playback via MediaSource (see Video.needs_remux) ----
-     The ffmpeg pipe (services.iter_remux / views.stream()'s ?t= branch) emits
-     fragmented mp4 — that's the format MediaSource/SourceBuffer expects, NOT
-     what a plain <video src> progressive demuxer can parse (that mismatch was
-     the whole black-screen bug: no error, just bytes the built-in demuxer
-     didn't understand). Feed it through MSE instead. */
-  let remuxSession=null; // {reader, aborted} for the in-flight fetch, so a new
-                         // load/seek can cleanly cancel the previous one.
-  function teardownRemux(){
-    if(remuxSession){
-      remuxSession.aborted=true;
-      if(remuxSession.reader)remuxSession.reader.cancel().catch(()=>{});
-      remuxSession=null;
-    }
-  }
-  const REMUX_MIME_FALLBACKS=[
-    'video/mp4; codecs="avc1.640028,mp4a.40.2"', // High profile — most common
-    'video/mp4; codecs="avc1.4d4028,mp4a.40.2"', // Main profile fallback
-    'video/mp4', // last resort — some engines accept no codecs string
-  ];
-  function loadRemuxSource(url,play,mimeHint){
-    teardownRemux();
-    V.pause(); V.removeAttribute('src'); V.load();
-    STAGE.classList.add('paused'); PLAY.textContent='▶';
-    const session={reader:null,aborted:false};
-    remuxSession=session;
-    const ms=new MediaSource();
-    V.src=URL.createObjectURL(ms);
-    // Prefer the server-computed real codec string (views._build_watch_data's
-    // remux_mime, from actual ffprobe profile/level) over the hardcoded
-    // guesses — a declared-vs-actual codec mismatch is a plausible reason a
-    // SourceBuffer would accept video but reject/mishandle audio.
-    const candidates=mimeHint?[mimeHint,...REMUX_MIME_FALLBACKS]:REMUX_MIME_FALLBACKS;
-    ms.addEventListener('sourceopen',function onOpen(){
-      ms.removeEventListener('sourceopen',onOpen);
-      if(session.aborted)return;
-      let sb=null;
-      for(const mime of candidates){
-        try{sb=ms.addSourceBuffer(mime);break;}catch(e){console.warn('[player] SourceBuffer rejected',mime,e.message);}
-      }
-      if(!sb){console.error('[player] no supported MSE mp4 codec string worked for this browser');return;}
-      sb.mode='sequence';
-      sb.addEventListener('error',e=>console.error('[player] SourceBuffer error',e));
-      // Pipeline: keep reading network chunks into a queue continuously,
-      // independent of appendBuffer's updateend — the old version read one
-      // chunk, appended it, then only asked for the NEXT chunk after the
-      // append finished (zero read-ahead), so any network/append latency
-      // stalled playback immediately. That serialization was the "choppy,
-      // low fps" bug.
-      const queue=[];
-      let fetchDone=false;
-      function drain(){
-        if(session.aborted||sb.updating||!queue.length)return;
-        try{sb.appendBuffer(queue.shift());}
-        catch(e){console.error('[player] appendBuffer failed',e.message);return;}
-      }
-      sb.addEventListener('updateend',()=>{
-        drain();
-        if(!queue.length&&fetchDone&&!sb.updating){
-          try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}
-        }
-      });
-      function pump(reader){
-        if(session.aborted)return;
-        reader.read().then(({done,value})=>{
-          if(session.aborted)return;
-          if(done){fetchDone=true;if(!queue.length&&!sb.updating){
-            try{if(ms.readyState==='open')ms.endOfStream();}catch(e){}}return;}
-          queue.push(value);
-          drain();
-          // keep the queue from growing unbounded if appends can't keep up
-          if(queue.length<8)pump(reader);
-          else setTimeout(()=>pump(reader),200);
-        }).catch(e=>{if(!session.aborted)console.error('[player] remux fetch/read failed',e);});
-      }
-      fetch(url).then(r=>{
-        if(session.aborted)return;
-        if(!r.ok){console.error('[player] remux stream fetch failed',r.status);return;}
-        const reader=r.body.getReader();
-        session.reader=reader;
-        pump(reader);
-      }).catch(e=>{if(!session.aborted)console.error('[player] remux fetch failed',e);});
-    });
-    if(play){
-      V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
-    }
-  }
-
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
@@ -1427,16 +1329,8 @@ const PLAYER=(function(){
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
     const startPos=parseFloat(data.position)||0;
-    if(data.remux){
-      // Live remux: resume position means "start the pipe at t=<pos>", not an
-      // in-element seek — the element itself always starts fresh at time 0.
-      remuxOffset=startPos;
-      loadRemuxSource(data.stream_url+(startPos>0?'?t='+startPos.toFixed(2):''),play,data.remux_mime);
-    }else{
-      teardownRemux();
-      remuxOffset=0;
-      loadSource(data.stream_url,startPos,play);
-    }
+    V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
+    loadSource(data.stream_url,startPos,play);
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }
@@ -1476,6 +1370,10 @@ const PLAYER=(function(){
     if(cancelBtn)cancelBtn.onclick=e=>{e.stopPropagation();cancelled=true;
       post(data.convert_cancel_url).then(()=>showIdle());};
     if(data.convert_status==='queued'||data.convert_status==='running'){showProg(data.convert_progress);poll();}
+    // needs_remux videos (container-only problem, e.g. h264/aac in mkv) get an
+    // automatic lossless copy-remux — no button click needed, just start it
+    // the moment the player opens.
+    else if(data.auto_remux&&data.convert_status==='none'){showProg(0);post(data.convert_url).then(()=>poll());}
   }
 
   /* ---- media session ---- */
@@ -1682,13 +1580,12 @@ const PLAYER=(function(){
     if('mediaSession' in navigator&&dur){try{navigator.mediaSession.setPositionState(
       {duration:dur,playbackRate:V.playbackRate,position:cur});}catch(e){}}
   });
-  V.addEventListener('loadedmetadata',()=>{if(!d||!d.remux)DURLB.textContent=fmt(V.duration);renderNoteDots();});
+  V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(V.duration);renderNoteDots();});
   V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
     BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
   V.addEventListener('ended',()=>{savePos();if(autoplay&&d&&d.next_id)setTimeout(()=>navigate(d.next_id,true),800);});
-  // Diagnostic only — was previously silent, made debugging the mkv-remux
-  // black-screen/no-audio issue impossible. MediaError codes: 1=ABORTED,
-  // 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED.
+  // Diagnostic only. MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE,
+  // 4=SRC_NOT_SUPPORTED.
   V.addEventListener('error',()=>{if(V.error)console.error('[player] video error',V.error.code,V.error.message);});
 
   /* seek bar */
@@ -1705,13 +1602,8 @@ const PLAYER=(function(){
   BAR.addEventListener('click',e=>{e.stopPropagation();seekFrac(frac(e));});
   let barDrag=false;
   BAR.addEventListener('pointerdown',e=>{barDrag=true;BAR.classList.add('dragging');BAR.setPointerCapture(e.pointerId);showSP(frac(e));});
-  // Live-remux mode: don't reload the stream on every drag tick (that would
-  // respawn ffmpeg dozens of times a second) — just show the hover/drag
-  // preview (time label + frame thumbnail, no actual seek) and commit the
-  // real seek once on release. Normal videos keep live-scrub-while-dragging.
-  BAR.addEventListener('pointermove',e=>{if(barDrag){if(!d||!d.remux)seekFrac(frac(e));showSP(frac(e));}else if(e.pointerType==='mouse')showSP(frac(e));});
-  BAR.addEventListener('pointerup',e=>{barDrag=false;BAR.classList.remove('dragging');
-    if(d&&d.remux)seekFrac(frac(e));setTimeout(hideSP,400);});
+  BAR.addEventListener('pointermove',e=>{if(barDrag){seekFrac(frac(e));showSP(frac(e));}else if(e.pointerType==='mouse')showSP(frac(e));});
+  BAR.addEventListener('pointerup',e=>{barDrag=false;BAR.classList.remove('dragging');setTimeout(hideSP,400);});
   BAR.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse'&&!barDrag)hideSP();});
   BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();seekTo(curTime()+10);}
     if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-10);}});
@@ -1724,7 +1616,8 @@ const PLAYER=(function(){
   if(VOL){VOL.addEventListener('input',e=>{e.stopPropagation();V.volume=parseFloat(VOL.value);V.muted=V.volume===0;syncVol();});
     VOL.addEventListener('pointerdown',e=>e.stopPropagation());}
   V.addEventListener('volumechange',syncVol);
-  LOOP.onclick=e=>{e.stopPropagation();V.loop=!V.loop;LOOP.classList.toggle('looping',V.loop);};
+  LOOP.onclick=e=>{e.stopPropagation();V.loop=!V.loop;LOOP.classList.toggle('looping',V.loop);
+    if(d&&d.loop_toggle_url)post(d.loop_toggle_url);};
   if(DL)DL.onclick=e=>e.stopPropagation();
 
   /* prev/next: swap source on the SAME element -> iOS keeps autoplay */
@@ -1899,7 +1792,7 @@ const PLAYER=(function(){
   function minimize(){savePos();setState('mini');persist();
     // restore underlying URL if we were on a /watch/ url
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
-  function close(){savePos();teardownRemux();V.pause();V.removeAttribute('src');V.load();
+  function close(){savePos();V.pause();V.removeAttribute('src');V.load();
     setState('hidden');d=null;clearPersist();
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
   function back(){ // back arrow in expanded -> minimize (keep playing)

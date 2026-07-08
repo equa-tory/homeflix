@@ -1,5 +1,5 @@
 {% load library_extras %}
-<a class="card nav-item" tabindex="0" href="{% url 'watch' video.pk %}{% if pl %}?pl={{ pl }}{% endif %}">
+<a class="card nav-item" tabindex="0" href="{% url 'watch' video.pk %}{% if card_qs %}?{{ card_qs }}{% elif pl %}?pl={{ pl }}{% endif %}">
   <div class="thumb">
     {% if video.thumbnail_path %}
       {# background-image instead of <img> for TV browser compat (no object-fit needed) #}

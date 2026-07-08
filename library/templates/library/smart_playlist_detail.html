@@ -52,7 +52,7 @@
 {% if videos %}
 <h2 style="margin-top:28px">Matching videos</h2>
 <div class="grid">
-  {% for video in videos %}{% include "library/_card.html" %}{% endfor %}
+  {% for video in videos %}{% with pk_str=sp.pk|stringformat:"s" %}{% with card_qs="sp="|add:pk_str %}{% include "library/_card.html" %}{% endwith %}{% endwith %}{% endfor %}
 </div>
 {% else %}
 <div class="empty" style="margin-top:32px">

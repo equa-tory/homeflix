@@ -5,7 +5,7 @@
 {% if events %}
   <div class="grid" style="margin-top:18px">
     {% for e in events %}
-      {% with video=e.video %}{% include "library/_card.html" %}{% endwith %}
+      {% with video=e.video card_qs="ctx=history" %}{% include "library/_card.html" %}{% endwith %}
     {% endfor %}
   </div>
 {% else %}

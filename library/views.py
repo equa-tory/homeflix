@@ -247,12 +247,35 @@ def _build_watch_data(request, pk):
 
     video = get_object_or_404(Video, pk=pk, missing=False)
 
+    # "Next"/"prev" queue: which list of videos this play was opened from.
+    # Cards carry that context in the watch URL's query string (pl=, sp=,
+    # ctx=history/hidden) so ▶ next follows the page you actually opened it
+    # from instead of always falling back to the default library order.
     pl_id = request.GET.get("pl")
+    sp_id = request.GET.get("sp")
+    ctx = request.GET.get("ctx")
     queue_ids = []
     if pl_id:
         queue_ids = list(
             PlaylistItem.objects.filter(playlist_id=pl_id)
             .order_by("order").values_list("video_id", flat=True)
+        )
+    elif sp_id:
+        sp = SmartPlaylist.objects.filter(pk=sp_id).first()
+        if sp:
+            queue_ids = list(sp.get_videos().values_list("pk", flat=True))
+    elif ctx == "history":
+        # WatchEvent is already deduped for consecutive repeats (see below) —
+        # collapse here too in case older rows predate that fix.
+        seen = []
+        for vid in (WatchEvent.objects.filter(video__missing=False)
+                    .order_by("-watched_at").values_list("video_id", flat=True)):
+            if not seen or seen[-1] != vid:
+                seen.append(vid)
+        queue_ids = seen
+    elif ctx == "hidden":
+        queue_ids = list(
+            Video.objects.filter(missing=False, hidden=True).values_list("id", flat=True)
         )
     if video.id not in queue_ids:
         qs, _q, _s, _r = _filtered_videos(request)
@@ -267,7 +290,14 @@ def _build_watch_data(request, pk):
             next_id = queue_ids[i + 1]
 
     state, _ = PlaybackState.objects.get_or_create(video=video)
-    WatchEvent.objects.create(video=video, progress_seconds=state.position_seconds)
+    # Only log a new History row when it's a different video than the most
+    # recent one — _build_watch_data runs on every player open *and* every
+    # re-fetch (favorite toggle, add-to-playlist, download, etc.), so without
+    # this the same video watched/reopened repeatedly fills History with runs
+    # of duplicates.
+    last_event = WatchEvent.objects.order_by("-id").first()
+    if not last_event or last_event.video_id != video.id:
+        WatchEvent.objects.create(video=video, progress_seconds=state.position_seconds)
 
     tag_ids = list(video.tags.values_list("pk", flat=True))
     recommended = []
@@ -327,9 +357,19 @@ def _build_watch_data(request, pk):
     else:
         remote_path = video.file_path
 
-    # Real (not guessed) MediaSource codecs string for live-remux playback —
-    # only worth the extra ffprobe call for videos that actually use it.
-    remux_mime = services.probe_remux_mime(video.file_path) if video.needs_remux else ""
+    # needs_remux videos (container-only problem, e.g. h264/aac in mkv) get an
+    # automatic lossless copy-remux on open instead of a user-clicked convert —
+    # see setupConversion() in base.html, which auto-POSTs convert_url when
+    # auto_remux is true instead of waiting for a button click.
+    auto_remux = video.needs_remux and video.convert_status != Video.CONVERT_DONE
+
+    # Resume position resets once you've watched most of it, so reopening a
+    # video you finished (or nearly did) starts fresh instead of a few
+    # seconds from the end. The stored position (and card progress bar) is
+    # untouched — only the resume *start point* for this open is affected.
+    resume_pos = state.position_seconds
+    if video.duration_seconds and resume_pos >= 0.8 * video.duration_seconds:
+        resume_pos = 0.0
 
     return {
         "id": video.pk, "title": video.title,
@@ -337,11 +377,10 @@ def _build_watch_data(request, pk):
         "stream_url": f"/stream/{pk}/", "watch_url": f"/watch/{pk}/",
         "download_url": f"/stream/{pk}/?download=1",
         "save_url": f"/video/{pk}/progress/",
-        "position": state.position_seconds,
+        "position": resume_pos,
         "duration_label": fmt_dur(video.duration_seconds),
         "playable": video.playable_now,
-        "remux": video.needs_remux,
-        "remux_mime": remux_mime,
+        "auto_remux": auto_remux,
         "duration_seconds": video.duration_seconds or 0,
         "convert_status": video.convert_status,
         "convert_progress": video.convert_progress,
@@ -349,6 +388,8 @@ def _build_watch_data(request, pk):
         "convert_status_url": f"/video/{pk}/convert/status/",
         "convert_cancel_url": f"/video/{pk}/convert/cancel/",
         "needs_convert": video.needs_convert_ui,
+        "loop": Setting.get("loop", "0") == "1",
+        "loop_toggle_url": "/loop/",
         "next_id": next_id, "prev_id": prev_id,
         "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
         "regen_thumb_url": f"/video/{pk}/thumb/regen/",
@@ -443,22 +484,6 @@ def stream(request, pk):
         raise Http404("File missing")
 
     download = request.GET.get("download") == "1"
-
-    # Container-only problem (e.g. h264/aac wrapped in mkv) -> stream a live
-    # ffmpeg remux instead of the on-disk Convert flow (see Video.needs_remux).
-    # ?t=<seconds> is this path's substitute for Range-based seeking — the
-    # player reloads the src with a new t instead of relying on native Range
-    # requests, since a live single-pass pipe can't serve arbitrary byte
-    # ranges. Downloading always gets the real original bytes regardless.
-    if video.needs_remux and not download:
-        try:
-            start_time = float(request.GET.get("t", 0))
-        except ValueError:
-            start_time = 0.0
-        resp = StreamingHttpResponse(services.iter_remux(path, start_time), content_type="video/mp4")
-        resp["Accept-Ranges"] = "none"
-        resp["Cache-Control"] = "no-store"
-        return resp
 
     size = os.path.getsize(path)
     content_type = (mimetypes.guess_type(path)[0]
@@ -674,6 +699,13 @@ def toggle_autoplay(request):
     new = "0" if Setting.get("autoplay", "1") == "1" else "1"
     Setting.set("autoplay", new)
     return JsonResponse({"autoplay": new == "1"})
+
+
+@require_POST
+def toggle_loop(request):
+    new = "0" if Setting.get("loop", "0") == "1" else "1"
+    Setting.set("loop", new)
+    return JsonResponse({"loop": new == "1"})
 
 
 @require_POST

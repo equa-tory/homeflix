@@ -61,16 +61,15 @@ class Video(models.Model):
 
     @property
     def needs_convert_ui(self):
-        """Whether the UI should show the 'MKV/HEVC, convert?' nudge — false
-        for videos handled transparently via live remux (needs_remux), since
-        those already just play with no action needed."""
-        return self.needs_conversion and not self.needs_remux
+        """Whether the UI should show the 'MKV/HEVC, convert?' nudge."""
+        return self.needs_conversion
 
     @property
     def playable_now(self):
-        """True if the browser can play it directly, a converted copy is
-        ready, or it can be streamed live via remux."""
-        return self.browser_playable or self.convert_status == self.CONVERT_DONE or self.needs_remux
+        """True if the browser can play it directly, or a converted copy is
+        ready. needs_remux videos are converted (lossless copy) automatically
+        on open — see auto_remux in views._build_watch_data."""
+        return self.browser_playable or self.convert_status == self.CONVERT_DONE
 
     # Thumbnail
     thumbnail_path = models.CharField(max_length=1024, blank=True, default="")

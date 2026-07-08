@@ -7,7 +7,7 @@
 </div>
 {% if videos %}
   <div class="grid" style="margin-top:18px">
-    {% for video in videos %}{% include "library/_card.html" %}{% endfor %}
+    {% for video in videos %}{% with card_qs="ctx=hidden" %}{% include "library/_card.html" %}{% endwith %}{% endfor %}
   </div>
 {% else %}
   <div class="empty"><p>Nothing hidden. Hide a video from the Library's select menu to see it here.</p></div>
