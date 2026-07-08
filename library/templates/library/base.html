@@ -1277,11 +1277,28 @@ const PLAYER=(function(){
     // mini corner-resize sets inline width on EL; must clear it leaving mini or
     // expanded/hidden inherit a leftover narrow width -> tall/portrait-looking box.
     if(s==='mini'){
-      let sw=0;try{sw=parseInt(sessionStorage.getItem('homeflix_mini_w'));}catch{}
+      const box=loadMiniBox();
+      const sw=box.w;
       EL.style.width=(sw>=MINI_MIN_W&&sw<=MINI_MAX_W?sw:288)+'px';
+      if(typeof box.left==='number'&&typeof box.top==='number'){
+        EL.style.right='auto';EL.style.bottom='auto';
+        EL.style.left=box.left+'px';EL.style.top=box.top+'px';
+        keepMiniInViewport();
+      }
     }else{
       EL.style.width='';EL.style.height='';
     }
+  }
+  // Mini player size+position, remembered across reloads/restarts (localStorage,
+  // not sessionStorage — the user asked for this to persist globally).
+  function loadMiniBox(){
+    try{return JSON.parse(localStorage.getItem('homeflix_mini_box'))||{};}catch{return{};}
+  }
+  function saveMiniBox(){
+    try{
+      const r=EL.getBoundingClientRect();
+      localStorage.setItem('homeflix_mini_box',JSON.stringify({w:EL.offsetWidth,left:r.left,top:r.top}));
+    }catch{}
   }
   function persist(){
     if(!d)return;
@@ -1672,7 +1689,7 @@ const PLAYER=(function(){
         EL.style.width=MINI_SIZES[miniSzI]+'px';
         EL.style.right='auto'; EL.style.bottom='auto';
         keepMiniInViewport();
-        try{sessionStorage.setItem('homeflix_mini_w',MINI_SIZES[miniSzI]);}catch{}
+        saveMiniBox();
       } else {
         lastMiniTap=now;
         // Single tap: let click event fire → STAGE click handler calls expand()
@@ -1755,7 +1772,8 @@ const PLAYER=(function(){
     const nt=Math.max(0,Math.min(window.innerHeight-EL.offsetHeight,st2+dy));
     EL.style.right='auto';EL.style.bottom='auto';EL.style.left=nl+'px';EL.style.top=nt+'px';
   });
-  EL.addEventListener('pointerup',()=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');});
+  EL.addEventListener('pointerup',()=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');
+    if(moved)saveMiniBox();});
 
   /* Mini resize: 4 corners + persist size
      Bump MINI_MAX_W to allow a bigger mini player (drag-resize cap in px). */
@@ -1778,8 +1796,7 @@ const PLAYER=(function(){
       if(!fromRight){EL.style.right='auto';EL.style.left=Math.max(0,rzR0-nw)+'px';}
       e.stopPropagation();
     });
-    h.addEventListener('pointerup',()=>{if(!rzDrag)return;rzDrag=false;
-      try{sessionStorage.setItem('homeflix_mini_w',EL.offsetWidth);}catch{}});
+    h.addEventListener('pointerup',()=>{if(!rzDrag)return;rzDrag=false;saveMiniBox();});
     h.addEventListener('click',e=>e.stopPropagation());
   }
   setupRH('phRhTl',false);setupRH('phRhTr',true);

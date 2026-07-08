@@ -127,21 +127,20 @@ def generate_collage_thumbnail(obj, videos, out_path):
     corners = list(itertools.islice(itertools.cycle(thumbs), 4))
 
     os.makedirs(settings.THUMBNAIL_DIR, exist_ok=True)
-    cmd = ["ffmpeg", "-y"]
+    # Composite via overlay onto a solid canvas rather than hstack/vstack —
+    # hstack/vstack hard-crash on some ffmpeg builds (seen: ffmpeg 6.1.1
+    # "malloc(): invalid size (unsorted)") when the four inputs disagree on
+    # size/SAR/pixel format, which happens easily here since these thumbnails
+    # come from source videos of different original aspect ratios/formats.
+    # overlay is far more tolerant of that mismatch.
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=480x270"]
     for c in corners:
         cmd += ["-i", c]
-    # setsar=1 + format=yuv420p: hstack/vstack hard-fail ("parameters do not
-    # match") if the combined inputs disagree on sample-aspect-ratio or pixel
-    # format, which happens easily here since scale alone doesn't reset SAR
-    # and these thumbnails often came from source videos of different
-    # original aspect ratios/pixel formats.
     filt = (
-        "[0:v]scale=240:135,setsar=1,format=yuv420p[a];"
-        "[1:v]scale=240:135,setsar=1,format=yuv420p[b];"
-        "[2:v]scale=240:135,setsar=1,format=yuv420p[c];"
-        "[3:v]scale=240:135,setsar=1,format=yuv420p[d];"
-        "[a][b]hstack=inputs=2[top];[c][d]hstack=inputs=2[bottom];"
-        "[top][bottom]vstack=inputs=2[out]"
+        "[1:v]scale=240:135,setsar=1[a];[2:v]scale=240:135,setsar=1[b];"
+        "[3:v]scale=240:135,setsar=1[c];[4:v]scale=240:135,setsar=1[d];"
+        "[0:v][a]overlay=0:0[s1];[s1][b]overlay=240:0[s2];"
+        "[s2][c]overlay=0:135[s3];[s3][d]overlay=240:135,format=yuv420p[out]"
     )
     cmd += ["-filter_complex", filt, "-map", "[out]", "-frames:v", "1", "-q:v", "3", out_path]
 
@@ -150,6 +149,17 @@ def generate_collage_thumbnail(obj, videos, out_path):
         obj.thumbnail_path = out_path
         obj.save(update_fields=["thumbnail_path"])
         return out_path, None
+
+    # Collage failed for some ffmpeg-specific reason — don't leave the user
+    # with nothing when we already have a perfectly good thumbnail to use.
+    try:
+        import shutil
+        shutil.copyfile(thumbs[0], out_path)
+        obj.thumbnail_path = out_path
+        obj.save(update_fields=["thumbnail_path"])
+        return out_path, None
+    except OSError:
+        pass
     return "", f"ffmpeg: {_ffmpeg_error_tail(err)}" if err else f"ffmpeg exit {code}"
 
 
@@ -282,7 +292,12 @@ def _ffmpeg_convert(video_id):
     acodec = (video.audio_codec or "").lower()
     v_args = ["-c:v", "copy"] if vcodec in settings.REMUX_SAFE_VCODECS else \
              ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
-    a_args = ["-c:a", "copy"] if acodec in settings.REMUX_SAFE_ACODECS else ["-c:a", "aac", "-b:a", "192k"]
+    # Always re-encode audio, even when the source is already aac — copying an
+    # aac stream straight out of an mkv into an mp4 container carries over its
+    # original framing/timestamps, which browsers can silently refuse to play
+    # (video decodes fine, audio track just never starts). A clean re-encode
+    # is cheap and guarantees a browser-playable track.
+    a_args = ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
 
     cmd = ["ffmpeg", "-y", "-i", video.file_path, *v_args, *a_args,
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out_path]
