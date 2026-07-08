@@ -287,26 +287,32 @@ def _ffmpeg_convert(video_id):
     os.makedirs(settings.CONVERTED_DIR, exist_ok=True)
     out_path = os.path.join(settings.CONVERTED_DIR, f"video_{video.id}.mp4")
 
-    # Copy streams the browser already supports; transcode only what it can't.
-    vcodec = (video.video_codec or "").lower()
-    acodec = (video.audio_codec or "").lower()
-    v_args = ["-c:v", "copy"] if vcodec in settings.REMUX_SAFE_VCODECS else \
-             ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"]
-    # Always re-encode audio, even when the source is already aac — copying an
-    # aac stream straight out of an mkv into an mp4 container carries over its
-    # original framing/timestamps, which browsers can silently refuse to play
-    # (video decodes fine, audio track just never starts). A clean re-encode
-    # is cheap and guarantees a browser-playable track.
-    a_args = ["-c:a", "aac", "-b:a", "192k", "-ac", "2"]
-
-    cmd = ["ffmpeg", "-y", "-i", video.file_path, *v_args, *a_args,
+    # Always re-encode both streams. Stream-copying video while re-encoding
+    # audio was tried first (fast, byte-exact video) but left the copied
+    # video's original (sometimes irregular/VFR) timestamps out of sync with
+    # the freshly-encoded audio's clean ones — that mismatch is what caused
+    # playback to stutter/freeze. A full re-encode gives both streams one
+    # consistent, clean timeline. crf 20 is close to visually lossless.
+    cmd = ["ffmpeg", "-y", "-i", video.file_path,
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "192k", "-ac", "2",
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out_path]
 
     duration = video.duration_seconds or 0
+    stderr_lines = []
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         _CONVERT_PROCS[video.id] = proc
+
+        def _drain_stderr(pipe):
+            try:
+                for line in iter(pipe.readline, ""):
+                    if line:
+                        stderr_lines.append(line)
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain_stderr, args=(proc.stderr,), daemon=True).start()
         try:
             for line in proc.stdout:
                 if line.startswith("out_time_ms=") and duration:
@@ -322,6 +328,13 @@ def _ffmpeg_convert(video_id):
             _CONVERT_PROCS.pop(video.id, None)
     except Exception:
         ok = False
+
+    if not ok and video_id not in _CANCELLED:
+        # Previously discarded entirely (stderr=DEVNULL) — a conversion
+        # failure had zero visibility. Log the real ffmpeg error so it's at
+        # least in the server log instead of a silent "failed" status.
+        logger.warning("conversion failed for video %s: %s",
+                        video_id, _ffmpeg_error_tail("".join(stderr_lines)))
 
     if video.id in _CANCELLED:
         # cancel_conversion() already reset status + cleaned up the partial
