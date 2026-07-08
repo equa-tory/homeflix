@@ -392,82 +392,156 @@ def start_conversion(video):
 # For non-browser-playable files we transcode to HLS (short .ts segments + an
 # .m3u8 playlist) live: playback starts after the first couple of segments while
 # ffmpeg keeps producing the rest. hls.js (or native HLS on Apple) plays it.
-# One session per video, tracked here so it can be reused, idle-reaped, and
-# killed when the player closes.
+#
+# Sessions are tracked on the FILESYSTEM (a per-video dir + an ffmpeg.pid file),
+# NOT in an in-memory dict — under gunicorn there are several worker processes,
+# each with its own memory, all sharing this filesystem. An in-memory registry
+# let two workers each think "no session yet", each rmtree the shared segment
+# dir and spawn a competing ffmpeg, deleting each other's segments mid-write
+# ("Failed to open seg_00000.ts"). A cross-process flock single-flight + a
+# pid-file liveness check fixes that: whichever worker gets the lock starts (or
+# confirms) the one transcode; everyone else reuses it.
 import time
+import signal
 
-_HLS_SESSIONS = {}          # pk -> {"proc": Popen, "dir": str, "last": float}
-_HLS_LOCK = threading.Lock()
+try:
+    import fcntl
+    _HAVE_FCNTL = True
+except ImportError:              # Windows dev box (the server itself runs on Linux)
+    _HAVE_FCNTL = False
+
+_HLS_FALLBACK_LOCK = threading.Lock()
 HLS_SEG_SECONDS = 4
-HLS_TTL = 900               # kill sessions idle longer than this (seconds)
-HLS_MAX_SESSIONS = 2        # single user; cap concurrent transcodes
+HLS_TTL = 1800                   # reap dead session dirs idle longer than this
 
 
 def _hls_dir(pk):
     return os.path.join(settings.HLS_DIR, str(pk))
 
 
-def _hls_kill(session):
-    proc = session.get("proc")
-    if proc and proc.poll() is None:
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except Exception:
+        return False
+    return True
+
+
+def _hls_read_pid(d):
+    try:
+        with open(os.path.join(d, "ffmpeg.pid")) as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+
+def _hls_live(d):
+    """A transcode is live if the ffmpeg it recorded is still running."""
+    pid = _hls_read_pid(d)
+    return bool(pid and _pid_alive(pid))
+
+
+def _hls_ready(d):
+    m = os.path.join(d, "index.m3u8")
+    return os.path.exists(m) and os.path.getsize(m) > 0
+
+
+def _hls_complete(d):
+    """A finished transcode leaves a playlist with #EXT-X-ENDLIST and all its
+    segments on disk — reuse it instead of re-transcoding on replay/seek-back."""
+    try:
+        with open(os.path.join(d, "index.m3u8")) as f:
+            return "#EXT-X-ENDLIST" in f.read()
+    except Exception:
+        return False
+
+
+class _hls_lock:
+    """Cross-process single-flight (flock), with a thread-lock fallback where
+    fcntl is unavailable. Serializes (re)starting/stopping a video's transcode
+    so concurrent gunicorn workers can't stomp each other's segment dir."""
+    def __init__(self, pk):
+        self.path = _hls_dir(pk) + ".lock"
+        self.f = None
+
+    def __enter__(self):
+        if _HAVE_FCNTL:
+            self.f = open(self.path, "w")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+        else:
+            _HLS_FALLBACK_LOCK.acquire()
+        return self
+
+    def __exit__(self, *exc):
         try:
-            proc.terminate()
-            proc.wait(timeout=5)
+            if _HAVE_FCNTL:
+                fcntl.flock(self.f, fcntl.LOCK_UN)
+                self.f.close()
+            else:
+                _HLS_FALLBACK_LOCK.release()
         except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            pass
+
+
+def _drain_hls(pipe, vid):
+    try:
+        for line in iter(pipe.readline, b""):
+            if line:
+                logger.warning("hls ffmpeg (video %s): %s", vid,
+                               line.decode(errors="replace").rstrip())
+    except Exception:
+        pass
+
+
+def _hls_reap():
+    """Remove dead session dirs whose transcode has finished/exited and which
+    haven't been touched in a while. Cheap — only a handful of dirs ever exist."""
     import shutil
-    shutil.rmtree(session.get("dir", ""), ignore_errors=True)
-
-
-def _hls_reap(keep_pk=None):
-    """Drop finished/idle sessions and enforce the concurrency cap. Caller
-    must hold _HLS_LOCK."""
+    root = settings.HLS_DIR
     now = time.time()
-    for pk in list(_HLS_SESSIONS):
-        if pk == keep_pk:
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    for name in names:
+        d = os.path.join(root, name)
+        if not os.path.isdir(d) or _hls_live(d):
             continue
-        s = _HLS_SESSIONS[pk]
-        if s["proc"].poll() is not None or (now - s["last"]) > HLS_TTL:
-            _hls_kill(s)
-            _HLS_SESSIONS.pop(pk, None)
-    # still over cap -> evict least-recently-used
-    live = [pk for pk in _HLS_SESSIONS if pk != keep_pk]
-    while len(_HLS_SESSIONS) - (1 if keep_pk in _HLS_SESSIONS else 0) >= HLS_MAX_SESSIONS and live:
-        lru = min(live, key=lambda pk: _HLS_SESSIONS[pk]["last"])
-        _hls_kill(_HLS_SESSIONS.pop(lru))
-        live.remove(lru)
+        try:
+            idle = now - os.path.getmtime(d)
+        except OSError:
+            idle = HLS_TTL + 1
+        if idle > HLS_TTL:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def start_hls(video):
     """Ensure a live HLS transcode is running for `video`; return its session
-    dir (which holds index.m3u8 + seg_*.ts). Reuses a healthy session."""
+    dir (index.m3u8 + seg_*.ts). Cross-worker safe: concurrent callers reuse the
+    one running transcode instead of restarting it."""
     import shutil
     pk = video.id
-    m3u8_name = "index.m3u8"
-    with _HLS_LOCK:
-        s = _HLS_SESSIONS.get(pk)
-        if s and s["proc"].poll() is None and os.path.exists(os.path.join(s["dir"], m3u8_name)):
-            s["last"] = time.time()
-            return s["dir"]
-        if s:                       # dead/stale -> clean before restart
-            _hls_kill(s)
-            _HLS_SESSIONS.pop(pk, None)
-        _hls_reap(keep_pk=pk)
-
-        d = _hls_dir(pk)
+    d = _hls_dir(pk)
+    os.makedirs(settings.HLS_DIR, exist_ok=True)
+    with _hls_lock(pk):
+        if _hls_live(d) or _hls_complete(d):
+            return d
+        # Nothing alive/complete -> clean up any stale pid/files and (re)start once.
+        old = _hls_read_pid(d)
+        if old:
+            try:
+                os.kill(old, signal.SIGKILL)
+            except Exception:
+                pass
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d, exist_ok=True)
-        # Run with cwd=d and *relative* output names so the playlist lists
-        # segments as bare "seg_00000.ts" (which hls.js resolves against the
-        # .m3u8 URL -> /hls/<pk>/seg_00000.ts). The input path stays absolute.
+        # cwd=d + relative output names so the playlist lists segments as bare
+        # "seg_00000.ts" (hls.js resolves those against the .m3u8 URL ->
+        # /hls/<pk>/seg_00000.ts). Input path stays absolute. start_new_session
+        # detaches ffmpeg so a recycled gunicorn worker doesn't take it down.
         cmd = [
             "ffmpeg", "-y", "-nostats", "-loglevel", "warning", "-i", video.file_path,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-            # keyframe at every segment boundary -> clean, independently
-            # seekable segments.
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_SECONDS})",
             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             "-f", "hls",
@@ -477,36 +551,43 @@ def start_hls(video):
             "-hls_segment_type", "mpegts",
             "-hls_flags", "independent_segments",
             "-hls_segment_filename", "seg_%05d.ts",
-            m3u8_name,
+            "index.m3u8",
         ]
-        proc = subprocess.Popen(cmd, cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-        def _drain(pipe, vid):
-            try:
-                for line in iter(pipe.readline, b""):
-                    if line:
-                        logger.warning("hls ffmpeg (video %s): %s", vid,
-                                       line.decode(errors="replace").rstrip())
-            except Exception:
-                pass
-
-        threading.Thread(target=_drain, args=(proc.stderr, pk), daemon=True).start()
-        _HLS_SESSIONS[pk] = {"proc": proc, "dir": d, "last": time.time()}
+        proc = subprocess.Popen(cmd, cwd=d, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, start_new_session=True)
+        with open(os.path.join(d, "ffmpeg.pid"), "w") as f:
+            f.write(str(proc.pid))
+        threading.Thread(target=_drain_hls, args=(proc.stderr, pk), daemon=True).start()
+        # Hold the lock until the first playlist is written, so a second worker
+        # blocked on the lock then sees _hls_live/_hls_ready and reuses instead
+        # of restarting mid-warmup.
+        for _ in range(60):      # up to ~6s
+            if _hls_ready(d) or proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        _hls_reap()
         return d
 
 
 def touch_hls(pk):
-    with _HLS_LOCK:
-        s = _HLS_SESSIONS.get(pk)
-        if s:
-            s["last"] = time.time()
+    """Bump the session dir mtime so an actively-watched (but momentarily quiet)
+    session isn't reaped. Segment writes already bump it; this covers gaps."""
+    try:
+        os.utime(_hls_dir(pk), None)
+    except OSError:
+        pass
 
 
 def stop_hls(pk):
-    with _HLS_LOCK:
-        s = _HLS_SESSIONS.pop(pk, None)
-    if s:
-        _hls_kill(s)
+    import shutil
+    with _hls_lock(pk):
+        pid = _hls_read_pid(_hls_dir(pk))
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+        shutil.rmtree(_hls_dir(pk), ignore_errors=True)
 
 
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------
