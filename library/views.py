@@ -357,11 +357,12 @@ def _build_watch_data(request, pk):
     else:
         remote_path = video.file_path
 
-    # needs_remux videos (container-only problem, e.g. h264/aac in mkv) get an
-    # automatic lossless copy-remux on open instead of a user-clicked convert —
-    # see setupConversion() in base.html, which auto-POSTs convert_url when
-    # auto_remux is true instead of waiting for a button click.
-    auto_remux = video.needs_remux and video.convert_status != Video.CONVERT_DONE
+    # Non-browser-playable files (mkv, HEVC, exotic audio, ...) play via a live
+    # HLS transcode (Jellyfin-style) — unless a converted MP4 copy already
+    # exists, in which case just play that natively (it's a clean file).
+    converted_ready = (video.convert_status == Video.CONVERT_DONE
+                       and video.converted_path and os.path.exists(video.converted_path))
+    use_hls = (not video.browser_playable) and not converted_ready
 
     # Resume position resets once you've watched most of it, so reopening a
     # video you finished (or nearly did) starts fresh instead of a few
@@ -380,7 +381,9 @@ def _build_watch_data(request, pk):
         "position": resume_pos,
         "duration_label": fmt_dur(video.duration_seconds),
         "playable": video.playable_now,
-        "auto_remux": auto_remux,
+        "hls": use_hls,
+        "hls_url": f"/hls/{pk}/index.m3u8",
+        "hls_stop_url": f"/hls/{pk}/stop/",
         "duration_seconds": video.duration_seconds or 0,
         "convert_status": video.convert_status,
         "convert_progress": video.convert_progress,
@@ -800,6 +803,59 @@ def cancel_convert(request, pk):
     video = get_object_or_404(Video, pk=pk)
     services.cancel_conversion(video)
     return JsonResponse({"ok": True})
+
+
+# ---- Live HLS playback ------------------------------------------------------
+import time as _time
+
+_HLS_SEG_RE = re.compile(r"^seg_\d+\.ts$")
+_HLS_JS_PATH = os.path.join(os.path.dirname(__file__), "vendor", "hls.min.js")
+
+
+def hls_playlist(request, pk):
+    """Start (or reuse) the live transcode and serve its .m3u8. hls.js re-fetches
+    this periodically to pick up newly-produced segments."""
+    video = get_object_or_404(Video, pk=pk)
+    if not os.path.exists(video.file_path):
+        raise Http404("File missing")
+    session_dir = services.start_hls(video)
+    m3u8 = os.path.join(session_dir, "index.m3u8")
+    # Wait for ffmpeg to emit the playlist + first segment (usually ~1-2s).
+    for _ in range(50):  # up to ~10s
+        if os.path.exists(m3u8) and os.path.getsize(m3u8) > 0:
+            break
+        _time.sleep(0.2)
+    if not (os.path.exists(m3u8) and os.path.getsize(m3u8) > 0):
+        return HttpResponse("HLS warming up", status=503)
+    resp = FileResponse(open(m3u8, "rb"), content_type="application/vnd.apple.mpegurl")
+    resp["Cache-Control"] = "no-store"
+    return resp
+
+
+def hls_segment(request, pk, name):
+    if not _HLS_SEG_RE.match(name):
+        raise Http404("Bad segment")
+    path = os.path.join(services._hls_dir(pk), name)
+    if not os.path.exists(path):
+        raise Http404("Segment not ready")
+    services.touch_hls(pk)
+    resp = FileResponse(open(path, "rb"), content_type="video/mp2t")
+    resp["Cache-Control"] = "no-store"
+    return resp
+
+
+@require_POST
+def hls_stop(request, pk):
+    services.stop_hls(pk)
+    return JsonResponse({"ok": True})
+
+
+def hls_js(request):
+    if not os.path.exists(_HLS_JS_PATH):
+        raise Http404("hls.js not vendored")
+    resp = FileResponse(open(_HLS_JS_PATH, "rb"), content_type="application/javascript")
+    resp["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 
 # ---- Organize / maintenance -------------------------------------------------

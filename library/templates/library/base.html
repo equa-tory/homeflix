@@ -1330,6 +1330,56 @@ const PLAYER=(function(){
     },{once:true});
   }
 
+  /* ---- live HLS playback (Jellyfin-style; see services.start_hls) ----
+     Non-native files (mkv/HEVC/exotic audio) are transcoded live to HLS on the
+     server. hls.js drives it via MSE (Chrome/Firefox/LG TV); Apple uses native
+     HLS. The heavy hls.js lib is fetched lazily the first time it's needed. */
+  let _hlsLibP=null;
+  function ensureHlsLib(){
+    if(window.Hls)return Promise.resolve();
+    if(!_hlsLibP)_hlsLibP=new Promise((res,rej)=>{
+      const s=document.createElement('script');s.src='/hls.js';
+      s.onload=res;s.onerror=rej;document.head.appendChild(s);
+    });
+    return _hlsLibP;
+  }
+  let hlsInst=null, hlsPk=null;
+  function teardownHls(){
+    if(hlsInst){try{hlsInst.destroy();}catch(e){}hlsInst=null;}
+    if(hlsPk!=null){post('/hls/'+hlsPk+'/stop/').catch(()=>{});hlsPk=null;}
+  }
+  function loadHlsSource(url,pos,play,pk){
+    teardownHls();
+    hlsPk=pk;
+    V.pause();V.removeAttribute('src');V.load();
+    STAGE.classList.add('paused');PLAY.textContent='▶';
+    const resume=()=>{if(pos>2){try{V.currentTime=pos;}catch(e){}}};
+    // Apple (iPhone/Safari): native HLS — better battery/PiP, and hls.js's MSE
+    // path isn't available on iPhone anyway.
+    if(V.canPlayType('application/vnd.apple.mpegurl')){
+      V.src=url;
+      V.addEventListener('loadedmetadata',function h(){V.removeEventListener('loadedmetadata',h);resume();},{once:true});
+      if(play)V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
+      return;
+    }
+    ensureHlsLib().then(()=>{
+      if(hlsPk!==pk)return; // superseded by another load while the lib was fetching
+      if(!window.Hls||!Hls.isSupported()){console.error('[hls] not supported by this browser');return;}
+      const hls=new Hls({maxBufferLength:30});
+      hlsInst=hls;
+      hls.loadSource(url);
+      hls.attachMedia(V);
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resume();if(play)V.play().catch(()=>{});});
+      hls.on(Hls.Events.ERROR,(evt,data)=>{
+        console.error('[hls]',data.type,data.details,'fatal='+data.fatal);
+        if(!data.fatal)return;
+        if(data.type===Hls.ErrorTypes.NETWORK_ERROR){hls.startLoad();}
+        else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){hls.recoverMediaError();}
+        else{teardownHls();}
+      });
+    }).catch(e=>console.error('[hls] failed to load hls.js',e));
+  }
+
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
@@ -1347,7 +1397,8 @@ const PLAYER=(function(){
     // convert button (rendered below, in the info panel) stays available either way.
     const startPos=parseFloat(data.position)||0;
     V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
-    loadSource(data.stream_url,startPos,play);
+    if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}
+    else{teardownHls();loadSource(data.stream_url,startPos,play);}
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }
@@ -1380,17 +1431,13 @@ const PLAYER=(function(){
       if(fill)fill.style.width=(p||0)+'%';if(ctext)ctext.textContent='Converting… '+(p||0)+'%';}
     function poll(){fetch(data.convert_status_url).then(r=>r.json()).then(r=>{
       if(cancelled)return;
-      if(r.ready){inline.style.display='none';loadSource(data.stream_url,0,true);return;}
+      if(r.ready){inline.style.display='none';teardownHls();loadSource(data.stream_url,0,true);return;}
       if(r.status==='failed'){if(ctext)ctext.textContent='Conversion failed.';return;}
       if(r.status==='running'||r.status==='queued'){showProg(r.progress);setTimeout(poll,1500);}});}
     if(btn)btn.onclick=e=>{e.stopPropagation();cancelled=false;showProg(0);post(data.convert_url).then(()=>poll());};
     if(cancelBtn)cancelBtn.onclick=e=>{e.stopPropagation();cancelled=true;
       post(data.convert_cancel_url).then(()=>showIdle());};
     if(data.convert_status==='queued'||data.convert_status==='running'){showProg(data.convert_progress);poll();}
-    // needs_remux videos (container-only problem, e.g. h264/aac in mkv) get an
-    // automatic lossless copy-remux — no button click needed, just start it
-    // the moment the player opens.
-    else if(data.auto_remux&&data.convert_status==='none'){showProg(0);post(data.convert_url).then(()=>poll());}
   }
 
   /* ---- media session ---- */
@@ -1712,7 +1759,12 @@ const PLAYER=(function(){
   /* save progress */
   function savePos(){if(!d)return;const t=curTime();if(Math.abs(t-lastSave)<2)return;
     lastSave=t;post(d.save_url,{position:t.toFixed(1)});}
-  window.addEventListener('pagehide',()=>{if(!d||curTime()<1)return;persist();
+  window.addEventListener('pagehide',()=>{
+    if(!d)return;
+    // Stop the server-side transcode + free its segments when the tab closes.
+    if(d.hls&&hlsPk!=null&&navigator.sendBeacon)
+      navigator.sendBeacon(d.hls_stop_url,new URLSearchParams({csrfmiddlewaretoken:CSRF}));
+    if(curTime()<1)return;persist();
     navigator.sendBeacon&&navigator.sendBeacon(d.save_url,
       new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF}));});
 
@@ -1809,7 +1861,7 @@ const PLAYER=(function(){
   function minimize(){savePos();setState('mini');persist();
     // restore underlying URL if we were on a /watch/ url
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
-  function close(){savePos();V.pause();V.removeAttribute('src');V.load();
+  function close(){savePos();teardownHls();V.pause();V.removeAttribute('src');V.load();
     setState('hidden');d=null;clearPersist();
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
   function back(){ // back arrow in expanded -> minimize (keep playing)

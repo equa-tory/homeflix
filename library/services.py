@@ -388,6 +388,127 @@ def start_conversion(video):
     t.start()
 
 
+# ---- Live HLS transcode (Jellyfin-style on-the-fly playback) ---------------
+# For non-browser-playable files we transcode to HLS (short .ts segments + an
+# .m3u8 playlist) live: playback starts after the first couple of segments while
+# ffmpeg keeps producing the rest. hls.js (or native HLS on Apple) plays it.
+# One session per video, tracked here so it can be reused, idle-reaped, and
+# killed when the player closes.
+import time
+
+_HLS_SESSIONS = {}          # pk -> {"proc": Popen, "dir": str, "last": float}
+_HLS_LOCK = threading.Lock()
+HLS_SEG_SECONDS = 4
+HLS_TTL = 900               # kill sessions idle longer than this (seconds)
+HLS_MAX_SESSIONS = 2        # single user; cap concurrent transcodes
+
+
+def _hls_dir(pk):
+    return os.path.join(settings.HLS_DIR, str(pk))
+
+
+def _hls_kill(session):
+    proc = session.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    import shutil
+    shutil.rmtree(session.get("dir", ""), ignore_errors=True)
+
+
+def _hls_reap(keep_pk=None):
+    """Drop finished/idle sessions and enforce the concurrency cap. Caller
+    must hold _HLS_LOCK."""
+    now = time.time()
+    for pk in list(_HLS_SESSIONS):
+        if pk == keep_pk:
+            continue
+        s = _HLS_SESSIONS[pk]
+        if s["proc"].poll() is not None or (now - s["last"]) > HLS_TTL:
+            _hls_kill(s)
+            _HLS_SESSIONS.pop(pk, None)
+    # still over cap -> evict least-recently-used
+    live = [pk for pk in _HLS_SESSIONS if pk != keep_pk]
+    while len(_HLS_SESSIONS) - (1 if keep_pk in _HLS_SESSIONS else 0) >= HLS_MAX_SESSIONS and live:
+        lru = min(live, key=lambda pk: _HLS_SESSIONS[pk]["last"])
+        _hls_kill(_HLS_SESSIONS.pop(lru))
+        live.remove(lru)
+
+
+def start_hls(video):
+    """Ensure a live HLS transcode is running for `video`; return its session
+    dir (which holds index.m3u8 + seg_*.ts). Reuses a healthy session."""
+    import shutil
+    pk = video.id
+    m3u8_name = "index.m3u8"
+    with _HLS_LOCK:
+        s = _HLS_SESSIONS.get(pk)
+        if s and s["proc"].poll() is None and os.path.exists(os.path.join(s["dir"], m3u8_name)):
+            s["last"] = time.time()
+            return s["dir"]
+        if s:                       # dead/stale -> clean before restart
+            _hls_kill(s)
+            _HLS_SESSIONS.pop(pk, None)
+        _hls_reap(keep_pk=pk)
+
+        d = _hls_dir(pk)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+        # Run with cwd=d and *relative* output names so the playlist lists
+        # segments as bare "seg_00000.ts" (which hls.js resolves against the
+        # .m3u8 URL -> /hls/<pk>/seg_00000.ts). The input path stays absolute.
+        cmd = [
+            "ffmpeg", "-y", "-nostats", "-loglevel", "warning", "-i", video.file_path,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            # keyframe at every segment boundary -> clean, independently
+            # seekable segments.
+            "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_SECONDS})",
+            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+            "-f", "hls",
+            "-hls_time", str(HLS_SEG_SECONDS),
+            "-hls_playlist_type", "event",   # playlist grows; only lists ready segments
+            "-hls_list_size", "0",
+            "-hls_segment_type", "mpegts",
+            "-hls_flags", "independent_segments",
+            "-hls_segment_filename", "seg_%05d.ts",
+            m3u8_name,
+        ]
+        proc = subprocess.Popen(cmd, cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        def _drain(pipe, vid):
+            try:
+                for line in iter(pipe.readline, b""):
+                    if line:
+                        logger.warning("hls ffmpeg (video %s): %s", vid,
+                                       line.decode(errors="replace").rstrip())
+            except Exception:
+                pass
+
+        threading.Thread(target=_drain, args=(proc.stderr, pk), daemon=True).start()
+        _HLS_SESSIONS[pk] = {"proc": proc, "dir": d, "last": time.time()}
+        return d
+
+
+def touch_hls(pk):
+    with _HLS_LOCK:
+        s = _HLS_SESSIONS.get(pk)
+        if s:
+            s["last"] = time.time()
+
+
+def stop_hls(pk):
+    with _HLS_LOCK:
+        s = _HLS_SESSIONS.pop(pk, None)
+    if s:
+        _hls_kill(s)
+
+
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------
 def _sidecars_for(path):
     base = os.path.splitext(path)[0]

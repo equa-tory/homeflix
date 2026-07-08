@@ -19,6 +19,12 @@ urlpatterns = [
     path("stream/<int:pk>/", views.stream, name="stream"),
     path("frame/<int:pk>/<int:t>/", views.frame_thumb, name="frame_thumb"),
 
+    # live HLS playback (Jellyfin-style on-the-fly transcode)
+    path("hls.js", views.hls_js, name="hls_js"),
+    path("hls/<int:pk>/index.m3u8", views.hls_playlist, name="hls_playlist"),
+    path("hls/<int:pk>/stop/", views.hls_stop, name="hls_stop"),
+    path("hls/<int:pk>/<str:name>", views.hls_segment, name="hls_segment"),
+
     # api
     path("api/videos/", views.api_videos, name="api_videos"),
     path("api/watch/<int:pk>/", views.watch_api, name="watch_api"),

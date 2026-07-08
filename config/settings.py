@@ -133,15 +133,9 @@ THUMBNAIL_DIR = str(BASE_DIR / "thumbnails")
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi"}
 
 # Codecs/containers that desktop browsers generally CANNOT play via <video>.
+# These play through the live HLS transcode path (see services.start_hls).
 NON_BROWSER_CONTAINERS = {".mkv", ".avi"}
 NON_BROWSER_VCODECS = {"hevc", "h265", "mpeg4", "msmpeg4v3", "wmv3"}
-
-# Codecs that are safe to *remux* straight into an MP4 container (no re-encode
-# needed, just repackage the same bitstream) — used to tell "just needs its
-# container fixed" (fast live remux, see Video.needs_remux) apart from "needs
-# real transcoding" (HEVC etc., still uses the on-disk Convert flow).
-REMUX_SAFE_VCODECS = {"h264", "avc1"}
-REMUX_SAFE_ACODECS = {"aac", "mp4a"}
 
 os.makedirs(THUMBNAIL_DIR, exist_ok=True)
 
@@ -157,6 +151,11 @@ CSRF_TRUSTED_ORIGINS = [o.strip() for o in _origins.split(",") if o.strip()]
 # so the scanner never re-imports them).
 CONVERTED_DIR = str(BASE_DIR / "converted")
 os.makedirs(CONVERTED_DIR, exist_ok=True)
+
+# Temp dir for live HLS transcode segments (one subfolder per video while it's
+# being watched, cleaned up on close / idle). Also kept OUT of LIBRARY_ROOT.
+HLS_DIR = str(BASE_DIR / "hls")
+os.makedirs(HLS_DIR, exist_ok=True)
 
 # Library page size for infinite scroll.
 PAGE_SIZE = 60
