@@ -66,6 +66,26 @@ SORTS = {
     "modified": "-file_mtime",
 }
 
+# Same sort choices as Library's SORTS, but for a PlaylistItem queryset (needs
+# the video__ prefix) plus "manual" -- the playlist's own insertion order,
+# and the default so existing playlists keep behaving exactly as before
+# unless the user explicitly picks a different sort.
+PLAYLIST_SORTS = {
+    "manual": "order",
+    "added": "-video__date_added",
+    "name": "video__title",
+    "duration": "-video__duration_seconds",
+    "modified": "-video__file_mtime",
+}
+
+
+def _apply_sort(order, rev):
+    """Flip a '-field'/'field' order string per the rev flag -- shared by
+    Library, Playlist, and Smart Playlist sorting."""
+    if rev:
+        return order[1:] if order.startswith("-") else f"-{order}"
+    return order
+
 
 _SEP_RE = re.compile(r"[-_.\s]+")
 
@@ -231,11 +251,15 @@ def playlists(request):
 
 def playlist_detail(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
-    items = pl.items.select_related("video").filter(video__missing=False)
+    sort = request.GET.get("sort", "manual")
+    rev = request.GET.get("rev") == "1"
+    order = _apply_sort(PLAYLIST_SORTS.get(sort, "order"), rev)
+    items = (pl.items.select_related("video").filter(video__missing=False)
+             .order_by(order))
     return render(request, "library/playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="playlist_detail",
         spa_title=f"{pl.name} — HomeFlix",
-        playlist=pl, items=items))
+        playlist=pl, items=items, sort=sort, rev=rev))
 
 
 # ---- watch (single-page player) --------------------------------------------
@@ -896,10 +920,14 @@ def upload_subtitle(request, pk):
     upload = request.FILES.get("file")
     if not upload:
         return JsonResponse({"ok": False, "error": "No file"}, status=400)
-    sub = services.store_uploaded_subtitle(
+    sub, err_code, detail = services.store_uploaded_subtitle(
         video, upload, request.POST.get("label", ""), request.POST.get("lang", ""))
     if not sub:
-        return JsonResponse({"ok": False, "error": "Couldn't read that as a subtitle file"}, status=400)
+        msg = {"bad_extension": "Unsupported file type", "too_large": "File too large",
+               "conversion_failed": "Couldn't read that as a subtitle file"}.get(err_code, "Upload failed")
+        if detail:
+            msg += f": {detail}"
+        return JsonResponse({"ok": False, "error": msg, "error_code": err_code}, status=400)
     return JsonResponse({"ok": True, "subtitles": _serialize_subs(pk, video)})
 
 
@@ -1022,10 +1050,13 @@ from .models import SmartPlaylist
 
 def smart_playlist_detail(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
-    videos = list(sp.get_videos()[:200])
+    sort = request.GET.get("sort", "added")
+    rev = request.GET.get("rev") == "1"
+    order = _apply_sort(SORTS.get(sort, "-date_added"), rev)
+    videos = list(sp.get_videos().order_by(order)[:200])
     return render(request, "library/smart_playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="smart_playlist",
-        spa_title=f"{sp.name} — HomeFlix", sp=sp, videos=videos))
+        spa_title=f"{sp.name} — HomeFlix", sp=sp, videos=videos, sort=sort, rev=rev))
 
 
 @require_POST

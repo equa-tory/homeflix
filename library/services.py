@@ -609,6 +609,22 @@ def stop_hls(pk):
                 os.kill(pid, signal.SIGTERM)
             except Exception:
                 pass
+            else:
+                # ffmpeg finalizes the HLS playlist (writes #EXT-X-ENDLIST) as
+                # part of a graceful SIGTERM shutdown -- rmtree'ing immediately
+                # can race that write and delete a segment a client just saw
+                # listed in the not-yet-deleted playlist (404 + stall). Give it
+                # a couple seconds to actually exit before cleaning up; still
+                # dead-alive after that -> force it.
+                for _ in range(20):
+                    if not _pid_alive(pid):
+                        break
+                    time.sleep(0.1)
+                else:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
         shutil.rmtree(_hls_dir(pk), ignore_errors=True)
 
 
@@ -772,34 +788,52 @@ def ensure_subtitle_vtt(video, idx):
     return None
 
 
-_SUB_UPLOAD_MAX_BYTES = 5 * 1024 * 1024  # subs are KB-sized; 5MB is generous
+_SUB_UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # quality releases embed fonts in
+                                           # the .ass ([Fonts]/[Graphics]
+                                           # base64 sections) -- can be a few
+                                           # MB even though it's "just subs"
 
 
 def store_uploaded_subtitle(video, upload, label, lang):
     """Save an uploaded subtitle file as an app-owned WebVTT, decoupled from
     the original file's location -- it survives the video being moved
     (organize) or the original .ass/.srt being deleted later.
-    Returns the new VideoSubtitle row, or None (+ logs why) on failure."""
+    Returns (VideoSubtitle, None, None) on success, or
+    (None, error_code, detail) on failure -- error_code is one of
+    "bad_extension" / "too_large" / "conversion_failed", detail is a short
+    human-readable reason (e.g. the real ffmpeg error) safe to show the user."""
     import uuid
 
     name = upload.name or ""
     ext = os.path.splitext(name)[1].lower()
     if ext not in SUB_SIDECAR_EXTS:
         logger.warning("subtitle upload rejected for video %s: bad extension %r", video.id, ext)
-        return None
+        return None, "bad_extension", f"Unsupported file type {ext or '(none)'}"
     if upload.size > _SUB_UPLOAD_MAX_BYTES:
         logger.warning("subtitle upload rejected for video %s: too large (%s bytes)",
                         video.id, upload.size)
-        return None
+        return None, "too_large", f"File is {upload.size // (1024*1024)}MB (limit 20MB)"
 
     os.makedirs(settings.SUBTITLE_DIR, exist_ok=True)
     token = uuid.uuid4().hex[:12]
     out_path = os.path.join(settings.SUBTITLE_DIR, f"upload_{video.id}_{token}.vtt")
     tmp_path = os.path.join(settings.SUBTITLE_DIR, f"_tmp_{video.id}_{token}{ext}")
+    err = ""
     try:
+        raw = upload.read()
+        if ext != ".vtt":
+            # Many Russian/CIS fansub .ass/.srt files are saved as Windows-1251,
+            # not UTF-8 -- ffmpeg's ass/ssa demuxer expects UTF-8 and fails
+            # outright on cp1251 bytes. Re-encode when that's detectably the case.
+            try:
+                raw.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    raw = raw.decode("cp1251").encode("utf-8")
+                except UnicodeDecodeError:
+                    pass  # leave as-is; ffmpeg's own error will surface below
         with open(tmp_path, "wb") as f:
-            for chunk in upload.chunks():
-                f.write(chunk)
+            f.write(raw)
         if ext == ".vtt":
             shutil.copyfile(tmp_path, out_path)
             code = 0
@@ -815,12 +849,13 @@ def store_uploaded_subtitle(video, upload, label, lang):
             pass
 
     if code != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
-        return None
+        return None, "conversion_failed", _ffmpeg_error_tail(err) or "ffmpeg could not read this file"
 
-    return VideoSubtitle.objects.create(
+    sub = VideoSubtitle.objects.create(
         video=video, label=label or (_lang_label(lang) or "Subtitle"),
         lang=(lang or "").lower(), vtt_path=out_path,
     )
+    return sub, None, None
 
 
 def delete_uploaded_subtitle(sub):

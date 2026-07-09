@@ -268,8 +268,24 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 #player.ph-mini .ph-search{display:none}
 
 /* stage = the player box wrapping the ONE video */
-.ph-stage-wrap{max-width:none;margin:0;width:100%}
+.ph-stage-wrap{max-width:none;margin:0;width:100%;position:relative}
 #player.ph-mini .ph-stage-wrap{max-width:none;margin:0}
+
+/* custom subtitle rendering -- see the HTML comment above #phSubBar and
+   PLAYER.renderActiveCue. Default: normal page flow, right under the video.
+   While the control overlay is visible (.subs-over-ctrls, toggled by
+   PLAYER.syncSubPos alongside show-ctrls/paused/force-hide-ctrls), it lifts
+   to float inside the stage just above the timeline instead, so it never
+   sits under the opaque control gradient. */
+.ph-subbar{width:100%; text-align:center; padding:10px 16px 4px; box-sizing:border-box;
+  pointer-events:none; font-size:26px; line-height:1.35; color:#fff}
+.ph-subbar:empty{padding:0}
+#phSubText{display:inline-block; background:rgba(0,0,0,.6); padding:.2em .6em;
+  border-radius:6px; white-space:pre-line; text-shadow:0 1px 3px #000a}
+#phSubText:empty{display:none}
+.ph-stage-wrap.subs-over-ctrls .ph-subbar{position:absolute; left:0; right:0;
+  bottom:64px; padding:0 16px; z-index:4}
+#player.ph-mini .ph-subbar{display:none}
 
 .ph-stage{position:relative; background:#000; aspect-ratio:16/9; overflow:hidden;
   user-select:none; border-radius:var(--radius)}
@@ -320,12 +336,22 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .ph-stage.show-ripple .ripple{opacity:1}
 .ph-stage.show-ripple .ripple .icon{transform:scale(1)}
 #player.ph-mini .ripple{display:none}
+/* #phRIcon doubles as the one dedicated on-video tap target for play/pause
+   (see PLAYER's RICON.onclick) -- stays visibly up and tappable whenever the
+   overlay is, not just during the brief state-change flash above. */
+.ph-stage.show-ctrls .ripple, .ph-stage.paused .ripple{opacity:.85}
+.ph-stage.show-ctrls .ripple .icon, .ph-stage.paused .ripple .icon{pointer-events:auto; cursor:pointer}
+.ph-stage.force-hide-ctrls .ripple{opacity:0}
+.ph-stage.force-hide-ctrls .ripple .icon{pointer-events:none}
 
 /* big controls (expanded only) */
 .ctrls{position:absolute; left:0; right:0; bottom:0; padding:8px 14px 14px;
   background:linear-gradient(transparent,#000c 70%); display:flex; flex-direction:column;
   gap:7px; opacity:0; transition:opacity .22s; pointer-events:none}
 .ph-stage.show-ctrls .ctrls, .ph-stage.paused .ctrls{opacity:1; pointer-events:all}
+/* independent "hide it now" override (mouse left the player, or a phone tap
+   toggled it off) -- wins even while .paused would otherwise pin it open */
+.ph-stage.force-hide-ctrls .ctrls{opacity:0!important; pointer-events:none!important}
 #player.ph-mini .ctrls{display:none}
 /* Shorts mode only: the stage fills the true screen edge-to-edge, so this bar
    really does sit over the home-indicator area and needs the safe-area padding.
@@ -539,6 +565,10 @@ html.player-locked{overflow:hidden}
   flex-direction:column; align-items:center; justify-content:center; gap:12px;
   background:rgba(0,0,0,.55); color:#fff; font-size:14px; font-weight:600;
   letter-spacing:.02em; pointer-events:none}
+.ph-prep-hide{pointer-events:auto; background:none; border:1px solid #fff6;
+  color:#fff; font-size:12px; font-weight:600; padding:5px 12px; border-radius:20px;
+  cursor:pointer; -webkit-tap-highlight-color:transparent}
+.ph-prep-hide:hover{background:#fff2}
 
 /* ====== MOBILE ====== */
 @media (max-width:700px){
@@ -688,10 +718,11 @@ html.player-locked{overflow:hidden}
       <button class="ph-min-btn" id="phMinBtn" title="Minimize">▾</button>
     </div>
 
-    <div class="ph-stage-wrap">
+    <div class="ph-stage-wrap" id="phStageWrap">
       <div class="ph-stage paused" id="phStage" tabindex="0">
         <video id="theVideo" playsinline preload="metadata"></video>
-        <div class="ph-prep" id="phPrep"><div class="ph-spinner"></div><span>Preparing…</span></div>
+        <div class="ph-prep" id="phPrep"><div class="ph-spinner"></div><span>Preparing…</span>
+          <button type="button" class="ph-prep-hide" id="phPrepHide">Hide</button></div>
         <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">▶</span></div>
 
         <div class="ctrls">
@@ -719,7 +750,7 @@ html.player-locked{overflow:hidden}
               <div class="cc-pop" id="phCCPop">
                 <label>Subtitles</label>
                 <div class="cc-tracks" id="phCCTracks"></div>
-                <div class="cc-row"><span>Size</span><input type="range" id="phCCSize" min="12" max="36" step="1" value="20"></div>
+                <div class="cc-row"><span>Size</span><input type="range" id="phCCSize" min="14" max="48" step="1" value="26"></div>
                 <div class="cc-row"><span>Background</span><input type="range" id="phCCBg" min="0" max="100" step="5" value="60"></div>
                 <div class="cc-add">
                   <button type="button" class="btn ghost" id="phCCAddBtn">+ Add subtitle</button>
@@ -762,6 +793,14 @@ html.player-locked{overflow:hidden}
           <div class="mini-timeline" id="phMiniTimeline"><div class="mini-fill" id="phMiniFill"></div></div>
         </div>
       </div>
+      <!-- custom subtitle rendering (see PLAYER.loadSubtitles/renderActiveCue):
+           native <track> cues are always confined inside the <video> box, so to
+           show captions below the player by default (and tuck them above the
+           timeline while the overlay is visible) we set tracks mode="hidden"
+           and paint the active cue here ourselves. Sibling of .ph-stage (not a
+           child) so it isn't clipped by the stage's overflow:hidden and can
+           sit in normal page flow underneath it. -->
+      <div class="ph-subbar" id="phSubBar"><span id="phSubText"></span></div>
     </div>
 
     <!-- dynamic info -->
@@ -1060,8 +1099,14 @@ function wireThumbTool(root){
 }
 
 /* Shared by any page with select-mode: the toolbar's "Select" button + the
-   floating FAB + the 's' keyboard shortcut. Returns a cleanup fn. */
-function wireSelectUI(root){
+   floating FAB + the 's' keyboard shortcut. Pass {selectAll:true} to also
+   wire 'a' -> select every .vcard currently in the DOM -- only correct on
+   pages that render everything at once (Playlist/Hidden); Library's grid is
+   virtualised (only on-screen cards exist in the DOM), so it's left off
+   there to avoid silently only selecting whatever's scrolled into view.
+   Returns a cleanup fn. */
+function wireSelectUI(root,opts){
+  opts=opts||{};
   const selBtn=root.querySelector('#selModeBtn');
   const selFab=document.getElementById('selFab');
   function syncSelUI(){
@@ -1076,9 +1121,20 @@ function wireSelectUI(root){
     selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
   }
   if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
+  function selectAllVisible(){
+    document.querySelectorAll('.vcard').forEach(card=>{
+      const m=card.href&&card.href.match(/\/watch\/(\d+)\//);
+      if(!m)return;
+      const id=parseInt(m[1]);
+      if(!SELECT_MODE.isSelected(id))SELECT_MODE.toggleItem(id,card);
+    });
+  }
   function onSelKey(e){
     if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName))return;
     if(e.key==='s'||e.key==='S'){e.preventDefault();SELECT_MODE.toggle();syncSelUI();}
+    else if(opts.selectAll&&(e.key==='a'||e.key==='A')&&SELECT_MODE.isActive()){
+      e.preventDefault();selectAllVisible();
+    }
   }
   document.addEventListener('keydown',onSelKey);
   return ()=>{
@@ -1086,6 +1142,14 @@ function wireSelectUI(root){
     SELECT_MODE.deactivate();
     const sf=document.getElementById('selFab');if(sf)sf.style.display='none';
   };
+}
+
+/* Shared by any page with a Sort <select data-filter-sort> (Library,
+   Playlist, Smart Playlist) -- SPA-navigates with the new sort applied. */
+function wireSortUI(root){
+  const sortSel=root.querySelector('[data-filter-sort]');
+  if(sortSel)sortSel.onchange=()=>{const q=new URLSearchParams(location.search);
+    q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
 }
 
 const PAGE_INIT={
@@ -1170,11 +1234,9 @@ const PAGE_INIT={
     }else requestAnimationFrame(start);}
     requestAnimationFrame(start);
 
-    // Sort <select> -> SPA navigate
-    const sortSel=root.querySelector('[data-filter-sort]');
-    if(sortSel)sortSel.onchange=()=>{const q=new URLSearchParams(location.search);
-      q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
-
+    wireSortUI(root);
+    // No {selectAll:true} here -- this grid is virtualised, only on-screen
+    // cards exist in the DOM (see wireSelectUI's doc comment).
     const selCleanup=wireSelectUI(root);
     return ()=>{
       scrollEl.removeEventListener('scroll',onScroll);
@@ -1185,18 +1247,20 @@ const PAGE_INIT={
 
   /* ----- HIDDEN: plain server-rendered grid, just needs select-mode ----- */
   hidden(root){
-    return wireSelectUI(root);
+    return wireSelectUI(root,{selectAll:true});
   },
 
   /* ----- PLAYLIST DETAIL: select-mode + cover image tool ----- */
   playlist_detail(root){
     wireThumbTool(root);
-    return wireSelectUI(root);
+    wireSortUI(root);
+    return wireSelectUI(root,{selectAll:true});
   },
 
   /* ----- SMART PLAYLIST: rules editor + cover image tool ----- */
   smart_playlist(root){
     wireThumbTool(root);
+    wireSortUI(root);
     const form=root.querySelector('#rulesForm');
     if(!form)return null;
     const FIELDS=[{v:'title',l:'Title'},{v:'filename',l:'Filename'},{v:'channel',l:'Channel'},
@@ -1278,6 +1342,10 @@ const PLAYER=(function(){
   const STAGE = document.getElementById('phStage');
   const V     = document.getElementById('theVideo');
   const PREP  = document.getElementById('phPrep');
+  const PREPHIDE=document.getElementById('phPrepHide');
+  const STAGEWRAP=document.getElementById('phStageWrap');
+  const SUBBAR= document.getElementById('phSubBar');
+  const SUBTEXT=document.getElementById('phSubText');
   const HDR   = document.getElementById('phHdr');
   const BACK  = document.getElementById('phBack');
   const MINBTN= document.getElementById('phMinBtn');
@@ -1422,7 +1490,8 @@ const PLAYER=(function(){
     });
     return _hlsLibP;
   }
-  let hlsInst=null, hlsPk=null;
+  let hlsInst=null, hlsPk=null, _curStopSpin=null;
+  if(PREPHIDE)PREPHIDE.onclick=e=>{e.stopPropagation();if(_curStopSpin)_curStopSpin();};
   function teardownHls(){
     if(PREP)PREP.style.display='none';
     if(hlsInst){try{hlsInst.destroy();}catch(e){}hlsInst=null;}
@@ -1437,6 +1506,12 @@ const PLAYER=(function(){
     // starts — the live transcode needs a moment to build a buffer lead.
     PREP.style.display='flex';
     const stopSpin=()=>{PREP.style.display='none';};
+    _curStopSpin=stopSpin;
+    // 'playing' can be racy/one-off under MSE -- timeupdate firing at all means
+    // real progress is happening, so it's a second, more reliable "it's working"
+    // signal on top of 'playing' (both {once:true}; the Hide button + 25s
+    // timeout below are the final backstops).
+    V.addEventListener('timeupdate',stopSpin,{once:true});
     V.addEventListener('playing',stopSpin,{once:true});
     setTimeout(stopSpin,25000); // safety: never leave it spinning forever
     const start=pos>2?pos:0;
@@ -1474,17 +1549,38 @@ const PLAYER=(function(){
      native and HLS playback paths since both target V) ---- */
   const SUBKEY='homeflix_subs';
   function loadSubPref(){
-    try{return Object.assign({on:true,lang:'',size:20,bg:60},JSON.parse(localStorage.getItem(SUBKEY))||{});}
-    catch{return {on:true,lang:'',size:20,bg:60};}
+    try{return Object.assign({on:true,lang:'',size:26,bg:60},JSON.parse(localStorage.getItem(SUBKEY))||{});}
+    catch{return {on:true,lang:'',size:26,bg:60};}
   }
   function saveSubPref(){try{localStorage.setItem(SUBKEY,JSON.stringify(subPref));}catch{}}
   let subPref=loadSubPref();
-  let _cueStyleEl=null;
+  // Rendered by us (not the browser's native cue box -- see the HTML comment
+  // by #phSubBar) so size/background apply to our own box's CSS.
   function applyCueStyle(){
-    if(!_cueStyleEl){_cueStyleEl=document.createElement('style');document.head.appendChild(_cueStyleEl);}
+    if(!SUBBAR)return;
     const bg=Math.max(0,Math.min(100,subPref.bg))/100;
-    const sz=Math.max(10,Math.min(48,subPref.size));
-    _cueStyleEl.textContent='video::cue{font-size:'+sz+'px;background:rgba(0,0,0,'+bg+');color:#fff;line-height:1.4}';
+    const sz=Math.max(10,Math.min(56,subPref.size));
+    SUBBAR.style.fontSize=sz+'px';
+    if(SUBTEXT)SUBTEXT.style.background='rgba(0,0,0,'+bg+')';
+  }
+  // Tracks fire 'cuechange' even in mode="hidden" (just not browser-rendered) --
+  // paint whichever track we picked as active into our own box. Harmless to
+  // call for every track's cuechange since only the "hidden" one ever has
+  // activeCues (everyone else is "disabled").
+  function renderActiveCue(){
+    if(!SUBTEXT)return;
+    SUBTEXT.innerHTML='';
+    const tt=V.textTracks, n=tt?tt.length:0;
+    for(let i=0;i<n;i++){
+      if(tt[i].mode!=='hidden')continue;
+      const cues=tt[i].activeCues;
+      if(!cues||!cues.length)continue;
+      for(let c=0;c<cues.length;c++){
+        if(c>0)SUBTEXT.appendChild(document.createElement('br'));
+        try{SUBTEXT.appendChild(cues[c].getCueAsHTML());}
+        catch(e){SUBTEXT.appendChild(document.createTextNode(cues[c].text||''));}
+      }
+    }
   }
   function renderCCTracks(chosen){
     if(!CCTRACKS)return;
@@ -1508,19 +1604,27 @@ const PLAYER=(function(){
       if(subPref.lang){for(let i=0;i<n;i++){if(tt[i].language===subPref.lang){chosen=i;break;}}}
       if(chosen===-1)chosen=0; // no saved lang, or it's not in this video -> default to first track
     }
-    for(let i=0;i<n;i++)tt[i].mode=(i===chosen)?'showing':'hidden';
+    // "hidden" (not "showing"): we render the active cue ourselves into
+    // #phSubBar (see renderActiveCue) so it can live below the video / above
+    // the timeline instead of being pinned inside the video by the browser.
+    // Non-chosen tracks go "disabled" so they don't even fire cuechange.
+    for(let i=0;i<n;i++)tt[i].mode=(i===chosen)?'hidden':'disabled';
     if(CC)CC.classList.toggle('active',chosen!==-1);
     renderCCTracks(chosen);
+    renderActiveCue();
     if(CCSIZE)CCSIZE.value=subPref.size; if(CCBG)CCBG.value=subPref.bg;
   }
   function loadSubtitles(list){
     Array.from(V.querySelectorAll('track')).forEach(t=>t.remove());
+    if(SUBTEXT)SUBTEXT.innerHTML='';
     (list||[]).forEach(s=>{
       const t=document.createElement('track');
       t.kind='subtitles';t.src=s.url;t.srclang=s.lang||'und';t.label=s.label||s.lang||'Subtitles';
       V.appendChild(t);
+      if(t.track)t.track.oncuechange=renderActiveCue;
     });
     applySubPref();
+    syncSubPos(); // match #phSubBar's position to the stage's current overlay state
   }
   if(CC)CC.onclick=e=>{e.stopPropagation();if(CCPOP)CCPOP.classList.toggle('open');};
   if(CCPOP)CCPOP.addEventListener('click',e=>e.stopPropagation());
@@ -1547,9 +1651,10 @@ const PLAYER=(function(){
     subPref.on=true;subPref.lang=btn.dataset.lang||'';saveSubPref();
     applyCueStyle();
     const tt=V.textTracks;
-    for(let i=0;i<tt.length;i++)tt[i].mode=(i===idx)?'showing':'hidden';
+    for(let i=0;i<tt.length;i++)tt[i].mode=(i===idx)?'hidden':'disabled';
     if(CC)CC.classList.add('active');
     renderCCTracks(idx);
+    renderActiveCue();
   });
 
   /* ---- attach a subtitle file that isn't (or won't stay) next to the video --
@@ -1827,16 +1932,39 @@ const PLAYER=(function(){
   function toggle(){V.paused?V.play():V.pause();}
   PLAY.onclick=e=>{e.stopPropagation();toggle();};
   MBAR_P.onclick=e=>{e.stopPropagation();toggle();};
+  // #phRIcon (the center icon) is the one dedicated on-video tap target for
+  // play/pause -- see the STAGE click handler below, which now only toggles
+  // the control overlay on touch instead of also toggling playback.
+  if(RICON)RICON.onclick=e=>{e.stopPropagation();toggle();};
   let ripT;
   function ripple(icon){RICON.textContent=icon;STAGE.classList.add('show-ripple');
     clearTimeout(ripT);ripT=setTimeout(()=>STAGE.classList.remove('show-ripple'),550);}
-  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';ripple('▶');});
-  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';ripple('⏸');savePos();});
+  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';ripple('▶');syncSubPos();});
+  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';ripple('⏸');savePos();syncSubPos();});
+
+  // Mouse vs. touch need different tap semantics below (desktop click still
+  // toggles play; phone tap toggles the overlay -- see item 3).
+  let lastPointerType='mouse';
+  STAGE.addEventListener('pointerdown',e=>{lastPointerType=e.pointerType||'mouse';},{passive:true});
 
   let clickT=null;
   STAGE.addEventListener('click',e=>{
     if(e.target.closest('.ctrls,.ph-minibar,button,input,select,a,.autopill'))return;
     if(state()==='mini'){expand();return;} // single click/tap = expand (double-tap from touchend overrides)
+    if(lastPointerType==='touch'){
+      // Phone: tapping the bare video toggles the control overlay, not
+      // playback (that's now the center play icon, RICON, above). Double-tap
+      // still opens fullscreen, same timing as the mouse path below.
+      if(clickT){clearTimeout(clickT);clickT=null;goFull();return;}
+      clickT=setTimeout(()=>{
+        clickT=null;
+        const showing=STAGE.classList.contains('show-ctrls')||
+          (STAGE.classList.contains('paused')&&!STAGE.classList.contains('force-hide-ctrls'));
+        if(showing){clearTimeout(hideT);STAGE.classList.remove('show-ctrls');STAGE.classList.add('force-hide-ctrls');syncSubPos();}
+        else activity();
+      },260);
+      return;
+    }
     if(clickT){clearTimeout(clickT);clickT=null;goFull();}
     else clickT=setTimeout(()=>{clickT=null;toggle();},260);
   });
@@ -1910,9 +2038,32 @@ const PLAYER=(function(){
 
   /* auto-hide controls */
   let hideT;
-  function activity(){STAGE.classList.add('show-ctrls');clearTimeout(hideT);
-    hideT=setTimeout(()=>{if(!V.paused)STAGE.classList.remove('show-ctrls');},2800);}
+  // Whether the control overlay is actually visible right now -- toggles
+  // .subs-over-ctrls on the stage wrap so #phSubBar tucks in above the
+  // timeline instead of sitting in its default spot below the video.
+  function syncSubPos(){
+    if(!STAGEWRAP)return;
+    const overlayVisible=(STAGE.classList.contains('show-ctrls')||STAGE.classList.contains('paused'))
+      &&!STAGE.classList.contains('force-hide-ctrls');
+    STAGEWRAP.classList.toggle('subs-over-ctrls',overlayVisible);
+  }
+  function activity(){
+    STAGE.classList.remove('force-hide-ctrls');
+    STAGE.classList.add('show-ctrls');clearTimeout(hideT);
+    hideT=setTimeout(()=>{if(!V.paused)STAGE.classList.remove('show-ctrls');syncSubPos();},2800);
+    syncSubPos();
+  }
   STAGE.addEventListener('mousemove',activity);STAGE.addEventListener('touchstart',activity,{passive:true});
+  // Mouse leaving the player -> hide the overlay right away instead of
+  // waiting out the timer (paused normally pins it open; force-hide-ctrls
+  // overrides that too, since the mouse genuinely left).
+  STAGE.addEventListener('mouseleave',()=>{
+    if(lastPointerType==='touch')return; // no meaningful "mouse left" on touch
+    clearTimeout(hideT);
+    STAGE.classList.remove('show-ctrls');
+    if(V.paused)STAGE.classList.add('force-hide-ctrls');
+    syncSubPos();
+  });
 
   /* keyboard (expanded only) */
   document.addEventListener('keydown',e=>{

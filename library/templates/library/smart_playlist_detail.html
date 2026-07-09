@@ -7,6 +7,19 @@
        href="{% url 'random_video' %}?sp={{ sp.pk }}" title="Play a random video from this smart playlist"
        style="font-size:13px;padding:7px 10px">🎲 Random</a>
   {% endif %}
+  <label class="sub" style="margin:0">Sort&nbsp;
+    <select class="nav-item" data-filter-sort style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
+      <option value="added"    {% if sort == 'added'    %}selected{% endif %}>Date added</option>
+      <option value="name"     {% if sort == 'name'     %}selected{% endif %}>Name</option>
+      <option value="duration" {% if sort == 'duration' %}selected{% endif %}>Duration</option>
+      <option value="modified" {% if sort == 'modified' %}selected{% endif %}>Modified date</option>
+    </select>
+  </label>
+  <a class="btn ghost nav-item" data-spa
+     href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}"
+     title="Reverse sort order" style="font-size:16px;padding:7px 10px">
+    {% if rev %}↑{% else %}↓{% endif %}
+  </a>
   <form method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
         data-confirm="Delete smart playlist?" style="margin:0">
     {% csrf_token %}
