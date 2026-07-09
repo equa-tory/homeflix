@@ -502,7 +502,7 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .note-del:hover{color:var(--accent)}
 .rec-section{margin-top:32px; padding-bottom:60px}
 .cbtn.looping{color:var(--accent)}
-.cbtn.shuffling{color:var(--accent)}
+.cbtn.shuffling{color:var(--accent); background:var(--accent);opacity:.2}
 .cc-wrap{position:relative}
 .cbtn-cc{font-size:13px; font-weight:800; letter-spacing:.02em}
 .cbtn-cc.active{color:var(--accent)}
@@ -1497,7 +1497,7 @@ const PLAYER=(function(){
   const CCADDSTATUS=document.getElementById('phCCAddStatus');
 
   const SKEY='homeflix_player';
-  let d=null, notes=[], autoplay=false, repeat='off', shuffle=false, lastSave=0, pushed=false, ignorePop=false;
+  let d=null, notes=[], autoplay=false, repeat='off', shuffle=false, prevVideoId=null, lastSave=0, pushed=false, ignorePop=false;
   // Queue-aware prev/next: everything that used to read d.prev_id/d.next_id
   // directly now goes through these, so "repeat all" (wrap to the other end
   // of the current queue) and "shuffle" (random other member of the queue)
@@ -1518,11 +1518,10 @@ const PLAYER=(function(){
   }
   function prevId(){
     if(!d)return null;
+    // When shuffle is on, prev returns the video you came from (the actual previous play)
+    // instead of a random one or queue position. This lets you retrace your steps.
+    if(shuffle&&prevVideoId)return prevVideoId;
     const q=d.queue_ids||[];
-    if(shuffle&&q.length>1){
-      let n;do{n=q[Math.floor(Math.random()*q.length)];}while(n===d.id&&q.length>1);
-      return n;
-    }
     if(d.prev_id)return d.prev_id;
     if(repeat==='all'&&q.length)return q[q.length-1];
     return null;
@@ -1868,6 +1867,7 @@ const PLAYER=(function(){
 
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
+    if(d)prevVideoId=d.id; // track where we came from for shuffle prev
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
     repeat=data.repeat||'off'; shuffle=!!data.shuffle;
     HDR.textContent=data.title; MBAR_T.textContent=data.title;
