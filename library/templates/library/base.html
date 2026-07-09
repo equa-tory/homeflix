@@ -1257,11 +1257,18 @@ const PLAYER=(function(){
   // keyboard seek) reads/writes position through, rather than scattering
   // V.currentTime everywhere.
   function curTime(){return V.currentTime;}
-  function totalDur(){return V.duration;}
+  function totalDur(){
+    // For live HLS the element's duration is only what's transcoded so far
+    // (grows as ffmpeg runs) — use the real, server-known total instead so the
+    // time display / seek bar are correct from the first frame.
+    if(d&&d.hls&&d.duration_seconds>0)return d.duration_seconds;
+    return V.duration;
+  }
   function seekTo(t){
     if(!d)return;
     t=Math.max(0,t);
-    if(V.duration)t=Math.min(t,V.duration);
+    const dur=totalDur();
+    if(dur)t=Math.min(t,dur);
     V.currentTime=t;
   }
 
@@ -1353,31 +1360,41 @@ const PLAYER=(function(){
     hlsPk=pk;
     V.pause();V.removeAttribute('src');V.load();
     STAGE.classList.add('paused');PLAY.textContent='▶';
-    const resume=()=>{if(pos>2){try{V.currentTime=pos;}catch(e){}}};
+    // Show a "preparing" spinner until playback actually starts — the live
+    // transcode needs a moment to build a buffer lead on first open.
+    SPIN.style.display='flex';
+    const stopSpin=()=>{SPIN.style.display='none';};
+    V.addEventListener('playing',stopSpin,{once:true});
+    setTimeout(stopSpin,25000); // safety: never leave it spinning forever
+    const start=pos>2?pos:0;
     // Apple (iPhone/Safari): native HLS — better battery/PiP, and hls.js's MSE
     // path isn't available on iPhone anyway.
     if(V.canPlayType('application/vnd.apple.mpegurl')){
       V.src=url;
-      V.addEventListener('loadedmetadata',function h(){V.removeEventListener('loadedmetadata',h);resume();},{once:true});
+      if(start>0)V.addEventListener('loadedmetadata',function h(){V.removeEventListener('loadedmetadata',h);try{V.currentTime=start;}catch(e){}},{once:true});
       if(play)V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
       return;
     }
     ensureHlsLib().then(()=>{
       if(hlsPk!==pk)return; // superseded by another load while the lib was fetching
-      if(!window.Hls||!Hls.isSupported()){console.error('[hls] not supported by this browser');return;}
-      const hls=new Hls({maxBufferLength:30});
+      if(!window.Hls||!Hls.isSupported()){console.error('[hls] not supported by this browser');stopSpin();return;}
+      // startPosition pins the start to 0 (or the resume point). Without it,
+      // hls.js sees the still-growing (no-ENDLIST) event playlist as *live* and
+      // starts at the transcode head — which permanently rides the underrun
+      // edge (stalls, audio never starts, bogus "0:37/0:04" timer).
+      const hls=new Hls({maxBufferLength:30,startPosition:start});
       hlsInst=hls;
       hls.loadSource(url);
       hls.attachMedia(V);
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resume();if(play)V.play().catch(()=>{});});
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{if(play)V.play().catch(()=>{});});
       hls.on(Hls.Events.ERROR,(evt,data)=>{
         console.error('[hls]',data.type,data.details,'fatal='+data.fatal);
         if(!data.fatal)return;
         if(data.type===Hls.ErrorTypes.NETWORK_ERROR){hls.startLoad();}
         else if(data.type===Hls.ErrorTypes.MEDIA_ERROR){hls.recoverMediaError();}
-        else{teardownHls();}
+        else{teardownHls();stopSpin();}
       });
-    }).catch(e=>console.error('[hls] failed to load hls.js',e));
+    }).catch(e=>{console.error('[hls] failed to load hls.js',e);stopSpin();});
   }
 
   /* ---- apply data (after fetch or SSR) ---- */
@@ -1397,10 +1414,10 @@ const PLAYER=(function(){
     // convert button (rendered below, in the info panel) stays available either way.
     const startPos=parseFloat(data.position)||0;
     V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
-    if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}
-    else{teardownHls();loadSource(data.stream_url,startPos,play);}
+    if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // manages SPIN itself
+    else{teardownHls();loadSource(data.stream_url,startPos,play);SPIN.style.display='none';}
     setupMediaSession(data);
-    SPIN.style.display='none'; renderInfo(data); setupConversion(data);
+    renderInfo(data); setupConversion(data);
   }
 
   function fetchApply(id,play,startPos,qp){

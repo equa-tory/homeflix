@@ -446,6 +446,14 @@ def _hls_ready(d):
     return os.path.exists(m) and os.path.getsize(m) > 0
 
 
+def _hls_seg_count(d):
+    try:
+        return sum(1 for f in os.listdir(d)
+                   if f.startswith("seg_") and f.endswith(".ts"))
+    except OSError:
+        return 0
+
+
 def _hls_complete(d):
     """A finished transcode leaves a playlist with #EXT-X-ENDLIST and all its
     segments on disk — reuse it instead of re-transcoding on replay/seek-back."""
@@ -558,11 +566,13 @@ def start_hls(video):
         with open(os.path.join(d, "ffmpeg.pid"), "w") as f:
             f.write(str(proc.pid))
         threading.Thread(target=_drain_hls, args=(proc.stderr, pk), daemon=True).start()
-        # Hold the lock until the first playlist is written, so a second worker
-        # blocked on the lock then sees _hls_live/_hls_ready and reuses instead
-        # of restarting mid-warmup.
-        for _ in range(60):      # up to ~6s
-            if _hls_ready(d) or proc.poll() is not None:
+        # Build a small head start (a few segments) before returning, so the
+        # client opens with a buffer lead instead of playing right at the
+        # transcode head (that underruns -> early stall / audio not started).
+        # Also keeps the lock held through warmup so a second worker blocked on
+        # it then sees _hls_live and reuses instead of restarting mid-warmup.
+        for _ in range(100):     # up to ~10s
+            if _hls_seg_count(d) >= 3 or _hls_complete(d) or proc.poll() is not None:
                 break
             time.sleep(0.1)
         _hls_reap()
