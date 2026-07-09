@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>{{ spa_title|default:"HomeFlix" }}</title>
 <link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/192.png">
+<link rel="shortcut icon" href="/icons/32.png">
 <meta name="theme-color" content="#f0654a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -504,6 +507,11 @@ html.player-locked{overflow:hidden}
 .ph-spinner{width:36px; height:36px; border:3px solid var(--border); border-top-color:var(--accent);
   border-radius:50%; animation:phSpin .8s linear infinite}
 @keyframes phSpin{to{transform:rotate(360deg)}}
+/* "Preparing…" overlay shown over the video while a live HLS transcode warms up */
+.ph-prep{position:absolute; inset:0; z-index:5; display:none;
+  flex-direction:column; align-items:center; justify-content:center; gap:12px;
+  background:rgba(0,0,0,.55); color:#fff; font-size:14px; font-weight:600;
+  letter-spacing:.02em; pointer-events:none}
 
 /* ====== MOBILE ====== */
 @media (max-width:700px){
@@ -656,6 +664,7 @@ html.player-locked{overflow:hidden}
     <div class="ph-stage-wrap">
       <div class="ph-stage paused" id="phStage" tabindex="0">
         <video id="theVideo" playsinline preload="metadata"></video>
+        <div class="ph-prep" id="phPrep"><div class="ph-spinner"></div><span>Preparing…</span></div>
         <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">▶</span></div>
 
         <div class="ctrls">
@@ -1217,6 +1226,7 @@ const PLAYER=(function(){
   const SCRL  = document.getElementById('phScroll');
   const STAGE = document.getElementById('phStage');
   const V     = document.getElementById('theVideo');
+  const PREP  = document.getElementById('phPrep');
   const HDR   = document.getElementById('phHdr');
   const BACK  = document.getElementById('phBack');
   const MINBTN= document.getElementById('phMinBtn');
@@ -1352,6 +1362,7 @@ const PLAYER=(function(){
   }
   let hlsInst=null, hlsPk=null;
   function teardownHls(){
+    if(PREP)PREP.style.display='none';
     if(hlsInst){try{hlsInst.destroy();}catch(e){}hlsInst=null;}
     if(hlsPk!=null){post('/hls/'+hlsPk+'/stop/').catch(()=>{});hlsPk=null;}
   }
@@ -1360,10 +1371,10 @@ const PLAYER=(function(){
     hlsPk=pk;
     V.pause();V.removeAttribute('src');V.load();
     STAGE.classList.add('paused');PLAY.textContent='▶';
-    // Show a "preparing" spinner until playback actually starts — the live
-    // transcode needs a moment to build a buffer lead on first open.
-    SPIN.style.display='flex';
-    const stopSpin=()=>{SPIN.style.display='none';};
+    // Show a "Preparing…" overlay over the video until playback actually
+    // starts — the live transcode needs a moment to build a buffer lead.
+    PREP.style.display='flex';
+    const stopSpin=()=>{PREP.style.display='none';};
     V.addEventListener('playing',stopSpin,{once:true});
     setTimeout(stopSpin,25000); // safety: never leave it spinning forever
     const start=pos>2?pos:0;
@@ -1414,10 +1425,10 @@ const PLAYER=(function(){
     // convert button (rendered below, in the info panel) stays available either way.
     const startPos=parseFloat(data.position)||0;
     V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
-    if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // manages SPIN itself
-    else{teardownHls();loadSource(data.stream_url,startPos,play);SPIN.style.display='none';}
+    if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
+    else{teardownHls();loadSource(data.stream_url,startPos,play);}
     setupMediaSession(data);
-    renderInfo(data); setupConversion(data);
+    SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }
 
   function fetchApply(id,play,startPos,qp){
@@ -1661,7 +1672,9 @@ const PLAYER=(function(){
     if('mediaSession' in navigator&&dur){try{navigator.mediaSession.setPositionState(
       {duration:dur,playbackRate:V.playbackRate,position:cur});}catch(e){}}
   });
-  V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(V.duration);renderNoteDots();});
+  // Use totalDur() not V.duration: for live HLS the element's duration is only
+  // what's transcoded so far, which would clobber the real server duration.
+  V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(totalDur());renderNoteDots();});
   V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
     BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
   V.addEventListener('ended',()=>{savePos();if(autoplay&&d&&d.next_id)setTimeout(()=>navigate(d.next_id,true),800);});

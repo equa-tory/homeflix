@@ -549,7 +549,10 @@ def start_hls(video):
         # detaches ffmpeg so a recycled gunicorn worker doesn't take it down.
         cmd = [
             "ffmpeg", "-y", "-nostats", "-loglevel", "warning", "-i", video.file_path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+            # ultrafast (vs veryfast for the on-disk Convert): live playback wants
+            # the whole file transcoded ASAP so seeking works sooner — the bigger
+            # temp segments don't matter on a LAN. crf 23 keeps size sane.
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_SECONDS})",
             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
             "-f", "hls",
