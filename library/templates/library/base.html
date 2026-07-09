@@ -502,6 +502,7 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .note-del:hover{color:var(--accent)}
 .rec-section{margin-top:32px; padding-bottom:60px}
 .cbtn.looping{color:var(--accent)}
+.cbtn.shuffling{color:var(--accent)}
 .cc-wrap{position:relative}
 .cbtn-cc{font-size:13px; font-weight:800; letter-spacing:.02em}
 .cbtn-cc.active{color:var(--accent)}
@@ -841,7 +842,8 @@ html.player-locked{overflow:hidden}
                 </div>
               </div>
             </div>
-            <button class="cbtn" id="phLoop" title="Loop">↻</button>
+            <button class="cbtn" id="phShuffle" title="Shuffle">🔀</button>
+            <button class="cbtn" id="phLoop" title="Repeat">↻</button>
             <a class="cbtn" id="phDownload" title="Download" download>⇩</a>
             <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
           </div>
@@ -905,6 +907,17 @@ function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
   'X-SPA':'1','Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams(d||{})}).then(r=>r.json());}
 function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// Grid thumbnails: TV browsers under load sometimes drop an image request
+// (see the /thumb/ Cache-Control fix -- this is the client-side half). One
+// retry with a cache-busting query param covers a transient drop; a second
+// failure falls back to the plain placeholder instead of a permanently
+// broken tile.
+function thumbErr(img){
+  if(!img.dataset.retried){img.dataset.retried='1';
+    img.src=img.src.split('?')[0]+'?r='+Date.now();return;}
+  const ph=document.createElement('div');ph.className='placeholder';ph.textContent='▶';
+  img.replaceWith(ph);
+}
 function fmt(s){s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
   return h?`${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`:`${m}:${String(x).padStart(2,'0')}`;}
 
@@ -1263,7 +1276,7 @@ const PAGE_INIT={
     function makeCard(item){
       const badge=item.needs_convert?'<span class="warn">MKV/HEVC</span>':(item.quality?`<span class="qbadge">${item.quality}</span>`:'');
       const prog=item.progress>1?`<div class="progress" style="width:${item.progress}%"></div>`:'';
-      const thumb=item.thumb?`<img src="${item.thumb}" alt="" loading="lazy">`:'<div class="placeholder">▶</div>';
+      const thumb=item.thumb?`<img src="${item.thumb}" alt="" loading="lazy" onerror="thumbErr(this)">`:'<div class="placeholder">▶</div>';
       const sub=esc((item.channel?item.channel+' · ':'')+item.date+(item.favorite?' · ★':''));
       const el=document.createElement('a');
       el.className='vcard card nav-item';el.tabIndex=0;el.href=item.url;
@@ -1447,6 +1460,7 @@ const PLAYER=(function(){
   const MUTE  = document.getElementById('phMute');
   const FULL  = document.getElementById('phFull');
   const LOOP  = document.getElementById('phLoop');
+  const SHUF  = document.getElementById('phShuffle');
   const DL    = document.getElementById('phDownload');
   const VOL   = document.getElementById('phVol');
   const PREV  = document.getElementById('phPrev');
@@ -1483,7 +1497,36 @@ const PLAYER=(function(){
   const CCADDSTATUS=document.getElementById('phCCAddStatus');
 
   const SKEY='homeflix_player';
-  let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
+  let d=null, notes=[], autoplay=false, repeat='off', shuffle=false, lastSave=0, pushed=false, ignorePop=false;
+  // Queue-aware prev/next: everything that used to read d.prev_id/d.next_id
+  // directly now goes through these, so "repeat all" (wrap to the other end
+  // of the current queue) and "shuffle" (random other member of the queue)
+  // work the same everywhere the queue itself works -- library grid,
+  // playlists, smart playlists, history, hidden (see _build_watch_data's
+  // queue_ids in views.py, which follows the same pl=/sp=/ctx= that opened
+  // the player).
+  function nextId(){
+    if(!d)return null;
+    const q=d.queue_ids||[];
+    if(shuffle&&q.length>1){
+      let n;do{n=q[Math.floor(Math.random()*q.length)];}while(n===d.id&&q.length>1);
+      return n;
+    }
+    if(d.next_id)return d.next_id;
+    if(repeat==='all'&&q.length)return q[0];
+    return null;
+  }
+  function prevId(){
+    if(!d)return null;
+    const q=d.queue_ids||[];
+    if(shuffle&&q.length>1){
+      let n;do{n=q[Math.floor(Math.random()*q.length)];}while(n===d.id&&q.length>1);
+      return n;
+    }
+    if(d.prev_id)return d.prev_id;
+    if(repeat==='all'&&q.length)return q[q.length-1];
+    return null;
+  }
   // Small wrappers around V.currentTime/V.duration/seeking — kept as the one
   // place everything (progress bar, save-position, media session, notes,
   // keyboard seek) reads/writes position through, rather than scattering
@@ -1826,9 +1869,10 @@ const PLAYER=(function(){
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
+    repeat=data.repeat||'off'; shuffle=!!data.shuffle;
     HDR.textContent=data.title; MBAR_T.textContent=data.title;
-    PREV.disabled=!data.prev_id; NEXT.disabled=!data.next_id;
-    if(MBAR_SB)MBAR_SB.disabled=!data.prev_id; if(MBAR_SF)MBAR_SF.disabled=!data.next_id;
+    PREV.disabled=!prevId(); NEXT.disabled=!nextId();
+    if(MBAR_SB)MBAR_SB.disabled=!prevId(); if(MBAR_SF)MBAR_SF.disabled=!nextId();
     DURLB.textContent=data.duration_label;
     if(DL)DL.href=data.download_url;
     document.title=data.title+' — HomeFlix';
@@ -1839,7 +1883,14 @@ const PLAYER=(function(){
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
     const startPos=parseFloat(data.position)||0;
-    V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
+    // repeat 'one' = native single-video loop (no 'ended' event fires, so the
+    // queue-advance logic below never even sees it); repeat 'all'/'off' rely
+    // on nextId()/prevId() wrapping (or not) at the ends of the queue.
+    V.loop=(repeat==='one');
+    LOOP.classList.toggle('looping',repeat!=='off');
+    LOOP.textContent=(repeat==='one')?'🔂':'↻';
+    LOOP.title=repeat==='off'?'Repeat: off':(repeat==='one'?'Repeat: one':'Repeat: all');
+    if(SHUF){SHUF.classList.toggle('shuffling',shuffle);SHUF.title=shuffle?'Shuffle: on':'Shuffle: off';}
     if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
     else{teardownHls();loadSource(data.stream_url,startPos,play);}
     if(CCPOP)CCPOP.classList.remove('open'); // new video -> close any open CC popover from the last one
@@ -1895,8 +1946,8 @@ const PLAYER=(function(){
     ms.setActionHandler('play',()=>V.play());ms.setActionHandler('pause',()=>V.pause());
     ms.setActionHandler('seekbackward',()=>seekTo(curTime()-10));ms.setActionHandler('seekforward',()=>seekTo(curTime()+10));
     ms.setActionHandler('seekto',ev=>{if(ev.seekTime!=null)seekTo(ev.seekTime);});
-    ms.setActionHandler('previoustrack',data.prev_id?()=>navigate(data.prev_id):null);
-    ms.setActionHandler('nexttrack',data.next_id?()=>navigate(data.next_id,true):null);
+    ms.setActionHandler('previoustrack',prevId()?()=>navigate(prevId()):null);
+    ms.setActionHandler('nexttrack',nextId()?()=>navigate(nextId(),true):null);
   }
 
   /* ---- info panel ---- */
@@ -2178,7 +2229,7 @@ const PLAYER=(function(){
   V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(totalDur());renderNoteDots();});
   V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
     BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
-  V.addEventListener('ended',()=>{savePos();if(autoplay&&d&&d.next_id)setTimeout(()=>navigate(d.next_id,true),800);});
+  V.addEventListener('ended',()=>{savePos();const nx=nextId();if(autoplay&&nx)setTimeout(()=>navigate(nx,true),800);});
   // Diagnostic only. MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE,
   // 4=SRC_NOT_SUPPORTED.
   V.addEventListener('error',()=>{if(V.error)console.error('[player] video error',V.error.code,V.error.message);});
@@ -2214,13 +2265,26 @@ const PLAYER=(function(){
   if(VOL){VOL.addEventListener('input',e=>{e.stopPropagation();V.volume=parseFloat(VOL.value);V.muted=V.volume===0;syncVol();});
     VOL.addEventListener('pointerdown',e=>e.stopPropagation());}
   V.addEventListener('volumechange',syncVol);
-  LOOP.onclick=e=>{e.stopPropagation();V.loop=!V.loop;LOOP.classList.toggle('looping',V.loop);
-    if(d&&d.loop_toggle_url)post(d.loop_toggle_url);};
+  function applyRepeat(val){
+    repeat=val; V.loop=(repeat==='one'); LOOP.classList.toggle('looping',repeat!=='off');
+    LOOP.textContent=(repeat==='one')?'🔂':'↻';
+    LOOP.title=repeat==='off'?'Repeat: off':(repeat==='one'?'Repeat: one':'Repeat: all');
+    PREV.disabled=!prevId(); NEXT.disabled=!nextId();
+    if(MBAR_SB)MBAR_SB.disabled=!prevId(); if(MBAR_SF)MBAR_SF.disabled=!nextId();
+  }
+  LOOP.onclick=e=>{e.stopPropagation();
+    if(d&&d.repeat_toggle_url)post(d.repeat_toggle_url).then(r=>applyRepeat(r.repeat));};
+  if(SHUF)SHUF.onclick=e=>{e.stopPropagation();
+    if(!d||!d.shuffle_toggle_url)return;
+    post(d.shuffle_toggle_url).then(r=>{shuffle=!!r.shuffle;SHUF.classList.toggle('shuffling',shuffle);
+      SHUF.title=shuffle?'Shuffle: on':'Shuffle: off';
+      PREV.disabled=!prevId();NEXT.disabled=!nextId();
+      if(MBAR_SB)MBAR_SB.disabled=!prevId();if(MBAR_SF)MBAR_SF.disabled=!nextId();});};
   if(DL)DL.onclick=e=>e.stopPropagation();
 
   /* prev/next: swap source on the SAME element -> iOS keeps autoplay */
-  PREV.onclick=e=>{e.stopPropagation();if(d&&d.prev_id)navigate(d.prev_id,true);};
-  NEXT.onclick=e=>{e.stopPropagation();if(d&&d.next_id)navigate(d.next_id,true);};
+  PREV.onclick=e=>{e.stopPropagation();const p=prevId();if(p)navigate(p,true);};
+  NEXT.onclick=e=>{e.stopPropagation();const n=nextId();if(n)navigate(n,true);};
 
   /* auto-hide controls */
   let hideT;
@@ -2255,8 +2319,8 @@ const PLAYER=(function(){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
       case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+10);}break;
       case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-10);}break;
-      case'ArrowUp':e.preventDefault();if(d&&d.next_id)navigate(d.next_id,true);break;
-      case'ArrowDown':e.preventDefault();if(d&&d.prev_id)navigate(d.prev_id);break;
+      case'ArrowUp':e.preventDefault();{const n=nextId();if(n)navigate(n,true);}break;
+      case'ArrowDown':e.preventDefault();{const p=prevId();if(p)navigate(p);}break;
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
       case'm':case'M':V.muted=!V.muted;syncVol();break;
@@ -2304,8 +2368,8 @@ const PLAYER=(function(){
         // the browser doesn't also fire a trailing synthetic click on the
         // (now different) video underneath.
         e.preventDefault();
-        if(dy<0&&d&&d.next_id)navigate(d.next_id,true);
-        else if(dy>0&&d&&d.prev_id)navigate(d.prev_id,true);
+        if(dy<0){const n=nextId();if(n)navigate(n,true);}
+        else if(dy>0){const p=prevId();if(p)navigate(p,true);}
       } else if(!EL.classList.contains('ph-shorts')&&dy>70&&dt<500){
         // Same reason: without this, a trailing synthetic click hits STAGE's
         // click handler right after minimize() just set state to 'mini' ->
@@ -2346,8 +2410,8 @@ const PLAYER=(function(){
   /* mini bar buttons */
   MBAR_E.onclick=e=>{e.stopPropagation();expand();};
   MBAR_C.onclick=e=>{e.stopPropagation();close();};
-  if(MBAR_SB)MBAR_SB.onclick=e=>{e.stopPropagation();if(d&&d.prev_id)navigate(d.prev_id,true);};
-  if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();if(d&&d.next_id)navigate(d.next_id,true);};
+  if(MBAR_SB)MBAR_SB.onclick=e=>{e.stopPropagation();const p=prevId();if(p)navigate(p,true);};
+  if(MBAR_SF)MBAR_SF.onclick=e=>{e.stopPropagation();const n=nextId();if(n)navigate(n,true);};
   if(MBAR_TL)MBAR_TL.addEventListener('pointerdown',e=>{
     e.stopPropagation();
     const dur=totalDur();if(!dur)return;

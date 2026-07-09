@@ -9,9 +9,12 @@ from django.db.models import Q, Sum, F, Value
 from django.db.models.functions import Replace
 from django.http import (
     StreamingHttpResponse, HttpResponse, JsonResponse, Http404, FileResponse,
+    HttpResponseNotModified,
 )
 from django.shortcuts import render, get_object_or_404, redirect
 from django.views.decorators.http import require_POST
+from django.utils.http import http_date
+from django.views.static import was_modified_since
 
 from .models import Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting, VideoSubtitle
 from . import services
@@ -430,9 +433,12 @@ def _build_watch_data(request, pk):
         "convert_status_url": f"/video/{pk}/convert/status/",
         "convert_cancel_url": f"/video/{pk}/convert/cancel/",
         "needs_convert": video.needs_convert_ui,
-        "loop": Setting.get("loop", "0") == "1",
-        "loop_toggle_url": "/loop/",
+        "repeat": Setting.get("repeat", "off"),
+        "repeat_toggle_url": "/repeat/",
+        "shuffle": Setting.get("shuffle", "0") == "1",
+        "shuffle_toggle_url": "/shuffle/",
         "next_id": next_id, "prev_id": prev_id,
+        "queue_ids": queue_ids,
         "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
         "regen_thumb_url": f"/video/{pk}/thumb/regen/",
         "thumbnail_percent": video.thumbnail_percent or 0,
@@ -483,11 +489,25 @@ def watch_api(request, pk):
 
 # ---- media serving ---------------------------------------------------------
 
+def _thumb_file_response(request, path, content_type="image/jpeg"):
+    """Serve a thumbnail file with long-lived Cache-Control + Last-Modified so
+    TV browsers stop re-downloading every tile on each scroll / card-recycle
+    (the grid is virtualized -- see makeCard in base.html -- which destroys
+    and recreates <img> nodes as you scroll). 304s on repeat requests instead
+    of re-transferring the whole JPEG."""
+    mtime = os.path.getmtime(path)
+    if not was_modified_since(request.META.get("HTTP_IF_MODIFIED_SINCE"), mtime):
+        return HttpResponseNotModified()
+    resp = FileResponse(open(path, "rb"), content_type=content_type)
+    resp["Cache-Control"] = "public, max-age=31536000"
+    resp["Last-Modified"] = http_date(mtime)
+    return resp
+
+
 def thumb(request, pk):
     video = get_object_or_404(Video, pk=pk)
     if video.thumbnail_path and os.path.exists(video.thumbnail_path):
-        return FileResponse(open(video.thumbnail_path, "rb"),
-                            content_type="image/jpeg")
+        return _thumb_file_response(request, video.thumbnail_path)
     raise Http404("No thumbnail")
 
 
@@ -495,7 +515,7 @@ def playlist_thumb(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
     if pl.thumbnail_path and os.path.exists(pl.thumbnail_path):
         content_type = mimetypes.guess_type(pl.thumbnail_path)[0] or "image/jpeg"
-        return FileResponse(open(pl.thumbnail_path, "rb"), content_type=content_type)
+        return _thumb_file_response(request, pl.thumbnail_path, content_type)
     raise Http404("No thumbnail")
 
 
@@ -666,7 +686,7 @@ def smart_playlist_thumb(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     if sp.thumbnail_path and os.path.exists(sp.thumbnail_path):
         content_type = mimetypes.guess_type(sp.thumbnail_path)[0] or "image/jpeg"
-        return FileResponse(open(sp.thumbnail_path, "rb"), content_type=content_type)
+        return _thumb_file_response(request, sp.thumbnail_path, content_type)
     raise Http404("No thumbnail")
 
 
@@ -762,10 +782,20 @@ def toggle_autoplay(request):
 
 
 @require_POST
-def toggle_loop(request):
-    new = "0" if Setting.get("loop", "0") == "1" else "1"
-    Setting.set("loop", new)
-    return JsonResponse({"loop": new == "1"})
+def toggle_repeat(request):
+    # Cycle: off -> all (loop the whole queue) -> one (loop this video) -> off.
+    order = ["off", "all", "one"]
+    cur = Setting.get("repeat", "off")
+    new = order[(order.index(cur) + 1) % len(order)] if cur in order else "off"
+    Setting.set("repeat", new)
+    return JsonResponse({"repeat": new})
+
+
+@require_POST
+def toggle_shuffle(request):
+    new = "0" if Setting.get("shuffle", "0") == "1" else "1"
+    Setting.set("shuffle", new)
+    return JsonResponse({"shuffle": new == "1"})
 
 
 @require_POST
