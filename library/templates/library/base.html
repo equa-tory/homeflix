@@ -194,9 +194,9 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   background:var(--bg);color:var(--text);font-size:13px}
 .bulk-stars span{cursor:pointer;font-size:26px;color:var(--border);padding:2px}
 .bulk-stars span.on{color:var(--accent)}
-.sel-mode .vcard{cursor:pointer}
-.sel-mode .vcard.selected .thumb{outline:2px solid var(--accent);outline-offset:-2px}
-.sel-mode .vcard.selected .thumb::after{content:'✓';position:absolute;top:5px;left:5px;
+.sel-mode .card{cursor:pointer}
+.sel-mode .card.selected .thumb{outline:2px solid var(--accent);outline-offset:-2px}
+.sel-mode .card.selected .thumb::after{content:'✓';position:absolute;top:5px;left:5px;
   width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
   font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
@@ -285,7 +285,15 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 #phSubText:empty{display:none}
 .ph-stage-wrap.subs-over-ctrls .ph-subbar{position:absolute; left:0; right:0;
   bottom:64px; padding:0 16px; z-index:4}
-#player.ph-mini .ph-subbar{display:none}
+/* Mini player: keep captions on (was display:none), but the box is tiny and
+   the bottom half is the hover-reveal .ph-minibar -- pin to the top, small,
+   single line. font-size is set inline per the user's size pref
+   (applyCueStyle) -- !important is the only way to still cap it here. */
+#player.ph-mini .ph-subbar{display:block; position:absolute; top:4px; left:0; right:0;
+  bottom:auto; padding:0 6px; z-index:3; font-size:11px!important; line-height:1.3;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#player.ph-mini #phSubText{padding:.15em .5em; max-width:100%; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom}
 
 .ph-stage{position:relative; background:#000; aspect-ratio:16/9; overflow:hidden;
   user-select:none; border-radius:var(--radius)}
@@ -495,8 +503,22 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .cbtn-cc.active{color:var(--accent)}
 .cc-pop{position:absolute; bottom:calc(100% + 8px); right:0; min-width:200px;
   background:var(--surface); border:1px solid var(--border); border-radius:10px;
-  padding:12px; box-shadow:0 8px 30px #000a; display:none; z-index:210; color:var(--text)}
+  padding:12px; box-shadow:0 8px 30px #000a; display:none; z-index:210; color:var(--text);
+  /* Explicit self-override -- .ctrls (an ancestor) sits at pointer-events:none
+     by default and pointer-events is inherited, so without this the popover
+     could go unclickable-by-mouse (while staying keyboard-usable, since focus
+     ignores pointer-events) the moment the overlay's auto-hide logic touches
+     .ctrls while this is still open. See activity()'s hide-timeout guard too. */
+  pointer-events:auto}
 .cc-pop.open{display:block}
+@media(max-width:700px){
+  /* Anchored-to-button positioning runs off the edge of a narrow phone
+     screen -- float it centered instead, escaping any ancestor clipping
+     since position:fixed is relative to the viewport, not the stage. */
+  .cc-pop{position:fixed; top:50%; left:50%; right:auto; bottom:auto;
+    transform:translate(-50%,-50%); width:min(320px,90vw); max-height:80vh;
+    overflow-y:auto}
+}
 .cc-pop label{display:block; color:var(--muted); font-size:11px; text-transform:uppercase;
   letter-spacing:.06em; font-weight:700; margin-bottom:6px}
 .cc-tracks{display:flex; flex-direction:column; gap:2px; margin-bottom:10px; max-height:160px; overflow-y:auto}
@@ -940,7 +962,10 @@ const SELECT_MODE=(function(){
     active=!active;
     document.body.classList.toggle('sel-mode',active);
     if(!active)sel.clear();
-    document.querySelectorAll('.vcard').forEach(card=>{
+    // .card, not .vcard -- vcard is only the Library grid's own absolute-
+    // positioning class; server-rendered pages (Playlist/Hidden) just use
+    // .card, and select-mode needs to work on both.
+    document.querySelectorAll('.card').forEach(card=>{
       const m=card.href&&card.href.match(/\/watch\/(\d+)\//);
       if(m)card.classList.toggle('selected',active&&sel.has(parseInt(m[1])));
     });
@@ -964,7 +989,7 @@ const SELECT_MODE=(function(){
   function isActive(){return active;}
   function isSelected(id){return sel.has(id);}
   function getIds(){return[...sel];}
-  function clear(){sel.clear();document.querySelectorAll('.vcard.selected').forEach(c=>c.classList.remove('selected'));updateBar();}
+  function clear(){sel.clear();document.querySelectorAll('.card.selected').forEach(c=>c.classList.remove('selected'));updateBar();}
 
   /* ---- bulk bar wiring ---- */
   (function initBar(){
@@ -1100,7 +1125,7 @@ function wireThumbTool(root){
 
 /* Shared by any page with select-mode: the toolbar's "Select" button + the
    floating FAB + the 's' keyboard shortcut. Pass {selectAll:true} to also
-   wire 'a' -> select every .vcard currently in the DOM -- only correct on
+   wire 'a' -> select every .card currently in the DOM -- only correct on
    pages that render everything at once (Playlist/Hidden); Library's grid is
    virtualised (only on-screen cards exist in the DOM), so it's left off
    there to avoid silently only selecting whatever's scrolled into view.
@@ -1122,7 +1147,7 @@ function wireSelectUI(root,opts){
   }
   if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
   function selectAllVisible(){
-    document.querySelectorAll('.vcard').forEach(card=>{
+    document.querySelectorAll('.card').forEach(card=>{
       const m=card.href&&card.href.match(/\/watch\/(\d+)\//);
       if(!m)return;
       const id=parseInt(m[1]);
@@ -1939,8 +1964,12 @@ const PLAYER=(function(){
   let ripT;
   function ripple(icon){RICON.textContent=icon;STAGE.classList.add('show-ripple');
     clearTimeout(ripT);ripT=setTimeout(()=>STAGE.classList.remove('show-ripple'),550);}
-  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';ripple('▶');syncSubPos();});
-  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';ripple('⏸');savePos();syncSubPos();});
+  // ripple()'s icon is what tapping the (now-persistent, round 8) center
+  // button will do NEXT -- same convention PLAY/MBAR_P use one line earlier,
+  // not "what action was just taken" (that was backwards: showed ▶ while
+  // playing, so tapping it to pause looked like a play button).
+  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';ripple('⏸');syncSubPos();});
+  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';ripple('▶');savePos();syncSubPos();});
 
   // Mouse vs. touch need different tap semantics below (desktop click still
   // toggles play; phone tap toggles the overlay -- see item 3).
@@ -2050,7 +2079,15 @@ const PLAYER=(function(){
   function activity(){
     STAGE.classList.remove('force-hide-ctrls');
     STAGE.classList.add('show-ctrls');clearTimeout(hideT);
-    hideT=setTimeout(()=>{if(!V.paused)STAGE.classList.remove('show-ctrls');syncSubPos();},2800);
+    hideT=setTimeout(()=>{
+      // Don't let the overlay (and the CC popover living inside it) fade out
+      // from under someone still using it -- was causing the Size/Background
+      // sliders to silently lose mouse input (pointer-events inherits down
+      // from .ctrls) partway through an adjustment that took over 2.8s.
+      if(CCPOP&&CCPOP.classList.contains('open'))return;
+      if(!V.paused)STAGE.classList.remove('show-ctrls');
+      syncSubPos();
+    },2800);
     syncSubPos();
   }
   STAGE.addEventListener('mousemove',activity);STAGE.addEventListener('touchstart',activity,{passive:true});
@@ -2132,9 +2169,12 @@ const PLAYER=(function(){
     lastSave=t;post(d.save_url,{position:t.toFixed(1)});}
   window.addEventListener('pagehide',()=>{
     if(!d)return;
-    // Stop the server-side transcode + free its segments when the tab closes.
-    if(d.hls&&hlsPk!=null&&navigator.sendBeacon)
-      navigator.sendBeacon(d.hls_stop_url,new URLSearchParams({csrfmiddlewaretoken:CSRF}));
+    // Deliberately NOT stopping the HLS transcode here -- pagehide also fires
+    // on a plain reload, and stopping+deleting segments on every reload meant
+    // re-opening the same mkv a second later always re-warmed from scratch.
+    // Explicit close/switch-video (teardownHls, called from close() and from
+    // loadHlsSource()/applyData()) still stops it right away; an abandoned
+    // session here just ages out server-side (services.HLS_TTL).
     if(curTime()<1)return;persist();
     navigator.sendBeacon&&navigator.sendBeacon(d.save_url,
       new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF}));});

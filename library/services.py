@@ -417,7 +417,14 @@ except ImportError:              # Windows dev box (the server itself runs on Li
 
 _HLS_FALLBACK_LOCK = threading.Lock()
 HLS_SEG_SECONDS = 4
-HLS_TTL = 1800                   # reap dead session dirs idle longer than this
+# Idle sessions (nothing polling their playlist/segments -- an actively
+# watched video keeps bumping this via touch_hls) get reaped after this many
+# seconds. Short on purpose: closing/reloading the page no longer stops the
+# transcode outright (see the pagehide comment in base.html) so a quick
+# reopen resumes instantly instead of re-warming up -- this TTL is what
+# eventually cleans up ones that were actually abandoned.
+HLS_TTL = 300
+HLS_MAX_CONCURRENT = 3           # cap on simultaneously-transcoding sessions
 
 
 def _hls_dir(pk):
@@ -528,6 +535,34 @@ def _hls_reap():
             shutil.rmtree(d, ignore_errors=True)
 
 
+def _hls_enforce_concurrency_cap(exclude_pk):
+    """Since sessions no longer get stopped on every page reload (see the
+    pagehide comment in base.html), a reload-happy session across many
+    different videos could otherwise leave an unbounded number of ffmpeg
+    transcodes running. Cap simultaneously-live sessions at
+    HLS_MAX_CONCURRENT, evicting the least-recently-touched ones first to
+    make room for the one about to start."""
+    root = settings.HLS_DIR
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return
+    live = []
+    for name in names:
+        if name == str(exclude_pk):
+            continue
+        d = os.path.join(root, name)
+        if os.path.isdir(d) and _hls_live(d):
+            try:
+                live.append((os.path.getmtime(d), name))
+            except OSError:
+                pass
+    live.sort()  # oldest-touched first
+    while len(live) >= HLS_MAX_CONCURRENT:
+        _, name = live.pop(0)
+        stop_hls(int(name))
+
+
 def start_hls(video):
     """Ensure a live HLS transcode is running for `video`; return its session
     dir (index.m3u8 + seg_*.ts). Cross-worker safe: concurrent callers reuse the
@@ -539,6 +574,7 @@ def start_hls(video):
     with _hls_lock(pk):
         if _hls_live(d) or _hls_complete(d):
             return d
+        _hls_enforce_concurrency_cap(pk)
         # Nothing alive/complete -> clean up any stale pid/files and (re)start once.
         old = _hls_read_pid(d)
         if old:
