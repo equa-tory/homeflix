@@ -436,6 +436,9 @@ def _build_watch_data(request, pk):
         "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
         "regen_thumb_url": f"/video/{pk}/thumb/regen/",
         "thumbnail_percent": video.thumbnail_percent or 0,
+        "rename_url": f"/video/{pk}/rename/",
+        "filename_stem": os.path.splitext(video.filename)[0],
+        "filename_ext": os.path.splitext(video.filename)[1],
         "source_url": video.source_url or "", "tech": tech,
         "favorite": video.favorite, "rating": video.rating,
         "favorite_url": f"/video/{pk}/favorite/",
@@ -584,6 +587,21 @@ def regen_thumb(request, pk):
     if is_spa(request):
         return JsonResponse({"ok": True})
     return redirect(request.META.get("HTTP_REFERER", "/"))
+
+
+@require_POST
+def rename_video_view(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    title = request.POST.get("title")
+    stem = request.POST.get("filename")
+    ok, err = services.rename_video(video, new_title=title, new_stem=stem)
+    if not ok:
+        return JsonResponse({"ok": False, "error": err}, status=400)
+    return JsonResponse({
+        "ok": True, "title": video.title,
+        "filename_stem": os.path.splitext(video.filename)[0],
+        "filename_ext": os.path.splitext(video.filename)[1],
+    })
 
 
 _PLAYLIST_THUMB_EXTS = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",

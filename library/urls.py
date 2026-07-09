@@ -45,6 +45,7 @@ urlpatterns = [
     # actions
     path("scan/", views.scan, name="scan"),
     path("video/<int:pk>/thumb/regen/", views.regen_thumb, name="regen_thumb"),
+    path("video/<int:pk>/rename/", views.rename_video_view, name="rename_video"),
     path("video/<int:pk>/progress/", views.save_progress, name="save_progress"),
     path("video/<int:pk>/favorite/", views.toggle_favorite, name="toggle_favorite"),
     path("video/<int:pk>/hide/", views.toggle_hidden, name="toggle_hidden"),

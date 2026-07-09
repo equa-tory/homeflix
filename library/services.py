@@ -939,6 +939,57 @@ def _sidecars_for(path):
     return found
 
 
+_BAD_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def rename_video(video, new_title=None, new_stem=None):
+    """Rename a video's display title and/or its actual file (+ sidecars) on
+    disk. `new_stem` is the filename WITHOUT extension -- the original
+    extension is always kept as-is, so a rename can't accidentally mislabel
+    the container/codec. Returns (ok, error) -- error is a short reason safe
+    to show the user; the title update (if any) still applies even if the
+    file rename part fails or isn't requested."""
+    if new_title is not None:
+        new_title = new_title.strip()
+        if new_title and new_title != video.title:
+            video.title = new_title
+            video.save(update_fields=["title"])
+
+    if not new_stem:
+        return True, None
+    new_stem = _BAD_FILENAME_CHARS.sub("", new_stem).strip()
+    if not new_stem:
+        return False, "Filename can't be empty"
+    if not os.path.exists(video.file_path):
+        return False, "File is missing on disk"
+
+    folder = os.path.dirname(video.file_path)
+    ext = os.path.splitext(video.file_path)[1]
+    new_name = new_stem + ext
+    new_path = os.path.join(folder, new_name)
+    if os.path.abspath(new_path) == os.path.abspath(video.file_path):
+        return True, None  # unchanged
+
+    if os.path.exists(new_path):
+        return False, "A file with that name already exists"
+
+    # Sidecars move alongside, same as organize_by_mtime's execute path --
+    # skip (don't clobber) if something's already sitting at the destination
+    # name for that particular sidecar extension.
+    for sc in _sidecars_for(video.file_path):
+        sc_ext = os.path.splitext(sc)[1]
+        sc_dst = os.path.join(folder, new_stem + sc_ext)
+        if not os.path.exists(sc_dst):
+            shutil.move(sc, sc_dst)
+
+    shutil.move(video.file_path, new_path)
+    video.file_path = new_path
+    video.rel_path = os.path.relpath(new_path, settings.LIBRARY_ROOT)
+    video.filename = new_name
+    video.save(update_fields=["file_path", "rel_path", "filename"])
+    return True, None
+
+
 def organize_by_mtime(execute=False):
     """Plan (and optionally perform) moving each video into LIBRARY_ROOT/YYYY-MM/DD/.
     Moves the video plus its sidecars; leaves unrelated files untouched.

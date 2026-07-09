@@ -272,14 +272,20 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 #player.ph-mini .ph-stage-wrap{max-width:none;margin:0}
 
 /* custom subtitle rendering -- see the HTML comment above #phSubBar and
-   PLAYER.renderActiveCue. Plain captions, in the video, pinned near the
-   bottom -- one fixed position (child of .ph-stage, inside its
-   overflow:hidden -- always part of the visible video frame on every
-   layout/viewport, including portrait/shorts on phone), clearing the
-   control bar's height so it never collides with the timeline/buttons. */
+   PLAYER.renderActiveCue. Plain captions, in the video (child of .ph-stage,
+   inside its overflow:hidden -- always part of the visible video frame on
+   every layout/viewport, including portrait/shorts on phone). Two positions,
+   both purely CSS-driven off the exact same show-ctrls/paused/force-hide-ctrls
+   classes .ctrls's own opacity rule already uses (just inverted) -- no new JS
+   state, can't desync from the overlay's actual visible state:
+   overlay shown -> clears the control bar height; overlay hidden -> drops
+   lower, closer to the true bottom edge (still inside the video, small margin). */
 .ph-subbar{position:absolute; left:0; right:0; bottom:64px; z-index:4;
   text-align:center; padding:0 16px; box-sizing:border-box;
-  pointer-events:none; font-size:26px; line-height:1.35; color:#fff}
+  pointer-events:none; font-size:26px; line-height:1.35; color:#fff;
+  transition:bottom .15s ease}
+.ph-stage:not(.show-ctrls):not(.paused) .ph-subbar,
+.ph-stage.force-hide-ctrls .ph-subbar{bottom:20px}
 #phSubText{display:inline-block; background:rgba(0,0,0,.6); padding:.2em .6em;
   border-radius:6px; white-space:pre-line; text-shadow:0 1px 3px #000a}
 #phSubText:empty{display:none}
@@ -1698,9 +1704,17 @@ const PLAYER=(function(){
       v=Math.max(min,Math.min(max,v));
       if(v!==val){val=v;paint();onChange(val);}
     }
+    // Explicit release on both pointerup AND pointercancel -- relying only on
+    // the browser's implicit release-on-pointerup left a gap: a cancelled
+    // gesture (focus loss, scroll takeover, etc.) has no pointerup, so
+    // capture stayed stuck on this element and hijacked the next unrelated
+    // pointermove anywhere on the page. See the mini-drag/resize handlers
+    // below, which had the exact same gap.
+    function endDrag(e){try{el.releasePointerCapture(e.pointerId);}catch(err){}e.stopPropagation();}
     el.addEventListener('pointerdown',e=>{e.stopPropagation();el.setPointerCapture(e.pointerId);setFromClientX(e.clientX);});
     el.addEventListener('pointermove',e=>{if(!e.buttons)return;e.stopPropagation();setFromClientX(e.clientX);});
-    el.addEventListener('pointerup',e=>e.stopPropagation());
+    el.addEventListener('pointerup',endDrag);
+    el.addEventListener('pointercancel',endDrag);
     el.addEventListener('click',e=>e.stopPropagation());
     el.addEventListener('keydown',e=>{
       if(e.key==='ArrowRight'||e.key==='ArrowUp'){e.preventDefault();e.stopPropagation();val=Math.min(max,val+step);paint();onChange(val);}
@@ -1899,6 +1913,16 @@ const PLAYER=(function(){
       `<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
+      `<div class="thumb-tool"><div class="row-inline"><strong>Rename</strong></div>`+
+        `<div class="row-inline" style="margin-top:8px">`+
+          `<input type="text" id="phRenameTitle" placeholder="Title" value="${esc(data.title)}" style="flex:1;min-width:140px;padding:7px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text)">`+
+        `</div>`+
+        `<div class="row-inline" style="margin-top:8px">`+
+          `<input type="text" id="phRenameFile" placeholder="Filename" value="${esc(data.filename_stem||'')}" style="flex:1;min-width:140px;padding:7px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text)">`+
+          `<span class="sub" id="phRenameExt">${esc(data.filename_ext||'')}</span>`+
+          `<button class="btn ghost" id="phRenameBtn">Save</button>`+
+        `</div>`+
+        `<div class="sub" id="phRenameStatus" style="margin-top:6px;min-height:14px"></div></div>`+
       (data.description?`<div class="desc">${esc(data.description)}</div>`:'')+
       `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
         `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+
@@ -1970,6 +1994,28 @@ const PLAYER=(function(){
     const thBtn=document.getElementById('phThumbBtn');
     if(thBtn)thBtn.onclick=()=>{const p=document.getElementById('phThumbPct').value;
       post(data.regen_thumb_url,{percent:p}).then(()=>{thBtn.textContent='✓';setTimeout(()=>thBtn.textContent='Regenerate',1200);});};
+    const rnBtn=document.getElementById('phRenameBtn');
+    if(rnBtn)rnBtn.onclick=e=>{
+      e.stopPropagation();
+      const titleIn=document.getElementById('phRenameTitle');
+      const fileIn=document.getElementById('phRenameFile');
+      const extSp=document.getElementById('phRenameExt');
+      const status=document.getElementById('phRenameStatus');
+      const title=titleIn?titleIn.value.trim():'';
+      const filename=fileIn?fileIn.value.trim():'';
+      if(!title&&!filename)return;
+      rnBtn.disabled=true;if(status)status.textContent='Saving…';
+      post(data.rename_url,{title,filename}).then(r=>{
+        rnBtn.disabled=false;
+        if(!r.ok){if(status)status.textContent=r.error||'Rename failed';return;}
+        data.title=r.title;HDR.textContent=r.title;MBAR_T.textContent=r.title;
+        document.title=r.title+' — HomeFlix';
+        if(titleIn)titleIn.value=r.title;
+        if(fileIn)fileIn.value=r.filename_stem;
+        if(extSp)extSp.textContent=r.filename_ext;
+        if(status)status.textContent='Saved.';
+      }).catch(()=>{rnBtn.disabled=false;if(status)status.textContent='Rename failed';});
+    };
     const nl=document.getElementById('phNoteList'),ni=document.getElementById('phNoteIn'),na=document.getElementById('phNoteAdd');
     if(ni&&na){
       ni.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();na.click();}});
@@ -2053,8 +2099,10 @@ const PLAYER=(function(){
         clearTimeout(clickT);clickT=null;
         const r=STAGE.getBoundingClientRect();
         const frac=(e.clientX-r.left)/r.width;
-        if(frac<1/3)flashSeek(-10);
-        else if(frac>2/3)flashSeek(10);
+        // Narrower seek zones (quarters, not thirds) -- the center fullscreen
+        // zone was too easy to miss at an even 3-way split.
+        if(frac<0.25)flashSeek(-10);
+        else if(frac>0.75)flashSeek(10);
         else goFull();
         return;
       }
@@ -2117,7 +2165,10 @@ const PLAYER=(function(){
   let barDrag=false;
   BAR.addEventListener('pointerdown',e=>{barDrag=true;BAR.classList.add('dragging');BAR.setPointerCapture(e.pointerId);showSP(frac(e));});
   BAR.addEventListener('pointermove',e=>{if(barDrag){seekFrac(frac(e));showSP(frac(e));}else if(e.pointerType==='mouse')showSP(frac(e));});
-  BAR.addEventListener('pointerup',e=>{barDrag=false;BAR.classList.remove('dragging');setTimeout(hideSP,400);});
+  function barEndDrag(e){try{BAR.releasePointerCapture(e.pointerId);}catch(err){}
+    barDrag=false;BAR.classList.remove('dragging');setTimeout(hideSP,400);}
+  BAR.addEventListener('pointerup',barEndDrag);
+  BAR.addEventListener('pointercancel',barEndDrag);
   BAR.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse'&&!barDrag)hideSP();});
   BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();seekTo(curTime()+10);}
     if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-10);}});
@@ -2216,10 +2267,18 @@ const PLAYER=(function(){
     const dy=e.changedTouches[0].clientY-swY, dt=Date.now()-swT; swY=null;
     if(state()==='expanded'){
       if(EL.classList.contains('ph-shorts')&&Math.abs(dy)>60&&dt<700){
-        // Shorts mode: swipe up = next, swipe down = prev
+        // Shorts mode: swipe up = next, swipe down = prev. preventDefault so
+        // the browser doesn't also fire a trailing synthetic click on the
+        // (now different) video underneath.
+        e.preventDefault();
         if(dy<0&&d&&d.next_id)navigate(d.next_id,true);
         else if(dy>0&&d&&d.prev_id)navigate(d.prev_id,true);
       } else if(!EL.classList.contains('ph-shorts')&&dy>70&&dt<500){
+        // Same reason: without this, a trailing synthetic click hits STAGE's
+        // click handler right after minimize() just set state to 'mini' ->
+        // "if(state()==='mini'){expand();return;}" immediately re-expands it,
+        // so the swipe looked like it silently did nothing.
+        e.preventDefault();
         minimize();
       }
     }
@@ -2296,8 +2355,14 @@ const PLAYER=(function(){
     const nt=Math.max(0,Math.min(window.innerHeight-EL.offsetHeight,st2+dy));
     EL.style.right='auto';EL.style.bottom='auto';EL.style.left=nl+'px';EL.style.top=nt+'px';
   });
-  EL.addEventListener('pointerup',()=>{if(!dragging)return;dragging=false;EL.classList.remove('grabbing');
-    if(moved)saveMiniBox();});
+  function endMiniDrag(e){
+    if(!dragging)return;
+    try{EL.releasePointerCapture(e.pointerId);}catch(err){} // see wireCCSlider's comment -- same gap, same fix
+    dragging=false;EL.classList.remove('grabbing');
+    if(moved)saveMiniBox();
+  }
+  EL.addEventListener('pointerup',endMiniDrag);
+  EL.addEventListener('pointercancel',endMiniDrag);
 
   /* Mini resize: 4 corners + persist size
      Bump MINI_MAX_W to allow a bigger mini player (drag-resize cap in px). */
@@ -2320,7 +2385,13 @@ const PLAYER=(function(){
       if(!fromRight){EL.style.right='auto';EL.style.left=Math.max(0,rzR0-nw)+'px';}
       e.stopPropagation();
     });
-    h.addEventListener('pointerup',()=>{if(!rzDrag)return;rzDrag=false;saveMiniBox();});
+    function endResize(e){
+      if(!rzDrag)return;
+      try{h.releasePointerCapture(e.pointerId);}catch(err){}
+      rzDrag=false;saveMiniBox();
+    }
+    h.addEventListener('pointerup',endResize);
+    h.addEventListener('pointercancel',endResize);
     h.addEventListener('click',e=>e.stopPropagation());
   }
   setupRH('phRhTl',false);setupRH('phRhTr',true);
