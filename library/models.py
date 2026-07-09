@@ -101,6 +101,23 @@ class Video(models.Model):
         return ""
 
 
+class VideoSubtitle(models.Model):
+    """User-uploaded subtitle attached to a video, stored as app-owned WebVTT.
+    Decoupled from disk on purpose -- the original .ass/.srt can be moved
+    (organize) or deleted by the user later and this keeps working."""
+    video = models.ForeignKey(Video, on_delete=models.CASCADE, related_name="uploaded_subtitles")
+    label = models.CharField(max_length=120)
+    lang = models.CharField(max_length=16, blank=True, default="")
+    vtt_path = models.CharField(max_length=1024)   # absolute path in SUBTITLE_DIR
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.video.title}: {self.label}"
+
+
 class PlaybackState(models.Model):
     """Resume position. One row per video (single user -> global = synced)."""
     video = models.OneToOneField(Video, on_delete=models.CASCADE, related_name="playback")

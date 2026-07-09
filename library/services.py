@@ -1,4 +1,5 @@
 """Media handling: probing, thumbnails, scanning, sidecar metadata."""
+import hashlib
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ logger = logging.getLogger(__name__)
 from django.conf import settings
 from django.utils import timezone
 
-from .models import Video
+from .models import Video, VideoSubtitle
 
 
 def _run(cmd):
@@ -693,10 +694,35 @@ def _embedded_subtitles(path):
     return result
 
 
+def _manual_subtitles(video):
+    """User-uploaded subs (see store_uploaded_subtitle) -- already converted
+    and app-owned, so they don't depend on anything still being on disk at
+    the original location."""
+    return [
+        {"label": s.label, "lang": s.lang, "kind": "manual", "ref": s.vtt_path, "id": s.id}
+        for s in video.uploaded_subtitles.all()
+    ]
+
+
 def list_subtitles(video):
-    """All available subtitle tracks for a video, sidecars first then
-    embedded, in a stable order (index = the id used in /subs/<pk>/<idx>.vtt)."""
-    return _sidecar_subtitles(video.file_path) + _embedded_subtitles(video.file_path)
+    """All available subtitle tracks for a video: manual (uploaded) first,
+    then sidecars, then embedded. Order is the index used in
+    /subs/<pk>/<idx>.vtt for a given request -- see ensure_subtitle_vtt for
+    why the on-disk *cache* filename doesn't depend on this index."""
+    return (_manual_subtitles(video) + _sidecar_subtitles(video.file_path)
+            + _embedded_subtitles(video.file_path))
+
+
+def _sub_cache_key(track):
+    """Stable identity for a track's cached .vtt filename -- NOT the list
+    index, which shifts whenever a manual sub is added/removed and would
+    otherwise serve a stale/wrong cached file after a reorder."""
+    if track["kind"] == "manual":
+        return f"manual{track['id']}"
+    if track["kind"] == "embedded":
+        return f"emb{track['ref']}"
+    # sidecar: hash the absolute path -> stable across reorders, unique per file
+    return "side" + hashlib.md5(track["ref"].encode("utf-8")).hexdigest()[:12]
 
 
 def ensure_subtitle_vtt(video, idx):
@@ -707,8 +733,14 @@ def ensure_subtitle_vtt(video, idx):
     if idx < 0 or idx >= len(tracks):
         return None
     track = tracks[idx]
+
+    if track["kind"] == "manual":
+        # Already a finished, app-owned .vtt -- nothing to convert/cache.
+        return track["ref"] if os.path.exists(track["ref"]) else None
+
     os.makedirs(settings.SUBTITLE_DIR, exist_ok=True)
-    out_path = os.path.join(settings.SUBTITLE_DIR, f"video_{video.id}_{idx}.vtt")
+    out_path = os.path.join(settings.SUBTITLE_DIR,
+                             f"video_{video.id}_{_sub_cache_key(track)}.vtt")
 
     src_mtime = 0.0
     if track["kind"] == "sidecar":
@@ -738,6 +770,82 @@ def ensure_subtitle_vtt(video, idx):
     logger.warning("subtitle conversion failed for video %s idx %s: %s",
                     video.id, idx, _ffmpeg_error_tail(err))
     return None
+
+
+_SUB_UPLOAD_MAX_BYTES = 5 * 1024 * 1024  # subs are KB-sized; 5MB is generous
+
+
+def store_uploaded_subtitle(video, upload, label, lang):
+    """Save an uploaded subtitle file as an app-owned WebVTT, decoupled from
+    the original file's location -- it survives the video being moved
+    (organize) or the original .ass/.srt being deleted later.
+    Returns the new VideoSubtitle row, or None (+ logs why) on failure."""
+    import uuid
+
+    name = upload.name or ""
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in SUB_SIDECAR_EXTS:
+        logger.warning("subtitle upload rejected for video %s: bad extension %r", video.id, ext)
+        return None
+    if upload.size > _SUB_UPLOAD_MAX_BYTES:
+        logger.warning("subtitle upload rejected for video %s: too large (%s bytes)",
+                        video.id, upload.size)
+        return None
+
+    os.makedirs(settings.SUBTITLE_DIR, exist_ok=True)
+    token = uuid.uuid4().hex[:12]
+    out_path = os.path.join(settings.SUBTITLE_DIR, f"upload_{video.id}_{token}.vtt")
+    tmp_path = os.path.join(settings.SUBTITLE_DIR, f"_tmp_{video.id}_{token}{ext}")
+    try:
+        with open(tmp_path, "wb") as f:
+            for chunk in upload.chunks():
+                f.write(chunk)
+        if ext == ".vtt":
+            shutil.copyfile(tmp_path, out_path)
+            code = 0
+        else:
+            code, _, err = _run(["ffmpeg", "-y", "-i", tmp_path, out_path])
+            if code != 0:
+                logger.warning("subtitle upload conversion failed for video %s: %s",
+                                video.id, _ffmpeg_error_tail(err))
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+    if code != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+        return None
+
+    return VideoSubtitle.objects.create(
+        video=video, label=label or (_lang_label(lang) or "Subtitle"),
+        lang=(lang or "").lower(), vtt_path=out_path,
+    )
+
+
+def delete_uploaded_subtitle(sub):
+    try:
+        os.remove(sub.vtt_path)
+    except OSError:
+        pass
+    sub.delete()
+
+
+def cleanup_video_subtitles(video):
+    """Remove every .vtt this video owns (uploaded + auto-converted cache)
+    before the Video row itself is deleted -- mirrors the thumbnail/converted
+    cleanup already done in views._delete_videos so nothing orphans on disk."""
+    import glob
+    for sub in video.uploaded_subtitles.all():
+        try:
+            os.remove(sub.vtt_path)
+        except OSError:
+            pass
+    for path in glob.glob(os.path.join(settings.SUBTITLE_DIR, f"video_{video.id}_*.vtt")):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------

@@ -13,7 +13,7 @@ from django.http import (
 from django.shortcuts import render, get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
-from .models import Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting
+from .models import Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting, VideoSubtitle
 from . import services
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
@@ -240,6 +240,18 @@ def playlist_detail(request, pk):
 
 # ---- watch (single-page player) --------------------------------------------
 
+def _serialize_subs(pk, video):
+    """Subtitle list in the shape the player's CC popover expects. Manual
+    (uploaded) tracks additionally get a remove_url for the × button."""
+    out = []
+    for i, t in enumerate(services.list_subtitles(video)):
+        row = {"idx": i, "label": t["label"], "lang": t["lang"], "url": f"/subs/{pk}/{i}.vtt"}
+        if t["kind"] == "manual":
+            row["remove_url"] = f"/video/{pk}/subtitles/{t['id']}/delete/"
+        out.append(row)
+    return out
+
+
 def _build_watch_data(request, pk):
     """Serialize everything the player overlay needs, for SSR and the JSON API."""
     from .templatetags.library_extras import duration as fmt_dur, filesize as fmt_size
@@ -372,10 +384,7 @@ def _build_watch_data(request, pk):
     if video.duration_seconds and resume_pos >= 0.8 * video.duration_seconds:
         resume_pos = 0.0
 
-    subs = [
-        {"idx": i, "label": t["label"], "lang": t["lang"], "url": f"/subs/{pk}/{i}.vtt"}
-        for i, t in enumerate(services.list_subtitles(video))
-    ]
+    subs = _serialize_subs(pk, video)
 
     return {
         "id": video.pk, "title": video.title,
@@ -877,6 +886,31 @@ def subtitles(request, pk, idx):
     return resp
 
 
+@require_POST
+def upload_subtitle(request, pk):
+    """Attach a subtitle file that isn't (or won't stay) next to the video --
+    e.g. one sitting in an unrelated folder, or about to be cleaned up. Stored
+    as an app-owned WebVTT (services.store_uploaded_subtitle), decoupled from
+    the original file's location."""
+    video = get_object_or_404(Video, pk=pk)
+    upload = request.FILES.get("file")
+    if not upload:
+        return JsonResponse({"ok": False, "error": "No file"}, status=400)
+    sub = services.store_uploaded_subtitle(
+        video, upload, request.POST.get("label", ""), request.POST.get("lang", ""))
+    if not sub:
+        return JsonResponse({"ok": False, "error": "Couldn't read that as a subtitle file"}, status=400)
+    return JsonResponse({"ok": True, "subtitles": _serialize_subs(pk, video)})
+
+
+@require_POST
+def delete_subtitle(request, pk, sub_pk):
+    video = get_object_or_404(Video, pk=pk)
+    sub = get_object_or_404(VideoSubtitle, pk=sub_pk, video=video)
+    services.delete_uploaded_subtitle(sub)
+    return JsonResponse({"ok": True, "subtitles": _serialize_subs(pk, video)})
+
+
 # ---- Organize / maintenance -------------------------------------------------
 def organize(request):
     if request.method == "POST" and request.POST.get("confirm") == "1":
@@ -1123,6 +1157,7 @@ def _delete_videos(videos, delete_file):
                 os.remove(video.thumbnail_path)
             except OSError:
                 pass
+        services.cleanup_video_subtitles(video)
         video.delete()
         count += 1
     return count

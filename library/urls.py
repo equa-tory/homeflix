@@ -25,6 +25,8 @@ urlpatterns = [
     path("hls/<int:pk>/stop/", views.hls_stop, name="hls_stop"),
     path("hls/<int:pk>/<str:name>", views.hls_segment, name="hls_segment"),
     path("subs/<int:pk>/<int:idx>.vtt", views.subtitles, name="subtitles"),
+    path("video/<int:pk>/subtitles/add/", views.upload_subtitle, name="upload_subtitle"),
+    path("video/<int:pk>/subtitles/<int:sub_pk>/delete/", views.delete_subtitle, name="delete_subtitle"),
 
     # api
     path("api/videos/", views.api_videos, name="api_videos"),

@@ -478,8 +478,19 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
   color:var(--text); font-size:13px; cursor:pointer; white-space:nowrap}
 .cc-track:hover{background:var(--bg)}
 .cc-track.on{background:var(--accent-soft); color:var(--accent); font-weight:700}
+.cc-track-row{display:flex; align-items:center; gap:2px}
+.cc-track-row .cc-track{flex:1}
+.cc-track-del{background:none; border:0; color:var(--muted); cursor:pointer;
+  font-size:14px; padding:4px 7px; border-radius:6px; flex-shrink:0}
+.cc-track-del:hover{color:#c0392b; background:var(--bg)}
 .cc-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:6px}
 .cc-row input[type=range]{flex:1}
+.cc-add{margin-top:12px; padding-top:10px; border-top:1px solid var(--border)}
+.cc-add #phCCAddBtn{width:100%; font-size:12px; padding:7px}
+.cc-add-row{display:flex; gap:6px; margin-top:8px}
+.cc-add-row select{flex:1; padding:6px; border-radius:7px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:12px}
+.cc-add-status{font-size:11px; color:var(--muted); margin-top:6px; min-height:14px}
 .vol-wrap{display:flex; align-items:center; gap:2px}
 .vol-slider{-webkit-appearance:none; appearance:none; cursor:pointer; width:62px; height:4px;
   border-radius:2px; outline:none; flex-shrink:0;
@@ -710,6 +721,21 @@ html.player-locked{overflow:hidden}
                 <div class="cc-tracks" id="phCCTracks"></div>
                 <div class="cc-row"><span>Size</span><input type="range" id="phCCSize" min="12" max="36" step="1" value="20"></div>
                 <div class="cc-row"><span>Background</span><input type="range" id="phCCBg" min="0" max="100" step="5" value="60"></div>
+                <div class="cc-add">
+                  <button type="button" class="btn ghost" id="phCCAddBtn">+ Add subtitle</button>
+                  <input type="file" id="phCCFile" accept=".ass,.srt,.vtt,.ssa,.sub" style="display:none">
+                  <div class="cc-add-row" id="phCCAddRow" style="display:none">
+                    <select id="phCCLang">
+                      <option value="en">English</option>
+                      <option value="ru">Russian</option>
+                      <option value="ja">Japanese</option>
+                      <option value="uk">Ukrainian</option>
+                      <option value="">Other</option>
+                    </select>
+                    <button type="button" class="btn ghost" id="phCCAddGo">Attach</button>
+                  </div>
+                  <div class="cc-add-status" id="phCCAddStatus"></div>
+                </div>
               </div>
             </div>
             <button class="cbtn" id="phLoop" title="Loop">↻</button>
@@ -1289,6 +1315,12 @@ const PLAYER=(function(){
   const CCTRACKS= document.getElementById('phCCTracks');
   const CCSIZE  = document.getElementById('phCCSize');
   const CCBG    = document.getElementById('phCCBg');
+  const CCADDBTN= document.getElementById('phCCAddBtn');
+  const CCFILE  = document.getElementById('phCCFile');
+  const CCADDROW= document.getElementById('phCCAddRow');
+  const CCLANG  = document.getElementById('phCCLang');
+  const CCADDGO = document.getElementById('phCCAddGo');
+  const CCADDSTATUS=document.getElementById('phCCAddStatus');
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
@@ -1454,6 +1486,19 @@ const PLAYER=(function(){
     const sz=Math.max(10,Math.min(48,subPref.size));
     _cueStyleEl.textContent='video::cue{font-size:'+sz+'px;background:rgba(0,0,0,'+bg+');color:#fff;line-height:1.4}';
   }
+  function renderCCTracks(chosen){
+    if(!CCTRACKS)return;
+    const list=(d&&d.subtitles)||[];
+    if(!list.length){CCTRACKS.innerHTML='<span class="sub" style="font-size:12px">No subtitles for this video</span>';return;}
+    let html='<button type="button" class="cc-track'+(chosen===-1?' on':'')+'" data-off="1">Off</button>';
+    list.forEach((s,i)=>{
+      html+='<div class="cc-track-row">'+
+        '<button type="button" class="cc-track'+(i===chosen?' on':'')+'" data-idx="'+i+'" data-lang="'+esc(s.lang||'')+'">'+esc(s.label||s.lang||('Track '+(i+1)))+'</button>'+
+        (s.remove_url?'<button type="button" class="cc-track-del" data-remove="'+esc(s.remove_url)+'" title="Remove">×</button>':'')+
+        '</div>';
+    });
+    CCTRACKS.innerHTML=html;
+  }
   function applySubPref(){
     applyCueStyle();
     const tt=V.textTracks, n=tt?tt.length:0;
@@ -1465,18 +1510,10 @@ const PLAYER=(function(){
     }
     for(let i=0;i<n;i++)tt[i].mode=(i===chosen)?'showing':'hidden';
     if(CC)CC.classList.toggle('active',chosen!==-1);
-    if(CCTRACKS){
-      if(!n){CCTRACKS.innerHTML='<span class="sub" style="font-size:12px">No subtitles for this video</span>';}
-      else{
-        let html='<button type="button" class="cc-track'+(chosen===-1?' on':'')+'" data-off="1">Off</button>';
-        for(let i=0;i<n;i++)html+='<button type="button" class="cc-track'+(i===chosen?' on':'')+'" data-idx="'+i+'" data-lang="'+esc(tt[i].language||'')+'">'+esc(tt[i].label||('Track '+(i+1)))+'</button>';
-        CCTRACKS.innerHTML=html;
-      }
-    }
+    renderCCTracks(chosen);
     if(CCSIZE)CCSIZE.value=subPref.size; if(CCBG)CCBG.value=subPref.bg;
   }
   function loadSubtitles(list){
-    if(CCPOP)CCPOP.classList.remove('open');
     Array.from(V.querySelectorAll('track')).forEach(t=>t.remove());
     (list||[]).forEach(s=>{
       const t=document.createElement('track');
@@ -1496,6 +1533,13 @@ const PLAYER=(function(){
     CCBG.addEventListener('input',e=>{e.stopPropagation();subPref.bg=parseInt(CCBG.value)||0;saveSubPref();applyCueStyle();});
   }
   if(CCTRACKS)CCTRACKS.addEventListener('click',e=>{
+    const del=e.target.closest('.cc-track-del');
+    if(del){
+      e.stopPropagation();
+      const url=del.dataset.remove; if(!url||!d)return;
+      post(url).then(r=>{if(r&&r.subtitles){d.subtitles=r.subtitles;loadSubtitles(d.subtitles);}});
+      return;
+    }
     const btn=e.target.closest('.cc-track');if(!btn)return;
     e.stopPropagation();
     if(btn.dataset.off){subPref.on=false;saveSubPref();applySubPref();return;}
@@ -1505,8 +1549,50 @@ const PLAYER=(function(){
     const tt=V.textTracks;
     for(let i=0;i<tt.length;i++)tt[i].mode=(i===idx)?'showing':'hidden';
     if(CC)CC.classList.add('active');
-    Array.from(CCTRACKS.children).forEach(b=>b.classList.toggle('on',b===btn));
+    renderCCTracks(idx);
   });
+
+  /* ---- attach a subtitle file that isn't (or won't stay) next to the video --
+     stored server-side as an app-owned WebVTT (see services.store_uploaded_subtitle),
+     so it survives the video being moved/organized or the original file deleted. */
+  let pendingSubFile=null;
+  if(CCADDBTN)CCADDBTN.onclick=e=>{e.stopPropagation();if(CCFILE)CCFILE.click();};
+  if(CCFILE){
+    CCFILE.addEventListener('click',e=>e.stopPropagation());
+    CCFILE.addEventListener('change',e=>{
+      e.stopPropagation();
+      const f=CCFILE.files&&CCFILE.files[0];
+      if(!f)return;
+      pendingSubFile=f;
+      const nm=f.name.toLowerCase();
+      let guess='';
+      if(/\b(ru|rus|russian)\b/.test(nm))guess='ru';
+      else if(/\b(en|eng|english)\b/.test(nm))guess='en';
+      else if(/\b(ja|jp|jpn|japanese)\b/.test(nm))guess='ja';
+      else if(/\b(uk|ukr|ukrainian)\b/.test(nm))guess='uk';
+      if(CCLANG&&guess)CCLANG.value=guess;
+      if(CCADDROW)CCADDROW.style.display='flex';
+      if(CCADDSTATUS)CCADDSTATUS.textContent='';
+    });
+  }
+  if(CCADDGO)CCADDGO.onclick=e=>{
+    e.stopPropagation();
+    if(!pendingSubFile||!d)return;
+    const lang=CCLANG?CCLANG.value:'';
+    const label=(CCLANG&&CCLANG.selectedOptions[0])?CCLANG.selectedOptions[0].textContent:pendingSubFile.name;
+    const fd=new FormData();
+    fd.append('file',pendingSubFile);fd.append('lang',lang);fd.append('label',label);
+    if(CCADDSTATUS)CCADDSTATUS.textContent='Uploading…';
+    fetch('/video/'+d.id+'/subtitles/add/',{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
+      .then(r=>r.json()).then(r=>{
+        if(!r.ok){if(CCADDSTATUS)CCADDSTATUS.textContent=r.error||'Failed to attach';return;}
+        d.subtitles=r.subtitles;
+        pendingSubFile=null;CCFILE.value='';
+        if(CCADDROW)CCADDROW.style.display='none';
+        if(CCADDSTATUS)CCADDSTATUS.textContent='Added.';
+        loadSubtitles(d.subtitles);
+      }).catch(()=>{if(CCADDSTATUS)CCADDSTATUS.textContent='Failed to attach';});
+  };
   document.addEventListener('click',e=>{if(!e.target.closest('#phCCWrap')&&CCPOP)CCPOP.classList.remove('open');});
 
   /* ---- apply data (after fetch or SSR) ---- */
@@ -1528,6 +1614,8 @@ const PLAYER=(function(){
     V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
     if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
     else{teardownHls();loadSource(data.stream_url,startPos,play);}
+    if(CCPOP)CCPOP.classList.remove('open'); // new video -> close any open CC popover from the last one
+    pendingSubFile=null; if(CCFILE)CCFILE.value=''; if(CCADDROW)CCADDROW.style.display='none';
     loadSubtitles(data.subtitles);
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
