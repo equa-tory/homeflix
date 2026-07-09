@@ -660,6 +660,7 @@ html.player-locked{overflow:hidden}
       <form action="{% url 'scan' %}" method="post">{% csrf_token %}
         <button class="nav-item">↻ Rescan library</button></form>
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
+      <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
       <hr>
       <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
         <button class="nav-item">🧹 Remove missing files</button></form>
@@ -726,6 +727,25 @@ html.player-locked{overflow:hidden}
   <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
   <button class="btn ghost" id="bulkHideBtn">🙈 Hide</button>
   <button class="btn ghost" id="bulkUnhideBtn" style="display:none">👁 Unhide</button>
+
+  <div class="bulk-aw">
+    <button class="btn ghost" id="bulkRenBtn">✎ Rename</button>
+    <div class="bulk-pop" id="bulkRenPop">
+      <label>Rename selected (in the order you clicked them)</label>
+      <div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">
+        <input type="text" id="bulkRenPattern" placeholder="Name - {num} S01"
+          style="padding:7px 10px;border-radius:7px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        <div class="brow">
+          <span class="sub">Start</span>
+          <input type="number" id="bulkRenStart" value="1" style="width:60px">
+          <span class="sub">Pad</span>
+          <input type="number" id="bulkRenPad" value="2" min="1" max="6" style="width:50px">
+          <button class="btn" id="bulkRenGo">Apply</button>
+        </div>
+        <span class="sub">{num} = sequence number, {orig} = current title. Renames the title only, not the file.</span>
+      </div>
+    </div>
+  </div>
 
   <div class="bulk-aw">
     <button class="btn ghost" id="bulkDelBtn">🗑 Delete</button>
@@ -1036,7 +1056,7 @@ const SELECT_MODE=(function(){
     document.getElementById('bulkClearBtn').onclick=()=>clear();
 
     // popup toggles
-    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop',bulkDelBtn:'bulkDelPop'};
+    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop',bulkRenBtn:'bulkRenPop',bulkDelBtn:'bulkDelPop'};
     Object.entries(pops).forEach(([btnId,popId])=>{
       const btn=document.getElementById(btnId),pop=document.getElementById(popId);
       btn.onclick=e=>{e.stopPropagation();
@@ -1117,6 +1137,14 @@ const SELECT_MODE=(function(){
     document.getElementById('bulkUnhideBtn').onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       refreshAfter(post('/bulk/unhide/',{ids}));
+    };
+    document.getElementById('bulkRenGo').onclick=e=>{e.stopPropagation();
+      const ids=getIds().join(',');if(!ids)return;
+      const pattern=document.getElementById('bulkRenPattern').value;
+      if(!pattern.trim())return;
+      const start=document.getElementById('bulkRenStart').value||1;
+      const pad=document.getElementById('bulkRenPad').value||2;
+      refreshAfter(post('/bulk/rename/',{ids,pattern,start,pad}));
     };
     document.getElementById('bulkDelEntryGo').onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
@@ -1303,6 +1331,11 @@ const PAGE_INIT={
 
   /* ----- HIDDEN: plain server-rendered grid, just needs select-mode ----- */
   hidden(root){
+    return wireSelectUI(root,{selectAll:true});
+  },
+
+  /* ----- DUPLICATES: plain server-rendered groups, just needs select-mode ----- */
+  duplicates(root){
     return wireSelectUI(root,{selectAll:true});
   },
 

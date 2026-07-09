@@ -990,6 +990,73 @@ def rename_video(video, new_title=None, new_stem=None):
     return True, None
 
 
+def bulk_rename_titles(ids, pattern, start=1, pad=2):
+    """Batch-rename the Title field (not the on-disk file -- see rename_video
+    for that) for a set of videos, in `ids` order. `{num}` in `pattern` is
+    replaced with a zero-padded sequence number counting up from `start`,
+    `{orig}` with the video's current title -- e.g. "Show - {num} S01" on 3
+    selected videos (in click order) -> "Show - 01 S01", "Show - 02 S01", ..."""
+    videos = {v.pk: v for v in Video.objects.filter(pk__in=ids)}
+    count = 0
+    for i, vid_id in enumerate(ids):
+        video = videos.get(vid_id)
+        if not video:
+            continue
+        num = str(start + i).zfill(pad)
+        new_title = pattern.replace("{num}", num).replace("{orig}", video.title)
+        if new_title and new_title != video.title:
+            video.title = new_title
+            video.save(update_fields=["title"])
+        count += 1
+    return count
+
+
+def _partial_hash(path, chunk=1024 * 1024):
+    """MD5 of a file's first+last `chunk` bytes -- cheap even for large 4K
+    files (no full read), used only to confirm same-size files are actually
+    byte-identical rather than a coincidental size match."""
+    try:
+        size = os.path.getsize(path)
+        h = hashlib.md5()
+        with open(path, "rb") as f:
+            h.update(f.read(chunk))
+            if size > chunk:
+                f.seek(max(0, size - chunk))
+                h.update(f.read(chunk))
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def find_duplicates():
+    """Group videos that are almost certainly the same file on disk: same
+    size, confirmed by hashing the first+last 1MB (size alone can coincide
+    for unrelated files). Returns groups (list of Video lists), largest
+    wasted space first."""
+    from collections import defaultdict
+    by_size = defaultdict(list)
+    for v in Video.objects.filter(missing=False).exclude(size_bytes__isnull=True):
+        if v.size_bytes:
+            by_size[v.size_bytes].append(v)
+
+    groups = []
+    for size, videos in by_size.items():
+        if len(videos) < 2:
+            continue
+        by_hash = defaultdict(list)
+        for v in videos:
+            if os.path.exists(v.file_path):
+                sig = _partial_hash(v.file_path)
+                if sig:
+                    by_hash[sig].append(v)
+        for sig, dupes in by_hash.items():
+            if len(dupes) > 1:
+                groups.append(dupes)
+
+    groups.sort(key=lambda g: (g[0].size_bytes or 0) * (len(g) - 1), reverse=True)
+    return groups
+
+
 def organize_by_mtime(execute=False):
     """Plan (and optionally perform) moving each video into LIBRARY_ROOT/YYYY-MM/DD/.
     Moves the video plus its sidecars; leaves unrelated files untouched.

@@ -1,0 +1,19 @@
+{% extends base_template %}
+{% block content %}
+<h1>Find duplicates</h1>
+<p class="sub">Groups files that are byte-identical (same size, first/last 1MB match) — not
+just similar names. Tap <strong>Select</strong>, pick the copies to remove from each group,
+then use the bulk bar's Delete.</p>
+
+{% if groups %}
+  <p class="sub">{{ groups|length }} duplicate group{{ groups|length|pluralize }} found.</p>
+  {% for g in groups %}
+    <h3 style="margin-top:28px">{{ g.0.size_bytes|filesizeformat }} each · {{ g|length }} copies</h3>
+    <div class="grid">
+      {% for video in g %}{% include "library/_card.html" %}{% endfor %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="empty" style="margin-top:32px"><p>No duplicates found.</p></div>
+{% endif %}
+{% endblock %}

@@ -39,6 +39,7 @@ urlpatterns = [
 
     # organize / maintenance
     path("organize/", views.organize, name="organize"),
+    path("duplicates/", views.duplicates, name="duplicates"),
     path("purge-missing/", views.purge_missing, name="purge_missing"),
     path("reset-library/", views.reset_library, name="reset_library"),
 
@@ -75,6 +76,7 @@ urlpatterns = [
     path("bulk/rating/", views.bulk_rating, name="bulk_rating"),
     path("bulk/playlist/", views.bulk_add_playlist, name="bulk_add_playlist"),
     path("bulk/favorite/", views.bulk_favorite, name="bulk_favorite"),
+    path("bulk/rename/", views.bulk_rename, name="bulk_rename"),
     path("bulk/hide/", views.bulk_hide, name="bulk_hide"),
     path("bulk/unhide/", views.bulk_unhide, name="bulk_unhide"),
     path("bulk/delete/", views.bulk_delete, name="bulk_delete"),

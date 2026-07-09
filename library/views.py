@@ -970,6 +970,14 @@ def organize(request):
         result=result, done=False))
 
 
+def duplicates(request):
+    groups = services.find_duplicates()
+    return render(request, "library/duplicates.html", base_ctx(
+        request, page_id="duplicates", spa_title="Duplicates — HomeFlix",
+        groups=groups,
+    ))
+
+
 @require_POST
 def purge_missing(request):
     services.purge_missing()
@@ -1165,6 +1173,21 @@ def bulk_favorite(request):
         return JsonResponse({'ok': False})
     Video.objects.filter(pk__in=ids).update(favorite=True)
     return JsonResponse({'ok': True, 'count': len(ids)})
+
+
+@require_POST
+def bulk_rename(request):
+    ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    pattern = request.POST.get('pattern', '')
+    if not ids or not pattern.strip():
+        return JsonResponse({'ok': False})
+    try:
+        start = int(request.POST.get('start', 1))
+        pad = max(1, min(6, int(request.POST.get('pad', 2))))
+    except ValueError:
+        return JsonResponse({'ok': False})
+    count = services.bulk_rename_titles(ids, pattern, start=start, pad=pad)
+    return JsonResponse({'ok': True, 'count': count})
 
 
 @require_POST
