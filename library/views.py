@@ -372,6 +372,11 @@ def _build_watch_data(request, pk):
     if video.duration_seconds and resume_pos >= 0.8 * video.duration_seconds:
         resume_pos = 0.0
 
+    subs = [
+        {"idx": i, "label": t["label"], "lang": t["lang"], "url": f"/subs/{pk}/{i}.vtt"}
+        for i, t in enumerate(services.list_subtitles(video))
+    ]
+
     return {
         "id": video.pk, "title": video.title,
         "description": video.description or "", "channel": video.channel or "",
@@ -384,6 +389,7 @@ def _build_watch_data(request, pk):
         "hls": use_hls,
         "hls_url": f"/hls/{pk}/index.m3u8",
         "hls_stop_url": f"/hls/{pk}/stop/",
+        "subtitles": subs,
         "duration_seconds": video.duration_seconds or 0,
         "convert_status": video.convert_status,
         "convert_progress": video.convert_progress,
@@ -855,6 +861,19 @@ def hls_js(request):
         raise Http404("hls.js not vendored")
     resp = FileResponse(open(_HLS_JS_PATH, "rb"), content_type="application/javascript")
     resp["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
+
+# ---- Subtitles (sidecar / embedded -> cached WebVTT) ------------------------
+def subtitles(request, pk, idx):
+    video = get_object_or_404(Video, pk=pk)
+    if not os.path.exists(video.file_path):
+        raise Http404("File missing")
+    path = services.ensure_subtitle_vtt(video, idx)
+    if not path:
+        raise Http404("Subtitle not available")
+    resp = FileResponse(open(path, "rb"), content_type="text/vtt")
+    resp["Cache-Control"] = "no-store"
     return resp
 
 

@@ -464,6 +464,22 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .note-del:hover{color:var(--accent)}
 .rec-section{margin-top:32px; padding-bottom:60px}
 .cbtn.looping{color:var(--accent)}
+.cc-wrap{position:relative}
+.cbtn-cc{font-size:13px; font-weight:800; letter-spacing:.02em}
+.cbtn-cc.active{color:var(--accent)}
+.cc-pop{position:absolute; bottom:calc(100% + 8px); right:0; min-width:200px;
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:12px; box-shadow:0 8px 30px #000a; display:none; z-index:210; color:var(--text)}
+.cc-pop.open{display:block}
+.cc-pop label{display:block; color:var(--muted); font-size:11px; text-transform:uppercase;
+  letter-spacing:.06em; font-weight:700; margin-bottom:6px}
+.cc-tracks{display:flex; flex-direction:column; gap:2px; margin-bottom:10px; max-height:160px; overflow-y:auto}
+.cc-track{background:none; border:0; text-align:left; padding:6px 8px; border-radius:6px;
+  color:var(--text); font-size:13px; cursor:pointer; white-space:nowrap}
+.cc-track:hover{background:var(--bg)}
+.cc-track.on{background:var(--accent-soft); color:var(--accent); font-weight:700}
+.cc-row{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-top:6px}
+.cc-row input[type=range]{flex:1}
 .vol-wrap{display:flex; align-items:center; gap:2px}
 .vol-slider{-webkit-appearance:none; appearance:none; cursor:pointer; width:62px; height:4px;
   border-radius:2px; outline:none; flex-shrink:0;
@@ -687,6 +703,15 @@ html.player-locked{overflow:hidden}
             <span class="ctime" id="phCur">0:00</span><span class="csep">/</span>
             <span class="ctime" id="phDur">0:00</span>
             <span class="cflex"></span>
+            <div class="cc-wrap" id="phCCWrap">
+              <button class="cbtn cbtn-cc" id="phCC" title="Subtitles" disabled>CC</button>
+              <div class="cc-pop" id="phCCPop">
+                <label>Subtitles</label>
+                <div class="cc-tracks" id="phCCTracks"></div>
+                <div class="cc-row"><span>Size</span><input type="range" id="phCCSize" min="12" max="36" step="1" value="20"></div>
+                <div class="cc-row"><span>Background</span><input type="range" id="phCCBg" min="0" max="100" step="5" value="60"></div>
+              </div>
+            </div>
             <button class="cbtn" id="phLoop" title="Loop">↻</button>
             <a class="cbtn" id="phDownload" title="Download" download>⇩</a>
             <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
@@ -1259,6 +1284,11 @@ const PLAYER=(function(){
   const MBAR_SF=document.getElementById('phMiniSeekF');
   const MBAR_FILL=document.getElementById('phMiniFill');
   const MBAR_TL=document.getElementById('phMiniTimeline');
+  const CC      = document.getElementById('phCC');
+  const CCPOP   = document.getElementById('phCCPop');
+  const CCTRACKS= document.getElementById('phCCTracks');
+  const CCSIZE  = document.getElementById('phCCSize');
+  const CCBG    = document.getElementById('phCCBg');
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, lastSave=0, pushed=false, ignorePop=false;
@@ -1408,6 +1438,77 @@ const PLAYER=(function(){
     }).catch(e=>{console.error('[hls] failed to load hls.js',e);stopSpin();});
   }
 
+  /* ---- subtitles (WebVTT <track> on the shared <video>; works for both the
+     native and HLS playback paths since both target V) ---- */
+  const SUBKEY='homeflix_subs';
+  function loadSubPref(){
+    try{return Object.assign({on:true,lang:'',size:20,bg:60},JSON.parse(localStorage.getItem(SUBKEY))||{});}
+    catch{return {on:true,lang:'',size:20,bg:60};}
+  }
+  function saveSubPref(){try{localStorage.setItem(SUBKEY,JSON.stringify(subPref));}catch{}}
+  let subPref=loadSubPref();
+  let _cueStyleEl=null;
+  function applyCueStyle(){
+    if(!_cueStyleEl){_cueStyleEl=document.createElement('style');document.head.appendChild(_cueStyleEl);}
+    const bg=Math.max(0,Math.min(100,subPref.bg))/100;
+    const sz=Math.max(10,Math.min(48,subPref.size));
+    _cueStyleEl.textContent='video::cue{font-size:'+sz+'px;background:rgba(0,0,0,'+bg+');color:#fff;line-height:1.4}';
+  }
+  function applySubPref(){
+    applyCueStyle();
+    const tt=V.textTracks, n=tt?tt.length:0;
+    if(CC)CC.disabled=n===0;
+    let chosen=-1;
+    if(subPref.on&&n){
+      if(subPref.lang){for(let i=0;i<n;i++){if(tt[i].language===subPref.lang){chosen=i;break;}}}
+      if(chosen===-1)chosen=0; // no saved lang, or it's not in this video -> default to first track
+    }
+    for(let i=0;i<n;i++)tt[i].mode=(i===chosen)?'showing':'hidden';
+    if(CC)CC.classList.toggle('active',chosen!==-1);
+    if(CCTRACKS){
+      if(!n){CCTRACKS.innerHTML='<span class="sub" style="font-size:12px">No subtitles for this video</span>';}
+      else{
+        let html='<button type="button" class="cc-track'+(chosen===-1?' on':'')+'" data-off="1">Off</button>';
+        for(let i=0;i<n;i++)html+='<button type="button" class="cc-track'+(i===chosen?' on':'')+'" data-idx="'+i+'" data-lang="'+esc(tt[i].language||'')+'">'+esc(tt[i].label||('Track '+(i+1)))+'</button>';
+        CCTRACKS.innerHTML=html;
+      }
+    }
+    if(CCSIZE)CCSIZE.value=subPref.size; if(CCBG)CCBG.value=subPref.bg;
+  }
+  function loadSubtitles(list){
+    if(CCPOP)CCPOP.classList.remove('open');
+    Array.from(V.querySelectorAll('track')).forEach(t=>t.remove());
+    (list||[]).forEach(s=>{
+      const t=document.createElement('track');
+      t.kind='subtitles';t.src=s.url;t.srclang=s.lang||'und';t.label=s.label||s.lang||'Subtitles';
+      V.appendChild(t);
+    });
+    applySubPref();
+  }
+  if(CC)CC.onclick=e=>{e.stopPropagation();if(CCPOP)CCPOP.classList.toggle('open');};
+  if(CCPOP)CCPOP.addEventListener('click',e=>e.stopPropagation());
+  if(CCSIZE){
+    CCSIZE.addEventListener('pointerdown',e=>e.stopPropagation());
+    CCSIZE.addEventListener('input',e=>{e.stopPropagation();subPref.size=parseInt(CCSIZE.value)||20;saveSubPref();applyCueStyle();});
+  }
+  if(CCBG){
+    CCBG.addEventListener('pointerdown',e=>e.stopPropagation());
+    CCBG.addEventListener('input',e=>{e.stopPropagation();subPref.bg=parseInt(CCBG.value)||0;saveSubPref();applyCueStyle();});
+  }
+  if(CCTRACKS)CCTRACKS.addEventListener('click',e=>{
+    const btn=e.target.closest('.cc-track');if(!btn)return;
+    e.stopPropagation();
+    if(btn.dataset.off){subPref.on=false;saveSubPref();applySubPref();return;}
+    const idx=parseInt(btn.dataset.idx);
+    subPref.on=true;subPref.lang=btn.dataset.lang||'';saveSubPref();
+    applyCueStyle();
+    const tt=V.textTracks;
+    for(let i=0;i<tt.length;i++)tt[i].mode=(i===idx)?'showing':'hidden';
+    if(CC)CC.classList.add('active');
+    Array.from(CCTRACKS.children).forEach(b=>b.classList.toggle('on',b===btn));
+  });
+  document.addEventListener('click',e=>{if(!e.target.closest('#phCCWrap')&&CCPOP)CCPOP.classList.remove('open');});
+
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
@@ -1427,6 +1528,7 @@ const PLAYER=(function(){
     V.loop=!!data.loop; LOOP.classList.toggle('looping',!!data.loop);
     if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
     else{teardownHls();loadSource(data.stream_url,startPos,play);}
+    loadSubtitles(data.subtitles);
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
   }

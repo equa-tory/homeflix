@@ -24,6 +24,7 @@ urlpatterns = [
     path("hls/<int:pk>/index.m3u8", views.hls_playlist, name="hls_playlist"),
     path("hls/<int:pk>/stop/", views.hls_stop, name="hls_stop"),
     path("hls/<int:pk>/<str:name>", views.hls_segment, name="hls_segment"),
+    path("subs/<int:pk>/<int:idx>.vtt", views.subtitles, name="subtitles"),
 
     # api
     path("api/videos/", views.api_videos, name="api_videos"),

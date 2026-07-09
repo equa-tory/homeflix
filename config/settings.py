@@ -157,6 +157,11 @@ os.makedirs(CONVERTED_DIR, exist_ok=True)
 HLS_DIR = str(BASE_DIR / "hls")
 os.makedirs(HLS_DIR, exist_ok=True)
 
+# Cached WebVTT subtitles converted from sidecar (.srt/.ass/...) or embedded
+# mkv subtitle tracks. Also kept OUT of LIBRARY_ROOT.
+SUBTITLE_DIR = str(BASE_DIR / "subtitles")
+os.makedirs(SUBTITLE_DIR, exist_ok=True)
+
 # Library page size for infinite scroll.
 PAGE_SIZE = 60
 

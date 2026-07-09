@@ -296,6 +296,10 @@ def _ffmpeg_convert(video_id):
     cmd = ["ffmpeg", "-y", "-i", video.file_path,
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+           "-sn",  # drop any subtitle stream -- mp4 can't hold ass/srt and ffmpeg's
+                   # default stream selection would otherwise try to include it and
+                   # fail the whole conversion. Subtitles are served separately (see
+                   # services.list_subtitles / ensure_subtitle_vtt).
            "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", out_path]
 
     duration = video.duration_seconds or 0
@@ -555,6 +559,10 @@ def start_hls(video):
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
             "-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_SECONDS})",
             "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+            "-sn",  # drop any subtitle stream -- mpegts/hls can't carry ass/srt and
+                    # ffmpeg's default stream selection would otherwise try to include
+                    # it and fail the whole transcode. Subtitles are served separately
+                    # (see services.list_subtitles / ensure_subtitle_vtt).
             "-f", "hls",
             "-hls_time", str(HLS_SEG_SECONDS),
             "-hls_playlist_type", "event",   # playlist grows; only lists ready segments
@@ -601,6 +609,135 @@ def stop_hls(pk):
             except Exception:
                 pass
         shutil.rmtree(_hls_dir(pk), ignore_errors=True)
+
+
+# ---- Subtitles (sidecar files + embedded mkv tracks -> WebVTT) -------------
+# Only text-based subtitle formats can become WebVTT. Image subs (PGS/VOBSUB,
+# bitmap .sub) are skipped entirely — no way to render those as a <track>.
+SUB_SIDECAR_EXTS = (".vtt", ".srt", ".ass", ".ssa", ".sub")
+TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text"}
+
+_LANG_LABELS = {
+    "ru": "Russian", "rus": "Russian", "en": "English", "eng": "English",
+    "ja": "Japanese", "jpn": "Japanese", "jp": "Japanese",
+    "uk": "Ukrainian", "ukr": "Ukrainian", "de": "German", "ger": "German",
+    "deu": "German", "fr": "French", "fre": "French", "fra": "French",
+    "es": "Spanish", "spa": "Spanish", "it": "Italian", "ita": "Italian",
+    "pt": "Portuguese", "por": "Portuguese", "zh": "Chinese", "chi": "Chinese",
+    "zho": "Chinese", "ko": "Korean", "kor": "Korean", "und": "Unknown",
+}
+
+
+def _lang_label(code):
+    code = (code or "").lower()
+    return _LANG_LABELS.get(code, code.upper() if code else "")
+
+
+def _sidecar_subtitles(path):
+    """Sidecar subtitle files next to `path`: exact-basename matches
+    (name.srt) and language-tagged ones (name.ru.ass, name.eng.srt)."""
+    folder = os.path.dirname(path)
+    base = os.path.splitext(os.path.basename(path))[0]
+    out = []
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return out
+    for name in names:
+        stem, ext = os.path.splitext(name)
+        ext = ext.lower()
+        if ext not in SUB_SIDECAR_EXTS:
+            continue
+        lang = ""
+        if stem == base:
+            pass
+        elif stem.startswith(base + "."):
+            lang = stem[len(base) + 1:]
+        else:
+            continue
+        label = _lang_label(lang) or ext.lstrip(".").upper()
+        out.append({
+            "label": label, "lang": lang.lower(), "kind": "sidecar",
+            "ref": os.path.join(folder, name),
+        })
+    out.sort(key=lambda t: t["label"])
+    return out
+
+
+def _embedded_subtitles(path):
+    """Text-based subtitle streams inside the media file itself (mkv etc.),
+    via ffprobe. Returns them in stream order with an ffmpeg -map-able index
+    (0-based among *subtitle* streams)."""
+    code, out, _ = _run([
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_streams", "-select_streams", "s", path,
+    ])
+    if code != 0 or not out:
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    result = []
+    for i, stream in enumerate(data.get("streams", [])):
+        codec = (stream.get("codec_name") or "").lower()
+        if codec not in TEXT_SUB_CODECS:
+            continue  # image subs (pgs/dvd_subtitle) can't become WebVTT
+        tags = stream.get("tags", {}) or {}
+        lang = tags.get("language", "")
+        label = tags.get("title") or _lang_label(lang) or f"Track {i + 1}"
+        result.append({
+            "label": label, "lang": lang.lower(), "kind": "embedded",
+            "ref": str(i),
+        })
+    return result
+
+
+def list_subtitles(video):
+    """All available subtitle tracks for a video, sidecars first then
+    embedded, in a stable order (index = the id used in /subs/<pk>/<idx>.vtt)."""
+    return _sidecar_subtitles(video.file_path) + _embedded_subtitles(video.file_path)
+
+
+def ensure_subtitle_vtt(video, idx):
+    """Return the path to a cached WebVTT file for subtitle track `idx` of
+    `video` (converting/extracting + caching on first request), or None if
+    `idx` is out of range or conversion fails."""
+    tracks = list_subtitles(video)
+    if idx < 0 or idx >= len(tracks):
+        return None
+    track = tracks[idx]
+    os.makedirs(settings.SUBTITLE_DIR, exist_ok=True)
+    out_path = os.path.join(settings.SUBTITLE_DIR, f"video_{video.id}_{idx}.vtt")
+
+    src_mtime = 0.0
+    if track["kind"] == "sidecar":
+        try:
+            src_mtime = os.path.getmtime(track["ref"])
+        except OSError:
+            return None
+    if os.path.exists(out_path) and os.path.getmtime(out_path) >= src_mtime:
+        return out_path
+
+    if track["kind"] == "sidecar":
+        src = track["ref"]
+        if src.lower().endswith(".vtt"):
+            try:
+                shutil.copyfile(src, out_path)
+                return out_path
+            except OSError:
+                return None
+        code, _, err = _run(["ffmpeg", "-y", "-i", src, out_path])
+    else:  # embedded
+        code, _, err = _run([
+            "ffmpeg", "-y", "-i", video.file_path,
+            "-map", f"0:s:{track['ref']}", "-c:s", "webvtt", out_path,
+        ])
+    if code == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        return out_path
+    logger.warning("subtitle conversion failed for video %s idx %s: %s",
+                    video.id, idx, _ffmpeg_error_tail(err))
+    return None
 
 
 # ---- Organize files into YYYY-MM/DD folders by modified date ---------------
