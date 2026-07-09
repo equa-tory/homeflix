@@ -572,8 +572,17 @@ def start_hls(video):
     d = _hls_dir(pk)
     os.makedirs(settings.HLS_DIR, exist_ok=True)
     with _hls_lock(pk):
-        if _hls_live(d) or _hls_complete(d):
+        # logger.warning (not .info): no LOGGING config in settings.py, so
+        # Python's default "no handler" last-resort logging only surfaces
+        # WARNING+ -- .info here would be silently dropped, useless for the
+        # verification step this is for.
+        if _hls_live(d):
+            logger.warning("hls: reusing live session for video %s", pk)
             return d
+        if _hls_complete(d):
+            logger.warning("hls: reusing completed session for video %s", pk)
+            return d
+        logger.warning("hls: starting new transcode for video %s", pk)
         _hls_enforce_concurrency_cap(pk)
         # Nothing alive/complete -> clean up any stale pid/files and (re)start once.
         old = _hls_read_pid(d)
