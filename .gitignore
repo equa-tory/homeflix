@@ -4,3 +4,5 @@ db.sqlite3
 thumbnails/
 media_library/
 converted/
+/venv
+/.venv

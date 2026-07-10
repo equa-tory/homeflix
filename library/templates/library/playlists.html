@@ -1,4 +1,5 @@
 {% extends base_template %}
+{% load library_extras %}
 {% block content %}
 <h1>Playlists</h1>
 <form class="toolbar" method="post" action="{% url 'create_playlist' %}">{% csrf_token %}
@@ -23,7 +24,7 @@
     <a class="card nav-item" tabindex="0" href="{% url 'playlist_detail' p.pk %}" data-spa>
       <div class="thumb">
         {% if p.thumbnail_path %}
-          <div class="thumb-bg" style="background-image:url({% url 'playlist_thumb' p.pk %})"></div>
+          <div class="thumb-bg" style="background-image:url({% url 'playlist_thumb' p.pk %}?v={{ p.thumbnail_path|thumb_v }})"></div>
         {% else %}
           <div class="placeholder">☰ {{ p.items.count }}</div>
         {% endif %}
@@ -56,7 +57,7 @@
     <a class="card nav-item" tabindex="0" href="{% url 'smart_playlist_detail' sp.pk %}" data-spa>
       <div class="thumb">
         {% if sp.thumbnail_path %}
-          <div class="thumb-bg" style="background-image:url({% url 'smart_playlist_thumb' sp.pk %})"></div>
+          <div class="thumb-bg" style="background-image:url({% url 'smart_playlist_thumb' sp.pk %}?v={{ sp.thumbnail_path|thumb_v }})"></div>
         {% else %}
           <div class="placeholder" style="font-size:16px">⚙ Auto</div>
         {% endif %}

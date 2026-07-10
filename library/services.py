@@ -15,9 +15,21 @@ from django.utils import timezone
 from .models import Video, VideoSubtitle
 
 
+# On Windows, text-mode subprocess output decodes using the locale codepage
+# (cp1252) by default, which raises UnicodeDecodeError on any byte outside
+# that codepage -- easily hit by ffprobe JSON/stderr with non-ASCII titles or
+# paths. Force utf-8 with lossy fallback everywhere so a decode error can
+# never crash a scan/probe/convert.
+_SUBPROCESS_TEXT_KW = dict(encoding="utf-8", errors="replace")
+# Suppress the console window ffmpeg/ffprobe would otherwise flash on Windows
+# (no-op elsewhere).
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
 def _run(cmd):
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        out = subprocess.run(cmd, capture_output=True, timeout=120,
+                              creationflags=_NO_WINDOW, **_SUBPROCESS_TEXT_KW)
         return out.returncode, out.stdout, out.stderr
     except Exception as e:  # ffmpeg missing, timeout, etc.
         return 1, "", str(e)
@@ -306,7 +318,8 @@ def _ffmpeg_convert(video_id):
     duration = video.duration_seconds or 0
     stderr_lines = []
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 creationflags=_NO_WINDOW, **_SUBPROCESS_TEXT_KW)
         _CONVERT_PROCS[video.id] = proc
 
         def _drain_stderr(pipe):
@@ -431,12 +444,52 @@ def _hls_dir(pk):
     return os.path.join(settings.HLS_DIR, str(pk))
 
 
-def _pid_alive(pid):
-    try:
-        os.kill(pid, 0)
-    except Exception:
-        return False
-    return True
+if os.name == "nt":
+    import ctypes
+
+    _WIN_SYNCHRONIZE = 0x00100000
+    _WIN_PROCESS_TERMINATE = 0x0001
+    _WIN_WAIT_TIMEOUT = 0x00000102
+
+    def _pid_alive(pid):
+        # os.kill(pid, 0) on Windows doesn't probe liveness -- any signal
+        # other than CTRL_C/CTRL_BREAK maps to TerminateProcess, so calling
+        # it here would *kill* the ffmpeg process being checked (this was
+        # the actual cause of HLS transcodes dying ~5s in on Windows).
+        # Use WinAPI directly instead: open a lightweight SYNCHRONIZE handle
+        # and see if it's still unsignaled (i.e. the process hasn't exited).
+        handle = ctypes.windll.kernel32.OpenProcess(_WIN_SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            return ctypes.windll.kernel32.WaitForSingleObject(handle, 0) == _WIN_WAIT_TIMEOUT
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+
+    def _kill_pid(pid, force=False):
+        # `force` is accepted for API symmetry with POSIX (SIGTERM vs
+        # SIGKILL) -- Windows has no graceful-terminate signal, so both cases
+        # just call TerminateProcess.
+        handle = ctypes.windll.kernel32.OpenProcess(_WIN_PROCESS_TERMINATE, False, pid)
+        if not handle:
+            return
+        try:
+            ctypes.windll.kernel32.TerminateProcess(handle, 1)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+else:
+    def _pid_alive(pid):
+        try:
+            os.kill(pid, 0)
+        except Exception:
+            return False
+        return True
+
+    def _kill_pid(pid, force=False):
+        try:
+            os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+        except Exception:
+            pass
 
 
 def _hls_read_pid(d):
@@ -587,10 +640,7 @@ def start_hls(video):
         # Nothing alive/complete -> clean up any stale pid/files and (re)start once.
         old = _hls_read_pid(d)
         if old:
-            try:
-                os.kill(old, signal.SIGKILL)
-            except Exception:
-                pass
+            _kill_pid(old, force=True)
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d, exist_ok=True)
         # cwd=d + relative output names so the playlist lists segments as bare
@@ -619,7 +669,8 @@ def start_hls(video):
             "index.m3u8",
         ]
         proc = subprocess.Popen(cmd, cwd=d, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE, start_new_session=True)
+                                stderr=subprocess.PIPE, start_new_session=(os.name != "nt"),
+                                creationflags=_NO_WINDOW)
         with open(os.path.join(d, "ffmpeg.pid"), "w") as f:
             f.write(str(proc.pid))
         threading.Thread(target=_drain_hls, args=(proc.stderr, pk), daemon=True).start()
@@ -649,27 +700,21 @@ def stop_hls(pk):
     import shutil
     with _hls_lock(pk):
         pid = _hls_read_pid(_hls_dir(pk))
-        if pid:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except Exception:
-                pass
+        if pid and _pid_alive(pid):
+            # ffmpeg finalizes the HLS playlist (writes #EXT-X-ENDLIST) as
+            # part of a graceful SIGTERM shutdown -- rmtree'ing immediately
+            # can race that write and delete a segment a client just saw
+            # listed in the not-yet-deleted playlist (404 + stall). Give it
+            # a couple seconds to actually exit before cleaning up; still
+            # alive after that -> force it. (Windows has no graceful-terminate
+            # signal, so _kill_pid(force=True) is used immediately there.)
+            _kill_pid(pid, force=(os.name == "nt"))
+            for _ in range(20):
+                if not _pid_alive(pid):
+                    break
+                time.sleep(0.1)
             else:
-                # ffmpeg finalizes the HLS playlist (writes #EXT-X-ENDLIST) as
-                # part of a graceful SIGTERM shutdown -- rmtree'ing immediately
-                # can race that write and delete a segment a client just saw
-                # listed in the not-yet-deleted playlist (404 + stall). Give it
-                # a couple seconds to actually exit before cleaning up; still
-                # dead-alive after that -> force it.
-                for _ in range(20):
-                    if not _pid_alive(pid):
-                        break
-                    time.sleep(0.1)
-                else:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except Exception:
-                        pass
+                _kill_pid(pid, force=True)
         shutil.rmtree(_hls_dir(pk), ignore_errors=True)
 
 

@@ -1,4 +1,5 @@
 {% extends base_template %}
+{% load library_extras %}
 {% block content %}
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
   <h1 style="margin:0">{{ sp.name }}</h1>
@@ -33,7 +34,7 @@
   <div class="row-inline">
     <strong>Cover image</strong>
     {% if sp.thumbnail_path %}
-      <img src="{% url 'smart_playlist_thumb' sp.pk %}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
+      <img src="{% url 'smart_playlist_thumb' sp.pk %}?v={{ sp.thumbnail_path|thumb_v }}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
     {% endif %}
     <button type="button" class="btn ghost" id="plThumbGen">🖼 Generate</button>
     <button type="button" class="btn ghost" id="plThumbRemove"{% if not sp.thumbnail_path %} style="display:none"{% endif %}>✕ Remove</button>

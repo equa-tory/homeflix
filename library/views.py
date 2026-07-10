@@ -373,7 +373,7 @@ def _build_watch_data(request, pk):
             progress = min(100, st.position_seconds / v.duration_seconds * 100)
         return {
             "id": v.pk, "title": v.title,
-            "thumb_url": f"/thumb/{v.pk}/" if v.thumbnail_path else "",
+            "thumb_url": f"/thumb/{v.pk}/?v={_thumb_v(v.thumbnail_path)}" if v.thumbnail_path else "",
             "watch_url": f"/watch/{v.pk}/",
             "dur": fmt_dur(v.duration_seconds), "channel": v.channel or "",
             "progress": round(progress, 1), "quality": v.aspect_label or "",
@@ -439,7 +439,7 @@ def _build_watch_data(request, pk):
         "shuffle_toggle_url": "/shuffle/",
         "next_id": next_id, "prev_id": prev_id,
         "queue_ids": queue_ids,
-        "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
+        "thumb_url": f"/thumb/{pk}/?v={_thumb_v(video.thumbnail_path)}" if video.thumbnail_path else "",
         "regen_thumb_url": f"/video/{pk}/thumb/regen/",
         "thumbnail_percent": video.thumbnail_percent or 0,
         "rename_url": f"/video/{pk}/rename/",
@@ -827,6 +827,26 @@ def add_to_playlist(request, pk):
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
+def _fmt_date(d):
+    """Locale-independent 'Jul 5, 2026' -- strftime's %-d (no leading zero) is
+    a glibc-only extension; the Windows C runtime raises ValueError on it,
+    which took down the whole /api/videos/ grid on Windows."""
+    return f"{d:%b} {d.day}, {d:%Y}"
+
+
+def _thumb_v(path):
+    """Cache-busting token for thumbnail URLs: the mtime of the file on disk.
+    /thumb/<pk>/ is served with a year-long Cache-Control (see
+    _thumb_file_response) so TV browsers stop re-downloading every tile; a
+    plain regen wouldn't otherwise be visible until the cache expired since
+    the URL never changed. Appending ?v=<mtime> busts the cache exactly when
+    (and only when) the file actually changes."""
+    try:
+        return int(os.path.getmtime(path))
+    except OSError:
+        return 0
+
+
 # ---- Infinite-scroll JSON API ----------------------------------------------
 def _serialize(video, qs_suffix=""):
     state = getattr(video, "playback", None)
@@ -837,12 +857,12 @@ def _serialize(video, qs_suffix=""):
     return {
         "id": video.id, "title": video.title,
         "dur": fmt_dur(video.duration_seconds),
-        "thumb": f"/thumb/{video.id}/" if video.thumbnail_path else "",
+        "thumb": f"/thumb/{video.id}/?v={_thumb_v(video.thumbnail_path)}" if video.thumbnail_path else "",
         "url": f"/watch/{video.id}/{qs_suffix}",
         "quality": video.aspect_label,
         "needs_convert": video.needs_convert_ui,
         "channel": video.channel,
-        "date": video.date_added.strftime("%b %-d, %Y"),
+        "date": _fmt_date(video.date_added),
         "favorite": video.favorite,
         "progress": round(progress, 1),
     }

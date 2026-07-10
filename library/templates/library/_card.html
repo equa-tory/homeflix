@@ -3,7 +3,7 @@
   <div class="thumb">
     {% if video.thumbnail_path %}
       {# background-image instead of <img> for TV browser compat (no object-fit needed) #}
-      <div class="thumb-bg" style="background-image:url({% url 'thumb' video.pk %})"></div>
+      <div class="thumb-bg" style="background-image:url({% url 'thumb' video.pk %}?v={{ video.thumbnail_path|thumb_v }})"></div>
     {% else %}
       <div class="placeholder">▶</div>
     {% endif %}

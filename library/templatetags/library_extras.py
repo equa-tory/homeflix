@@ -1,3 +1,5 @@
+import os
+
 from django import template
 
 register = template.Library()
@@ -36,3 +38,16 @@ def pct(state, video):
     except (ZeroDivisionError, AttributeError):
         pass
     return 0
+
+
+@register.filter
+def thumb_v(path):
+    """Cache-busting token (file mtime) for thumbnail URLs -- the /thumb/,
+    /playlists/<pk>/thumbnail/, /smart-playlists/<pk>/thumbnail/ views are
+    served with a year-long Cache-Control, so appending ?v={{ path|thumb_v }}
+    is what makes a regenerated cover actually show up instead of the
+    browser silently keeping the old cached image."""
+    try:
+        return int(os.path.getmtime(path))
+    except (OSError, TypeError):
+        return 0
