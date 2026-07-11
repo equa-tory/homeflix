@@ -526,6 +526,8 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 }
 .cc-pop label{display:block; color:var(--muted); font-size:11px; text-transform:uppercase;
   letter-spacing:.06em; font-weight:700; margin-bottom:6px}
+.cc-pop input[type=number]{width:64px; padding:6px 8px; border-radius:7px;
+  border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px}
 .cc-tracks{display:flex; flex-direction:column; gap:2px; margin-bottom:10px; max-height:160px; overflow-y:auto}
 .cc-track{background:none; border:0; text-align:left; padding:6px 8px; border-radius:6px;
   color:var(--text); font-size:13px; cursor:pointer; white-space:nowrap}
@@ -844,6 +846,15 @@ html.player-locked{overflow:hidden}
             </div>
             <button class="cbtn" id="phShuffle" title="Shuffle">🔀</button>
             <button class="cbtn" id="phLoop" title="Repeat">↻</button>
+            <div class="cc-wrap" id="phSeekWrap">
+              <button class="cbtn cbtn-cc" id="phSeekBtn" title="Seek step (◀ ▶)">10s</button>
+              <div class="cc-pop" id="phSeekPop">
+                <label>Seek step</label>
+                <div class="cc-row"><span>Seconds (◀ ▶)</span>
+                  <input type="number" id="phSeekInput" min="1" max="600" step="1" value="10" inputmode="numeric">
+                </div>
+              </div>
+            </div>
             <a class="cbtn" id="phDownload" title="Download" download>⇩</a>
             <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
           </div>
@@ -1495,6 +1506,9 @@ const PLAYER=(function(){
   const CCLANG  = document.getElementById('phCCLang');
   const CCADDGO = document.getElementById('phCCAddGo');
   const CCADDSTATUS=document.getElementById('phCCAddStatus');
+  const SEEKBTN = document.getElementById('phSeekBtn');
+  const SEEKPOP = document.getElementById('phSeekPop');
+  const SEEKINPUT = document.getElementById('phSeekInput');
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, repeat='off', shuffle=false, prevVideoId=null, lastSave=0, pushed=false, ignorePop=false;
@@ -1863,7 +1877,35 @@ const PLAYER=(function(){
         loadSubtitles(d.subtitles);
       }).catch(()=>{if(CCADDSTATUS)CCADDSTATUS.textContent='Failed to attach';});
   };
-  document.addEventListener('click',e=>{if(!e.target.closest('#phCCWrap')&&CCPOP)CCPOP.classList.remove('open');});
+
+  /* ---- seek step (◀ ▶ / media-key / double-tap seek amount, remembered
+     client-side the same way subtitle size/background are, above) ---- */
+  const SEEKKEY='homeflix_seek_step';
+  function loadSeekStep(){
+    try{const v=parseInt(localStorage.getItem(SEEKKEY),10);return(v>=1&&v<=600)?v:10;}
+    catch{return 10;}
+  }
+  let SEEK_STEP=loadSeekStep();
+  function setSeekStep(v){
+    v=Math.max(1,Math.min(600,Math.round(v)||10));
+    SEEK_STEP=v;
+    try{localStorage.setItem(SEEKKEY,String(v));}catch{}
+    if(SEEKBTN)SEEKBTN.textContent=v+'s';
+    if(SEEKINPUT)SEEKINPUT.value=v;
+    const legend=document.getElementById('phKeySeek');if(legend)legend.textContent=v;
+  }
+  setSeekStep(SEEK_STEP);
+  if(SEEKBTN)SEEKBTN.onclick=e=>{e.stopPropagation();if(SEEKPOP)SEEKPOP.classList.toggle('open');};
+  if(SEEKPOP)SEEKPOP.addEventListener('click',e=>e.stopPropagation());
+  if(SEEKINPUT){
+    SEEKINPUT.addEventListener('click',e=>e.stopPropagation());
+    SEEKINPUT.addEventListener('change',()=>setSeekStep(parseInt(SEEKINPUT.value,10)));
+  }
+
+  document.addEventListener('click',e=>{
+    if(!e.target.closest('#phCCWrap')&&CCPOP)CCPOP.classList.remove('open');
+    if(!e.target.closest('#phSeekWrap')&&SEEKPOP)SEEKPOP.classList.remove('open');
+  });
 
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
@@ -1894,6 +1936,7 @@ const PLAYER=(function(){
     if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
     else{teardownHls();loadSource(data.stream_url,startPos,play);}
     if(CCPOP)CCPOP.classList.remove('open'); // new video -> close any open CC popover from the last one
+    if(SEEKPOP)SEEKPOP.classList.remove('open');
     pendingSubFile=null; if(CCFILE)CCFILE.value=''; if(CCADDROW)CCADDROW.style.display='none';
     loadSubtitles(data.subtitles);
     setupMediaSession(data);
@@ -1944,7 +1987,7 @@ const PLAYER=(function(){
       artwork:data.thumb_url?[{src:data.thumb_url,sizes:'512x512',type:'image/jpeg'}]:[]});
     const ms=navigator.mediaSession;
     ms.setActionHandler('play',()=>V.play());ms.setActionHandler('pause',()=>V.pause());
-    ms.setActionHandler('seekbackward',()=>seekTo(curTime()-10));ms.setActionHandler('seekforward',()=>seekTo(curTime()+10));
+    ms.setActionHandler('seekbackward',()=>seekTo(curTime()-SEEK_STEP));ms.setActionHandler('seekforward',()=>seekTo(curTime()+SEEK_STEP));
     ms.setActionHandler('seekto',ev=>{if(ev.seekTime!=null)seekTo(ev.seekTime);});
     ms.setActionHandler('previoustrack',prevId()?()=>navigate(prevId()):null);
     ms.setActionHandler('nexttrack',nextId()?()=>navigate(nextId(),true):null);
@@ -1968,7 +2011,7 @@ const PLAYER=(function(){
       :'<p class="sub" id="phEmptyNotes">No notes yet. Pause &amp; add a note, click its timestamp to jump back.</p>';
 
     INFO.innerHTML=`<div class="ph-pad">`+
-      `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>◀ ▶</b> seek 10s</span><span><b>▲▼</b> next/prev video</span></div>`+
+      `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>◀ ▶</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>▲▼</b> next/prev video</span></div>`+
       `<h1 class="wtitle">${esc(data.title)}</h1>`+
       `<div class="wbar"><span id="phStars" data-url="${esc(data.rating_url)}">${stars}</span>`+
       `<button class="iconbtn" id="phFav" data-url="${esc(data.favorite_url)}" title="Favorite"`+
@@ -2185,8 +2228,8 @@ const PLAYER=(function(){
         const frac=(e.clientX-r.left)/r.width;
         // Narrower seek zones (quarters, not thirds) -- the center fullscreen
         // zone was too easy to miss at an even 3-way split.
-        if(frac<0.25)flashSeek(-10);
-        else if(frac>0.75)flashSeek(10);
+        if(frac<0.25)flashSeek(-SEEK_STEP);
+        else if(frac>0.75)flashSeek(SEEK_STEP);
         else goFull();
         return;
       }
@@ -2254,8 +2297,8 @@ const PLAYER=(function(){
   BAR.addEventListener('pointerup',barEndDrag);
   BAR.addEventListener('pointercancel',barEndDrag);
   BAR.addEventListener('pointerleave',e=>{if(e.pointerType==='mouse'&&!barDrag)hideSP();});
-  BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();seekTo(curTime()+10);}
-    if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-10);}});
+  BAR.addEventListener('keydown',e=>{if(e.key==='ArrowRight'){e.preventDefault();e.stopPropagation();seekTo(curTime()+SEEK_STEP);}
+    if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-SEEK_STEP);}});
 
   /* volume */
   function volIcon(v,m){return(m||v===0)?'🔇':v<.5?'🔉':'🔊';}
@@ -2297,6 +2340,7 @@ const PLAYER=(function(){
       // sliders to silently lose mouse input (pointer-events inherits down
       // from .ctrls) partway through an adjustment that took over 2.8s.
       if(CCPOP&&CCPOP.classList.contains('open'))return;
+      if(SEEKPOP&&SEEKPOP.classList.contains('open'))return;
       if(!V.paused)STAGE.classList.remove('show-ctrls');
     },2800);
   }
@@ -2317,8 +2361,8 @@ const PLAYER=(function(){
     if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)&&e.key!=='Escape')return;
     switch(e.key){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
-      case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+10);}break;
-      case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-10);}break;
+      case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+SEEK_STEP);}break;
+      case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-SEEK_STEP);}break;
       case'ArrowUp':e.preventDefault();{const n=nextId();if(n)navigate(n,true);}break;
       case'ArrowDown':e.preventDefault();{const p=prevId();if(p)navigate(p);}break;
       case'f':case'F':goFull();break;

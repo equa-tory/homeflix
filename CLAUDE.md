@@ -31,6 +31,8 @@ python manage.py createsuperuser
 
 System dependency: `ffmpeg` and `ffprobe` must be on PATH (`apt install ffmpeg`). The only Python dependency is `Django>=5.0` (`requirements.txt`); production adds `gunicorn`. Everything else (fuzzy search, PNG icon generation, HLS session locking) is stdlib.
 
+**Windows:** `run-homeflix.bat` is a self-contained launcher — it creates `.venv`, installs `requirements.txt`, downloads a static ffmpeg build to `%USERPROFILE%\Documents\ffmpeg` if none is on PATH, then runs `migrate` + `runserver`. Edit the `HOMEFLIX_LIBRARY`/`PORT` variables at the top of the file rather than passing env vars. `gunicorn` doesn't work on Windows, so there is no production-server path there — `runserver` is it.
+
 Note: `library/tests.py` is currently an empty stub — `python manage.py test library` runs zero tests. If you add tests, run a single one with `python manage.py test library.tests.<TestClass>.<test_method>`.
 
 ## Architecture
