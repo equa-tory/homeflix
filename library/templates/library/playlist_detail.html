@@ -13,9 +13,8 @@
     <select class="nav-item" data-filter-sort style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
       <option value="manual"   {% if sort == 'manual'   %}selected{% endif %}>Playlist order</option>
       <option value="added"    {% if sort == 'added'    %}selected{% endif %}>Date added</option>
-      <option value="name"     {% if sort == 'name'     %}selected{% endif %}>Name</option>
       <option value="duration" {% if sort == 'duration' %}selected{% endif %}>Duration</option>
-      <option value="modified" {% if sort == 'modified' %}selected{% endif %}>Modified date</option>
+      <option value="rating"   {% if sort == 'rating'   %}selected{% endif %}>Rating</option>
     </select>
   </label>
   <a class="btn ghost nav-item" data-spa
@@ -24,6 +23,9 @@
     {% if rev %}↑{% else %}↓{% endif %}
   </a>
   <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
+  {% if items|length > 1 %}
+    <button type="button" class="btn ghost nav-item" id="reorderModeBtn" data-reorder-url="{% url 'reorder_playlist' playlist.pk %}">⇅ Reorder</button>
+  {% endif %}
   <form method="post" action="{% url 'delete_playlist' playlist.pk %}"
         data-confirm="Delete this playlist? Videos are kept." style="margin:0">
     {% csrf_token %}
@@ -45,7 +47,7 @@
   </div>
 </div>
 {% if items %}
-  <div class="grid" style="margin-top:18px">
+  <div class="grid" id="plGrid" style="margin-top:18px">
     {% for item in items %}
       {% with video=item.video pl=playlist.pk %}{% include "library/_card.html" %}{% endwith %}
     {% endfor %}

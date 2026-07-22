@@ -209,6 +209,21 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 #selFab:hover{border-color:var(--accent)}
 @media(max-width:700px){#selFab{left:7px;width:32px;height:32px;font-size:15px}}
 
+/* ---- playlist reorder ---- */
+#reorderModeBtn.active{color:var(--accent);border-color:var(--accent)}
+.reorder-mode .card{cursor:default}
+.reorder-mode .card .meta,.reorder-mode .card .t,.reorder-mode .card .s{pointer-events:none}
+.reorder-handle{position:absolute;right:7px;top:7px;width:30px;height:30px;
+  background:#000c;color:#fff;border-radius:7px;font-size:17px;font-weight:700;
+  display:flex;align-items:center;justify-content:center;cursor:grab;
+  touch-action:none;z-index:3}
+.reorder-handle:active{cursor:grabbing}
+.reorder-mode .card.dragging{opacity:.4}
+#reorderBar{position:fixed;bottom:var(--bottom-nav-h);left:0;right:0;z-index:201;
+  background:var(--surface);border-top:2px solid var(--accent);
+  padding:10px 18px;display:flex;align-items:center;justify-content:center;gap:12px;
+  flex-wrap:wrap;box-shadow:0 -4px 20px #0008}
+
 /* ---- SPA top progress bar ---- */
 #spaBar{position:fixed; top:0; left:0; height:3px; width:0; z-index:600;
   background:var(--accent); transition:width .2s ease, opacity .3s ease; opacity:0}
@@ -319,6 +334,15 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   #player.ph-expanded .ph-stage{height:min(56.25vw, calc(100svh - 220px));border-radius:0}
   #player.ph-expanded.ph-shorts .ph-stage{height:min(calc(100svh - 56px), calc(177.78vw));}
 }
+/* Desktop shorts: a full-bleed-width stage would just letterbox the portrait
+   video inside a mostly-black bar. Constrain it to a centered 9:16 column
+   instead (height is already set above; aspect-ratio + width:auto derives
+   the matching width from it, no JS needed). */
+@media(min-width:701px){
+  #player.ph-expanded.ph-shorts .ph-stage{
+    aspect-ratio:9/16; width:auto; max-width:100%; margin:0 auto; border-radius:var(--radius);
+  }
+}
 /* Phone in landscape: viewport is short, so the -220px reserve (sized for portrait
    phones/desktop) leaves almost no room for video. Give it nearly the full height.
    hover:none+pointer:coarse scopes this to touch phones, not short desktop windows. */
@@ -339,6 +363,11 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 #player.ph-mini .ph-stage video{object-fit:cover}
 /* Force video repaint context on older TV WebKit */
 #player.ph-expanded .ph-stage video{transform:translateZ(0);-webkit-transform:translateZ(0)}
+
+/* Shorts slide-transition overlay frames (see shortsSlide() JS) -- static
+   thumbnails, siblings of <video>, never the .ph-stage box itself. */
+.shorts-trans-frame{position:absolute; inset:0; background-size:cover;
+  background-position:center; z-index:4; pointer-events:none; background-color:#000}
 
 /* ripple */
 .ripple{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
@@ -447,7 +476,6 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .mini-ctrls button:hover{background:#fff2}
 .mini-ctrls button:active{background:#fff3}
 .mini-ctrls button:disabled{opacity:.3; pointer-events:none}
-.mini-spacer{display:none}
 .mini-timeline{position:relative; height:5px; margin:0 2px 8px; border-radius:2px;
   background:rgba(255,255,255,.28); cursor:pointer; flex-shrink:0}
 .mini-fill{position:absolute; top:0; left:0; height:100%; width:0;
@@ -650,6 +678,7 @@ html.player-locked{overflow:hidden}
     <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library">Library</a>
     <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists">Playlists</a>
     <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history">History</a>
+    <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts">Shorts</a>
   </nav>
   <div class="hdr-search">
     <form action="{% url 'library' %}" method="get" id="searchForm">
@@ -664,6 +693,13 @@ html.player-locked{overflow:hidden}
         <button class="nav-item">↻ Rescan library</button></form>
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
       <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
+      <hr>
+      <div class="nav-item row-inline" style="cursor:default">
+        <span>🖼 Default thumb %</span>
+        <input type="number" id="defThumbPct" min="0" max="100" step="1"
+               value="{{ default_thumb_percent|floatformat:0 }}" style="width:56px">
+        <button type="button" class="btn ghost" id="defThumbSave" style="padding:4px 8px;font-size:12px">Save</button>
+      </div>
       <hr>
       <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
         <button class="nav-item">🧹 Remove missing files</button></form>
@@ -868,12 +904,11 @@ html.player-locked{overflow:hidden}
             <span class="mts" id="phMiniTs">0:00</span>
           </div>
           <div class="mini-ctrls">
+            <button id="phMiniClose" title="Close">×</button>
             <button id="phMiniSeekB" title="Previous video">⏮</button>
             <button id="phMiniPlay" title="Play/pause">▶</button>
             <button id="phMiniSeekF" title="Next video">⏭</button>
-            <span class="mini-spacer"></span>
             <button id="phMiniExpand" title="Expand">⤢</button>
-            <button id="phMiniClose" title="Close">×</button>
           </div>
           <div class="mini-timeline" id="phMiniTimeline"><div class="mini-fill" id="phMiniFill"></div></div>
         </div>
@@ -938,6 +973,9 @@ document.getElementById('themeBtn').onclick=()=>post('/theme/')
 const mm=document.getElementById('manageMenu');
 document.getElementById('manageBtn').onclick=e=>{e.stopPropagation();mm.classList.toggle('open');};
 document.addEventListener('click',()=>mm.classList.remove('open'));
+document.getElementById('defThumbSave').onclick=e=>{e.stopPropagation();
+  const btn=e.currentTarget,pct=document.getElementById('defThumbPct').value;
+  post('/settings/thumb-percent/',{percent:pct}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='Save',1200);});};
 
 /* =========================================================
    SPA ROUTER
@@ -1260,6 +1298,111 @@ function wireSortUI(root){
     q.set('sort',sortSel.value); ROUTER.go(location.pathname+'?'+q.toString());};
 }
 
+/* Drag-to-reorder for a playlist grid (Playlist detail only). Each card gets
+   a small ⠿ handle -- pointerdown there starts a drag using the same
+   pointer-capture pattern as the mini-player drag/seek-bar (setPointerCapture
+   + pointermove/pointerup), which also works uniformly for touch. Instead of
+   free-following the cursor (fiddly in a wrapping grid), the dragged card is
+   swapped to sit before/after whatever card is currently under the pointer --
+   simpler to get right and still gives immediate visual feedback. Auto-scrolls
+   near the top/bottom edge so long playlists can be reordered without the
+   "tap every video in order" problem. Returns a cleanup fn. */
+function wireReorderUI(root){
+  const btn=root.querySelector('#reorderModeBtn');
+  const grid=root.querySelector('#plGrid');
+  if(!btn||!grid)return null;
+  const url=btn.dataset.reorderUrl;
+  const scrollEl=window.innerWidth<=700?(document.getElementById('app')||window):window;
+  let active=false, dragEl=null, scrollRAF=null, bar=null;
+
+  function cardId(card){const m=card.href&&card.href.match(/\/watch\/(\d+)\//);return m?m[1]:null;}
+
+  function addHandles(){
+    grid.querySelectorAll('.card').forEach(card=>{
+      const thumb=card.querySelector('.thumb');
+      if(!thumb||thumb.querySelector('.reorder-handle'))return;
+      const h=document.createElement('span');
+      h.className='reorder-handle';h.textContent='⠿';
+      thumb.appendChild(h);
+    });
+  }
+  function removeHandles(){grid.querySelectorAll('.reorder-handle').forEach(h=>h.remove());}
+
+  function autoScroll(clientY){
+    cancelAnimationFrame(scrollRAF);scrollRAF=null;
+    const vh=scrollEl===window?window.innerHeight:scrollEl.clientHeight;
+    const top=scrollEl===window?0:scrollEl.getBoundingClientRect().top;
+    const edge=70;
+    let dy=0;
+    if(clientY-top<edge)dy=-14; else if(top+vh-clientY<edge)dy=14;
+    if(!dy)return;
+    function step(){
+      if(scrollEl===window)window.scrollBy(0,dy);else scrollEl.scrollTop+=dy;
+      scrollRAF=requestAnimationFrame(step);
+    }
+    scrollRAF=requestAnimationFrame(step);
+  }
+  function stopAutoScroll(){if(scrollRAF)cancelAnimationFrame(scrollRAF);scrollRAF=null;}
+
+  function onMove(e){
+    if(!dragEl)return;
+    e.preventDefault();
+    autoScroll(e.clientY);
+    const target=document.elementFromPoint(e.clientX,e.clientY);
+    const card=target&&target.closest('.card');
+    if(!card||card===dragEl||!grid.contains(card))return;
+    const box=card.getBoundingClientRect();
+    const before=(e.clientX-box.left)<box.width/2;
+    grid.insertBefore(dragEl,before?card:card.nextSibling);
+  }
+  function endDrag(e){
+    if(!dragEl)return;
+    try{grid.releasePointerCapture(e.pointerId);}catch(err){}
+    dragEl.classList.remove('dragging');
+    dragEl=null;stopAutoScroll();
+    grid.removeEventListener('pointermove',onMove);
+    document.removeEventListener('pointerup',endDrag);
+    document.removeEventListener('pointercancel',endDrag);
+  }
+  grid.addEventListener('pointerdown',e=>{
+    if(!active)return;
+    const handle=e.target.closest('.reorder-handle');
+    if(!handle)return;
+    e.preventDefault();e.stopPropagation();
+    dragEl=handle.closest('.card');
+    dragEl.classList.add('dragging');
+    grid.setPointerCapture(e.pointerId);
+    grid.addEventListener('pointermove',onMove);
+    document.addEventListener('pointerup',endDrag);
+    document.addEventListener('pointercancel',endDrag);
+  });
+  // Block card navigation while in reorder mode (cards are <a> links).
+  grid.addEventListener('click',e=>{if(active)e.preventDefault();},true);
+
+  function enable(){
+    active=true;grid.classList.add('reorder-mode');addHandles();
+    btn.classList.add('active');btn.textContent='✕ Cancel reorder';
+    bar=document.createElement('div');bar.id='reorderBar';
+    bar.innerHTML='<span class="sub">Drag ⠿ to reorder</span>'+
+      '<button class="btn" id="reorderSaveBtn">✓ Save order</button>'+
+      '<button class="btn ghost" id="reorderCancelBtn">✕ Cancel</button>';
+    document.body.appendChild(bar);
+    bar.querySelector('#reorderSaveBtn').onclick=()=>{
+      const ids=[...grid.querySelectorAll('.card')].map(cardId).filter(Boolean).join(',');
+      post(url,{ids}).then(()=>{disable();ROUTER.go(location.pathname+'?sort=manual',{push:false,replace:true});});
+    };
+    bar.querySelector('#reorderCancelBtn').onclick=()=>{disable();ROUTER.reload();};
+  }
+  function disable(){
+    active=false;grid.classList.remove('reorder-mode');removeHandles();
+    btn.classList.remove('active');btn.textContent='⇅ Reorder';
+    if(bar){bar.remove();bar=null;}
+  }
+  btn.onclick=()=>{active?disable():enable();};
+
+  return ()=>{disable();};
+}
+
 const PAGE_INIT={
   /* ----- LIBRARY: virtualised infinite grid ----- */
   library(root){
@@ -1363,19 +1506,22 @@ const PAGE_INIT={
     return wireSelectUI(root,{selectAll:true});
   },
 
-  /* ----- PLAYLIST DETAIL: select-mode + cover image tool ----- */
+  /* ----- PLAYLIST DETAIL: select-mode + reorder-mode + cover image tool ----- */
   playlist_detail(root){
     wireThumbTool(root);
     wireSortUI(root);
-    return wireSelectUI(root,{selectAll:true});
+    const selCleanup=wireSelectUI(root,{selectAll:true});
+    const reorderCleanup=wireReorderUI(root);
+    return ()=>{if(selCleanup)selCleanup();if(reorderCleanup)reorderCleanup();};
   },
 
   /* ----- SMART PLAYLIST: rules editor + cover image tool ----- */
   smart_playlist(root){
     wireThumbTool(root);
     wireSortUI(root);
+    const selCleanup=wireSelectUI(root,{selectAll:true});
     const form=root.querySelector('#rulesForm');
-    if(!form)return null;
+    if(!form)return selCleanup;
     const FIELDS=[{v:'title',l:'Title'},{v:'filename',l:'Filename'},{v:'channel',l:'Channel'},
       {v:'tags',l:'Tag'},{v:'ext',l:'Format (ext)'},{v:'rating',l:'Rating (stars)'},
       {v:'duration_seconds',l:'Duration (s)'},{v:'height',l:'Quality (px height)'},{v:'favorite',l:'Is favorite'}];
@@ -1409,7 +1555,7 @@ const PAGE_INIT={
     // Update hidden input before the router serialises the form (capture = runs first)
     form.addEventListener('submit',()=>{root.querySelector('#rulesInput').value=JSON.stringify(rules);},true);
     renderRules();
-    return null;
+    return selCleanup;
   },
 };
 
@@ -1918,9 +2064,13 @@ const PLAYER=(function(){
     DURLB.textContent=data.duration_label;
     if(DL)DL.href=data.download_url;
     document.title=data.title+' — HomeFlix';
-    // ph-shorts: portrait fullscreen + swipe nav only on mobile phones.
-    // On PC/TV keep normal layout so portrait videos don't hijack the left side.
-    EL.classList.toggle('ph-shorts', data.is_portrait===true && window.innerWidth<=700);
+    // ph-shorts: portrait vertical-feed player (swipe/wheel/arrow next-prev).
+    // Now enabled on desktop too (was phone-only) -- kept as its own mode,
+    // layered as siblings inside .ph-stage / driven entirely by CSS + the
+    // shortsSlide() transition below, so it never touches .ph-stage's own
+    // transform (that's goFull()'s fullscreen target -- see the comment
+    // there for why that separation matters).
+    EL.classList.toggle('ph-shorts', data.is_portrait===true);
     // Always attempt playback — some browsers can actually decode mkv/hevc even
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
@@ -2246,6 +2396,10 @@ const PLAYER=(function(){
     else clickT=setTimeout(()=>{clickT=null;toggle();},260);
   });
 
+  // Fullscreen target is STAGE (.ph-stage) itself -- keep it that way. Shorts
+  // mode's slide transition (shortsSlide) intentionally only animates its own
+  // sibling overlay divs, never STAGE's transform/box, so it can't interfere
+  // with this regardless of which mode is active when the user hits fullscreen.
   function goFull(){
     if(document.fullscreenElement||document.webkitFullscreenElement)
       (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document);
@@ -2363,8 +2517,8 @@ const PLAYER=(function(){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
       case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+SEEK_STEP);}break;
       case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-SEEK_STEP);}break;
-      case'ArrowUp':e.preventDefault();{const n=nextId();if(n)navigate(n,true);}break;
-      case'ArrowDown':e.preventDefault();{const p=prevId();if(p)navigate(p);}break;
+      case'ArrowUp':e.preventDefault();{const n=nextId();if(n){if(EL.classList.contains('ph-shorts'))shortsSlide(n,1);navigate(n,true);}}break;
+      case'ArrowDown':e.preventDefault();{const p=prevId();if(p){if(EL.classList.contains('ph-shorts'))shortsSlide(p,-1);navigate(p);}}break;
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
       case'm':case'M':V.muted=!V.muted;syncVol();break;
@@ -2412,8 +2566,8 @@ const PLAYER=(function(){
         // the browser doesn't also fire a trailing synthetic click on the
         // (now different) video underneath.
         e.preventDefault();
-        if(dy<0){const n=nextId();if(n)navigate(n,true);}
-        else if(dy>0){const p=prevId();if(p)navigate(p,true);}
+        if(dy<0){const n=nextId();if(n)navigateShorts(n,1);}
+        else if(dy>0){const p=prevId();if(p)navigateShorts(p,-1);}
       } else if(!EL.classList.contains('ph-shorts')&&dy>70&&dt<500){
         // Same reason: without this, a trailing synthetic click hits STAGE's
         // click handler right after minimize() just set state to 'mini' ->
@@ -2423,6 +2577,18 @@ const PLAYER=(function(){
         minimize();
       }
     }
+  },{passive:false});
+
+  /* desktop mouse-wheel = swipe equivalent in Shorts mode (deltaY>0 -> next,
+     <0 -> prev), debounced so one scroll gesture only advances one video. */
+  let wheelLock=false;
+  STAGE.addEventListener('wheel',e=>{
+    if(state()!=='expanded'||!EL.classList.contains('ph-shorts'))return;
+    e.preventDefault();
+    if(wheelLock||Math.abs(e.deltaY)<8)return;
+    wheelLock=true;setTimeout(()=>{wheelLock=false;},350);
+    if(e.deltaY>0){const n=nextId();if(n)navigateShorts(n,1);}
+    else{const p=prevId();if(p)navigateShorts(p,-1);}
   },{passive:false});
 
   /* save progress */
@@ -2562,6 +2728,32 @@ const PLAYER=(function(){
   function navigate(id,fromZero=false){const playing=!V.paused;
     fetchApply(id,playing||autoplay,fromZero?0:undefined,d?d._qp||'':'');
     history.replaceState({watch:id},'','/watch/'+id+'/');SCRL.scrollTop=0;}
+
+  /* Vertical "shorts" transition: a quick thumbnail slide (dir=1 up for next,
+     dir=-1 down for prev) layered as siblings of <video> inside .ph-stage --
+     purely visual, removed after the animation. Deliberately never transforms
+     .ph-stage itself: that element is what goFull()/requestFullscreen() below
+     targets, and animating the fullscreen target is exactly the class of bug
+     that broke the old PC "similar videos" panel's fullscreen sometimes. */
+  function shortsSlide(targetId,dir){
+    if(!d)return;
+    const cur=document.createElement('div');cur.className='shorts-trans-frame';
+    cur.style.backgroundImage=`url(/thumb/${d.id}/)`;
+    const nxt=document.createElement('div');nxt.className='shorts-trans-frame';
+    nxt.style.backgroundImage=`url(/thumb/${targetId}/)`;
+    nxt.style.transform=`translateY(${dir*100}%)`;
+    STAGE.appendChild(cur);STAGE.appendChild(nxt);
+    requestAnimationFrame(()=>{
+      cur.style.transition=nxt.style.transition='transform .26s ease';
+      cur.style.transform=`translateY(${-dir*100}%)`;
+      nxt.style.transform='translateY(0)';
+    });
+    setTimeout(()=>{cur.remove();nxt.remove();},280);
+  }
+  function navigateShorts(id,dir){
+    if(EL.classList.contains('ph-shorts'))shortsSlide(id,dir);
+    navigate(id,true);
+  }
 
   function openFromSSR(data){
     setState('expanded');pushed=false;

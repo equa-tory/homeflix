@@ -55,6 +55,7 @@ def base_ctx(request, *, active_nav="", page_id="", spa_title="HomeFlix", **extr
         "active_nav": active_nav,
         "page_id": page_id,
         "spa_title": spa_title,
+        "default_thumb_percent": Setting.get("default_thumb_percent", "0"),
         # The page templates extend this. Full load -> shell; SPA fetch -> fragment.
         "base_template": "library/_spa.html" if is_spa(request) else "library/base.html",
     }
@@ -64,9 +65,7 @@ def base_ctx(request, *, active_nav="", page_id="", spa_title="HomeFlix", **extr
 
 SORTS = {
     "added": "-date_added",
-    "name": "title",
     "duration": "-duration_seconds",
-    "modified": "-file_mtime",
 }
 
 # Same sort choices as Library's SORTS, but for a PlaylistItem queryset (needs
@@ -76,10 +75,16 @@ SORTS = {
 PLAYLIST_SORTS = {
     "manual": "order",
     "added": "-video__date_added",
-    "name": "video__title",
     "duration": "-video__duration_seconds",
-    "modified": "-video__file_mtime",
 }
+
+# "Rating" sort is two-key (favorites/hearts first, then star rating) so it
+# can't live in the single-string SORTS/PLAYLIST_SORTS dicts above -- these
+# are the field pairs used to special-case it in each sort site below.
+RATING_ORDER = ("-favorite", "-rating")
+RATING_ORDER_REV = ("favorite", "rating")
+PLAYLIST_RATING_ORDER = ("-video__favorite", "-video__rating")
+PLAYLIST_RATING_ORDER_REV = ("video__favorite", "video__rating")
 
 
 def _apply_sort(order, rev):
@@ -161,10 +166,13 @@ def _filtered_videos(request):
         qs = qs.filter(height__gt=_F("width"), width__gt=0)
     sort = request.GET.get("sort", "added")
     rev  = request.GET.get("rev") == "1"
-    order = SORTS.get(sort, "-date_added")
-    if rev:
-        order = order.lstrip("-") if order.startswith("-") else f"-{order}"
-    qs = qs.order_by(order)
+    if sort == "rating":
+        qs = qs.order_by(*(RATING_ORDER_REV if rev else RATING_ORDER))
+    else:
+        order = SORTS.get(sort, "-date_added")
+        if rev:
+            order = order.lstrip("-") if order.startswith("-") else f"-{order}"
+        qs = qs.order_by(order)
     return qs, q, sort, rev
 
 
@@ -256,9 +264,12 @@ def playlist_detail(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
     sort = request.GET.get("sort", "manual")
     rev = request.GET.get("rev") == "1"
-    order = _apply_sort(PLAYLIST_SORTS.get(sort, "order"), rev)
+    if sort == "rating":
+        order = PLAYLIST_RATING_ORDER_REV if rev else PLAYLIST_RATING_ORDER
+    else:
+        order = (_apply_sort(PLAYLIST_SORTS.get(sort, "order"), rev),)
     items = (pl.items.select_related("video").filter(video__missing=False)
-             .order_by(order))
+             .order_by(*order))
     return render(request, "library/playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="playlist_detail",
         spa_title=f"{pl.name} — HomeFlix",
@@ -782,6 +793,17 @@ def toggle_autoplay(request):
 
 
 @require_POST
+def set_default_thumb_percent(request):
+    try:
+        pct = float(request.POST.get("percent", 0))
+    except ValueError:
+        pct = 0.0
+    pct = max(0.0, min(100.0, pct))
+    Setting.set("default_thumb_percent", pct)
+    return JsonResponse({"default_thumb_percent": pct})
+
+
+@require_POST
 def toggle_repeat(request):
     # Cycle: off -> all (loop the whole queue) -> one (loop this video) -> off.
     order = ["off", "all", "one"]
@@ -1120,6 +1142,30 @@ def delete_playlist(request, pk):
     return redirect("playlists")
 
 
+# ---- Playlist reorder -------------------------------------------------------
+@require_POST
+def reorder_playlist(request, pk):
+    """Persist a new manual order for a playlist's items. `ids` is a
+    comma-separated list of video ids in the desired order (as dragged in
+    the UI) -- items are re-numbered 0..n so "Playlist order" sort matches."""
+    pl = get_object_or_404(Playlist, pk=pk)
+    ids_param = request.POST.get("ids", "")
+    try:
+        ids = [int(x) for x in ids_param.split(",") if x.strip()]
+    except ValueError:
+        return JsonResponse({"ok": False, "error": "bad ids"}, status=400)
+    items = {it.video_id: it for it in pl.items.filter(video_id__in=ids)}
+    updated = []
+    for i, vid in enumerate(ids):
+        item = items.get(vid)
+        if item and item.order != i:
+            item.order = i
+            updated.append(item)
+    if updated:
+        PlaylistItem.objects.bulk_update(updated, ["order"])
+    return JsonResponse({"ok": True})
+
+
 # ---- Smart playlists -------------------------------------------------------
 from .models import SmartPlaylist
 
@@ -1128,8 +1174,11 @@ def smart_playlist_detail(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     sort = request.GET.get("sort", "added")
     rev = request.GET.get("rev") == "1"
-    order = _apply_sort(SORTS.get(sort, "-date_added"), rev)
-    videos = list(sp.get_videos().order_by(order)[:200])
+    if sort == "rating":
+        order = RATING_ORDER_REV if rev else RATING_ORDER
+    else:
+        order = (_apply_sort(SORTS.get(sort, "-date_added"), rev),)
+    videos = list(sp.get_videos().order_by(*order)[:200])
     return render(request, "library/smart_playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="smart_playlist",
         spa_title=f"{sp.name} — HomeFlix", sp=sp, videos=videos, sort=sort, rev=rev))

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 from django.conf import settings
 from django.utils import timezone
 
-from .models import Video, VideoSubtitle
+from .models import Video, VideoSubtitle, Setting
 
 
 # On Windows, text-mode subprocess output decodes using the locale codepage
@@ -261,7 +261,12 @@ def scan_library(root=None, make_thumbs=True):
                 **info,
             )
             if make_thumbs:
-                generate_thumbnail(video, percent=0.0)
+                try:
+                    default_pct = float(Setting.get("default_thumb_percent", "0"))
+                except (TypeError, ValueError):
+                    default_pct = 0.0
+                default_pct = max(0.0, min(100.0, default_pct))
+                generate_thumbnail(video, percent=default_pct)
             summary["added"] += 1
 
     # Flag any DB rows whose files vanished
