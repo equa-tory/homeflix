@@ -86,6 +86,10 @@ RATING_ORDER_REV = ("favorite", "rating")
 PLAYLIST_RATING_ORDER = ("-video__favorite", "-video__rating")
 PLAYLIST_RATING_ORDER_REV = ("video__favorite", "video__rating")
 
+# Vertical/"shorts" videos. `>=` so square videos count as vertical too.
+# Python-side twin: Video.is_portrait -- keep the two in sync.
+PORTRAIT_Q = Q(height__gte=F("width"), width__gt=0)
+
 
 def _apply_sort(order, rev):
     """Flip a '-field'/'field' order string per the rev flag -- shared by
@@ -162,8 +166,7 @@ def _filtered_videos(request):
     if request.GET.get("fav") == "1":
         qs = qs.filter(favorite=True)
     if request.GET.get("shorts") == "1":
-        from django.db.models import F as _F
-        qs = qs.filter(height__gt=_F("width"), width__gt=0)
+        qs = qs.filter(PORTRAIT_Q)
     sort = request.GET.get("sort", "added")
     rev  = request.GET.get("rev") == "1"
     if sort == "rating":
@@ -473,7 +476,8 @@ def _build_watch_data(request, pk):
         "recommended": [rec_dict(v) for v in recommended],
         "playlists": [{"id": p.pk, "name": p.name} for p in Playlist.objects.all()],
         "ext": (video.ext or "").upper(),
-        "is_portrait": bool(video.height and video.width and video.height > video.width),
+        "is_portrait": video.is_portrait,
+        "aspect": round(video.width / video.height, 4) if (video.width and video.height) else None,
         "frame_url_base": f"/frame/{pk}/",
         "pl": pl_id or "",
         "remote_path": remote_path,
@@ -1065,7 +1069,7 @@ def reset_library(request):
 
 # ---- Random video ----------------------------------------------------------
 def shorts(request):
-    videos = (Video.objects.filter(missing=False, hidden=False, height__gt=F("width"), width__gt=0)
+    videos = (Video.objects.filter(missing=False, hidden=False).filter(PORTRAIT_Q)
               .order_by("-date_added"))
     return render(request, "library/shorts.html", base_ctx(
         request, active_nav="shorts", page_id="shorts", spa_title="Shorts — HomeFlix",

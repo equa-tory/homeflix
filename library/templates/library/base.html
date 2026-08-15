@@ -340,7 +340,7 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
    the matching width from it, no JS needed). */
 @media(min-width:701px){
   #player.ph-expanded.ph-shorts .ph-stage{
-    aspect-ratio:9/16; width:auto; max-width:100%; margin:0 auto; border-radius:var(--radius);
+    aspect-ratio:var(--vid-ar,9/16); width:auto; max-width:100%; margin:0 auto; border-radius:var(--radius);
   }
 }
 /* Phone in landscape: viewport is short, so the -220px reserve (sized for portrait
@@ -361,6 +361,16 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 #player.ph-mini .ph-stage{border-radius:14px}
 .ph-stage video{width:100%; height:100%; display:block; background:#000; object-fit:contain}
 #player.ph-mini .ph-stage video{object-fit:cover}
+/* Vertical mini box: the stage drives the box's height (width is the inline,
+   drag-resizable one), so giving it the video's real aspect ratio is all it
+   takes to turn the whole mini player vertical. --vid-ar comes from applyData;
+   9/16 is the fallback. contain (not cover) because a 1:1 video in a 9:16
+   fallback box would otherwise crop ~44% of its width. */
+#player.ph-mini.ph-shorts .ph-stage{aspect-ratio:var(--vid-ar,9/16)}
+#player.ph-mini.ph-shorts .ph-stage video{object-fit:contain}
+/* The control overlay is height:50% of the stage -- fine at 162px tall,
+   absurd at 300px+. Pin it to a fixed strip in vertical mode. */
+#player.ph-mini.ph-shorts .ph-minibar{height:min(96px,50%)}
 /* Force video repaint context on older TV WebKit */
 #player.ph-expanded .ph-stage video{transform:translateZ(0);-webkit-transform:translateZ(0)}
 
@@ -1719,8 +1729,7 @@ const PLAYER=(function(){
     // expanded/hidden inherit a leftover narrow width -> tall/portrait-looking box.
     if(s==='mini'){
       const box=loadMiniBox();
-      const sw=box.w;
-      EL.style.width=(sw>=MINI_MIN_W&&sw<=MINI_MAX_W?sw:288)+'px';
+      applyMiniWidth();
       if(typeof box.left==='number'&&typeof box.top==='number'){
         EL.style.right='auto';EL.style.bottom='auto';
         EL.style.left=box.left+'px';EL.style.top=box.top+'px';
@@ -1731,15 +1740,30 @@ const PLAYER=(function(){
     }
   }
   // Mini player size+position, remembered across reloads/restarts (localStorage,
-  // not sessionStorage — the user asked for this to persist globally).
+  // not sessionStorage — the user asked for this to persist globally). `w` and
+  // `wv` (vertical) are separate so switching orientation doesn't clobber the
+  // other one's remembered size.
   function loadMiniBox(){
     try{return JSON.parse(localStorage.getItem('homeflix_mini_box'))||{};}catch{return{};}
   }
   function saveMiniBox(){
     try{
       const r=EL.getBoundingClientRect();
-      localStorage.setItem('homeflix_mini_box',JSON.stringify({w:EL.offsetWidth,left:r.left,top:r.top}));
+      const box=loadMiniBox();
+      if(EL.classList.contains('ph-shorts'))box.wv=EL.offsetWidth; else box.w=EL.offsetWidth;
+      box.left=r.left; box.top=r.top;
+      localStorage.setItem('homeflix_mini_box',JSON.stringify(box));
     }catch{}
+  }
+  // Picks the width for the current mini box, using the orientation-appropriate
+  // saved size/clamp/default (vertical vs. landscape -- see MINI_MIN_W_V etc.
+  // below). Also (re)applied when orientation changes while already minimised.
+  function applyMiniWidth(){
+    const vertical=EL.classList.contains('ph-shorts');
+    const box=loadMiniBox();
+    const sw=vertical?box.wv:box.w;
+    const min=vertical?MINI_MIN_W_V:MINI_MIN_W, max=vertical?MINI_MAX_W_V:MINI_MAX_W;
+    EL.style.width=(sw>=min&&sw<=max?sw:(vertical?168:288))+'px';
   }
   function persist(){
     if(!d)return;
@@ -2071,6 +2095,13 @@ const PLAYER=(function(){
     // transform (that's goFull()'s fullscreen target -- see the comment
     // there for why that separation matters).
     EL.classList.toggle('ph-shorts', data.is_portrait===true);
+    // Real w/h ratio, read by the vertical-mini and desktop-shorts CSS above
+    // (falls back to 9/16 when missing -- var() ignores an empty value).
+    EL.style.setProperty('--vid-ar', data.aspect || '');
+    // Orientation can change while already minimised (e.g. ⏭ from a landscape
+    // video to a portrait one) -- reapply the orientation-appropriate mini
+    // width/clamp so it doesn't keep the other orientation's saved size.
+    if(state()==='mini'){applyMiniWidth();keepMiniInViewport();}
     // Always attempt playback — some browsers can actually decode mkv/hevc even
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
@@ -2529,6 +2560,7 @@ const PLAYER=(function(){
   /* touch: swipe-down-to-minimize | Shorts swipe nav | double-tap mini resize */
   let swY,swT,lastMiniTap=0;
   const MINI_SIZES=[188,288,380]; let miniSzI=1;
+  const MINI_SIZES_V=[120,168,220]; let miniSzIV=1; // vertical/shorts twin of MINI_SIZES
   function keepMiniInViewport(){
     requestAnimationFrame(()=>{
       const r=EL.getBoundingClientRect();
@@ -2547,8 +2579,13 @@ const PLAYER=(function(){
         // Double-tap → cycle mini size; suppress click so expand() doesn't fire
         e.preventDefault();
         lastMiniTap=0;
-        miniSzI=(miniSzI+1)%MINI_SIZES.length;
-        EL.style.width=MINI_SIZES[miniSzI]+'px';
+        if(EL.classList.contains('ph-shorts')){
+          miniSzIV=(miniSzIV+1)%MINI_SIZES_V.length;
+          EL.style.width=MINI_SIZES_V[miniSzIV]+'px';
+        }else{
+          miniSzI=(miniSzI+1)%MINI_SIZES.length;
+          EL.style.width=MINI_SIZES[miniSzI]+'px';
+        }
         EL.style.right='auto'; EL.style.bottom='auto';
         keepMiniInViewport();
         saveMiniBox();
@@ -2672,8 +2709,11 @@ const PLAYER=(function(){
   EL.addEventListener('pointercancel',endMiniDrag);
 
   /* Mini resize: 4 corners + persist size
-     Bump MINI_MAX_W to allow a bigger mini player (drag-resize cap in px). */
+     Bump MINI_MAX_W to allow a bigger mini player (drag-resize cap in px).
+     _V is the vertical/shorts twin -- narrower cap since width there also
+     drives a much taller box (aspect-ratio ~9/16). */
   const MINI_MIN_W=160,MINI_MAX_W=900;
+  const MINI_MIN_W_V=110,MINI_MAX_W_V=520;
   let rzDrag=false,rzW0=0,rzX0=0,rzR0=0,rzFromRight=true;
   function setupRH(id,fromRight){
     const h=document.getElementById(id);if(!h)return;
@@ -2686,8 +2726,10 @@ const PLAYER=(function(){
     });
     h.addEventListener('pointermove',e=>{
       if(!rzDrag)return;
+      const vertical=EL.classList.contains('ph-shorts');
+      const min=vertical?MINI_MIN_W_V:MINI_MIN_W, max=vertical?MINI_MAX_W_V:MINI_MAX_W;
       const dx=fromRight?(e.clientX-rzX0):(rzX0-e.clientX);
-      const nw=Math.max(MINI_MIN_W,Math.min(MINI_MAX_W,rzW0+dx));
+      const nw=Math.max(min,Math.min(max,rzW0+dx));
       EL.style.width=nw+'px';
       if(!fromRight){EL.style.right='auto';EL.style.left=Math.max(0,rzR0-nw)+'px';}
       e.stopPropagation();

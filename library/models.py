@@ -100,6 +100,13 @@ class Video(models.Model):
             return f"{self.height}p"
         return ""
 
+    @property
+    def is_portrait(self):
+        """Vertical video. Square (w == h) counts as vertical on purpose --
+        it frames far better in the shorts/vertical player than in 16:9.
+        SQL-side twin: views.PORTRAIT_Q -- keep the two in sync."""
+        return bool(self.width and self.height and self.height >= self.width)
+
 
 class VideoSubtitle(models.Model):
     """User-uploaded subtitle attached to a video, stored as app-owned WebVTT.
