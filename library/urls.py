@@ -62,6 +62,7 @@ urlpatterns = [
     path("autoplay/", views.toggle_autoplay, name="toggle_autoplay"),
     path("repeat/", views.toggle_repeat, name="toggle_repeat"),
     path("shuffle/", views.toggle_shuffle, name="toggle_shuffle"),
+    path("seek-step/", views.set_seek_step, name="set_seek_step"),
     path("playlists/create/", views.create_playlist, name="create_playlist"),
     path("playlists/<int:pk>/delete/", views.delete_playlist, name="delete_playlist"),
     path("playlists/<int:pk>/reorder/", views.reorder_playlist, name="reorder_playlist"),

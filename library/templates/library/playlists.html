@@ -9,6 +9,7 @@
   <button class="btn nav-item">+ Playlist</button>
 </form>
 
+{% if user.is_staff %}
 <div class="grid">
   <a class="card nav-item" tabindex="0" href="{% url 'hidden_videos' %}" data-spa>
     <div class="thumb"><div class="placeholder">🙈</div></div>
@@ -16,6 +17,7 @@
       <div class="s">{{ total_hidden }} video{{ total_hidden|pluralize }}</div></div>
   </a>
 </div>
+{% endif %}
 
 {% if playlists %}
 <div class="grid">

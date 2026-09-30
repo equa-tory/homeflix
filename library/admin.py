@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Video, Tag, Playlist, PlaylistItem, PlaybackState, WatchEvent, Setting
+from .models import Video, Tag, Playlist, PlaylistItem, PlaybackState, WatchEvent, Setting, UserPref
 
 
 @admin.register(Video)
@@ -10,4 +10,4 @@ class VideoAdmin(admin.ModelAdmin):
     filter_horizontal = ("tags",)
 
 
-admin.site.register([Tag, Playlist, PlaylistItem, PlaybackState, WatchEvent, Setting])
+admin.site.register([Tag, Playlist, PlaylistItem, PlaybackState, WatchEvent, Setting, UserPref])

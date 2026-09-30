@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -126,16 +127,27 @@ class VideoSubtitle(models.Model):
 
 
 class PlaybackState(models.Model):
-    """Resume position. One row per video (single user -> global = synced)."""
-    video = models.OneToOneField(Video, on_delete=models.CASCADE, related_name="playback")
+    """Resume position. One row per (video, user) so each account's progress
+    is private. `user` is nullable so pre-auth rows (and any edge case where
+    a row somehow gets created without a request.user) never hard-fail the
+    migration -- they just become invisible to every user-scoped query."""
+    video = models.ForeignKey(Video, on_delete=models.CASCADE, related_name="playback_states")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                              null=True, blank=True, related_name="playback_states")
     position_seconds = models.FloatField(default=0.0)
     finished = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        unique_together = ("video", "user")
+
 
 class WatchEvent(models.Model):
-    """Logged each time a video is watched, for the History page."""
+    """Logged each time a video is watched, for the History page. Per-user,
+    same nullable-FK reasoning as PlaybackState above."""
     video = models.ForeignKey(Video, on_delete=models.CASCADE, related_name="watch_events")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                              null=True, blank=True, related_name="watch_events")
     watched_at = models.DateTimeField(auto_now_add=True)
     progress_seconds = models.FloatField(default=0.0)
 
@@ -181,6 +193,36 @@ class Setting(models.Model):
     @classmethod
     def set(cls, key, value):
         cls.objects.update_or_create(key=key, defaults={"value": str(value)})
+
+
+class UserPref(models.Model):
+    """Per-user key/value store (theme, autoplay, repeat, shuffle) -- the
+    per-user twin of Setting. Kept as a separate model rather than adding a
+    user FK to Setting because Setting is also read from the background
+    scanner (services.scan_library) where there is no request/user."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="prefs")
+    key = models.CharField(max_length=64)
+    value = models.CharField(max_length=1024, blank=True, default="")
+
+    class Meta:
+        unique_together = ("user", "key")
+
+    @classmethod
+    def get(cls, user, key, default=""):
+        if not user or not user.is_authenticated:
+            return default
+        row = cls.objects.filter(user=user, key=key).first()
+        return row.value if row else default
+
+    @classmethod
+    def set(cls, user, key, value):
+        # Mirrors the get() guard above -- an anonymous visitor (HOMEFLIX_PUBLIC
+        # mode) has no account to persist to; silently no-op rather than crash
+        # (AnonymousUser is not a real User row, so assigning it to the `user`
+        # FK raises ValueError).
+        if not user or not user.is_authenticated:
+            return
+        cls.objects.update_or_create(user=user, key=key, defaults={"value": str(value)})
 
 
 class VideoNote(models.Model):

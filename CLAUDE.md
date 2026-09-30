@@ -29,11 +29,11 @@ python manage.py test library
 python manage.py createsuperuser
 ```
 
-System dependency: `ffmpeg` and `ffprobe` must be on PATH (`apt install ffmpeg`). The only Python dependency is `Django>=5.0` (`requirements.txt`); production adds `gunicorn`. Everything else (fuzzy search, PNG icon generation, HLS session locking) is stdlib.
+System dependency: `ffmpeg` and `ffprobe` must be on PATH (`apt install ffmpeg`). The only Python dependency is `Django>=5.1` (`requirements.txt`); production adds `gunicorn`. Everything else (fuzzy search, PNG icon generation, HLS session locking) is stdlib.
 
 **Windows:** `run-homeflix.bat` is a self-contained launcher — it creates `.venv`, installs `requirements.txt`, downloads a static ffmpeg build to `%USERPROFILE%\Documents\ffmpeg` if none is on PATH, then runs `migrate` + `runserver`. Edit the `HOMEFLIX_LIBRARY`/`PORT` variables at the top of the file rather than passing env vars. `gunicorn` doesn't work on Windows, so there is no production-server path there — `runserver` is it.
 
-Note: `library/tests.py` is currently an empty stub — `python manage.py test library` runs zero tests. If you add tests, run a single one with `python manage.py test library.tests.<TestClass>.<test_method>`.
+`library/tests.py` covers the auth/permission/per-user-state surface (§ Authentication below) — run a single one with `python manage.py test library.tests.<TestClass>.<test_method>`. It pins `LIBRARY_ROOT` to an empty scratch dir via `@override_settings` so it never scans a real `HOMEFLIX_LIBRARY` the developer's shell happens to have set.
 
 ## Architecture
 
@@ -43,8 +43,21 @@ Django project package is `config/` (`config.settings`, `config.urls`, `config.w
 - `HOMEFLIX_LIBRARY` — root folder scanned recursively for video files
 - `HOMEFLIX_ORIGINS` — comma-separated HTTPS origins for CSRF when behind nginx (e.g. `https://192.168.1.50:8443`)
 - `HOMEFLIX_REMOTE_ROOT` — UNC path shown under the player so you can jump to the file from another machine (`REMOTE_ROOT` setting)
+- `HOMEFLIX_SECRET_KEY` — Django `SECRET_KEY`. Required for any real deployment; the fallback in `config/settings.py` is a public dev-only placeholder
+- `HOMEFLIX_DEBUG` — set `1` for local dev (tracebacks, Django serving `/static/`). Defaults unset (`DEBUG=False`) — leave it that way for anything reachable off your own machine
+- `HOMEFLIX_HOSTS` — comma-separated allowed hostnames/IPs (`ALLOWED_HOSTS`). Required once `DEBUG=False`
+- `HOMEFLIX_HTTPS` — set `1` only once nginx is actually terminating TLS in front of you; marks session/CSRF cookies `Secure`
+- `HOMEFLIX_PUBLIC` — set `1` to let anonymous visitors browse/search/watch/stream without an account (`settings.PUBLIC_ACCESS`). See "Authentication and roles" below for exactly what that does and doesn't exempt
 
-**Directories created at startup** (in `settings.py`, all outside `LIBRARY_ROOT` so the scanner never re-imports them): `thumbnails/`, `converted/`, `hls/`, `subtitles/`.
+**Directories created at startup** (in `settings.py`, all outside `LIBRARY_ROOT` so the scanner never re-imports them): `thumbnails/`, `converted/`, `hls/`, `subtitles/`, `cache/` (login-throttle counters), `staticfiles/` (only populated by `collectstatic`).
+
+**Authentication and roles:** `django.contrib.auth.middleware.LoginRequiredMiddleware` makes every view default-deny — new views need no extra work, but a view that must be reachable *without* a session (there are currently exactly two unconditionally: `pwa_manifest`, `pwa_icon`) needs an explicit `@login_not_required`. On top of that, `library/auth.py`'s `owner_required` decorator draws a second line: `is_staff` accounts ("owner") can do anything; everyone else ("viewer") is blocked from every view that touches the filesystem or the library catalog — scan, organize, rename, delete, convert, hide, thumbnail regen, and the Manage menu's actions. When adding a new view, ask "does this write to disk or change what videos exist" — if yes, decorate it `@owner_required` (stacked *below* `@require_POST` so the auth check runs first) and hide its UI behind `{% if user.is_staff %}` (server templates) or `data.is_owner` (the JSON payload `_build_watch_data` sends the player). `library/auth.py` also holds `ThrottledLoginView` (per-IP lockout via the filesystem cache) and `login.html` is a standalone page — it does **not** extend `base.html`, since the shell is the SPA itself.
+
+A third, optional tier sits below viewer: with `HOMEFLIX_PUBLIC=1` (`settings.PUBLIC_ACCESS`), `library/auth.py`'s `public_when_enabled` decorator exempts a fixed whitelist of read-only views (browsing/search/watch/stream/shorts/playlists, plus the ephemeral prefs — theme/autoplay/repeat/shuffle/seek-step — and `save_progress`) from login. It's applied once per view, at *module import time* — same evaluate-once-at-startup behavior as every other `HOMEFLIX_*` env var, which is also why `override_settings(PUBLIC_ACCESS=...)` can't toggle already-imported views in a test (see `PublicAccessDecoratorTests` in `library/tests.py`, which tests the decorator directly instead). Anything that mutates shared library data (favorite, rating, playlists, notes) stays login-required even in public mode.
+
+**Per-user state:** `PlaybackState` and `WatchEvent` carry a nullable `user` FK (nullable only so pre-auth rows never block the migration — every real query filters `user=`, so a NULL row is just invisible). Any queryset joining `playback_states` must put every condition — `user=`, `finished=`, etc. — in a single `.filter()`/`.exclude()` call; splitting them across calls makes Django emit separate joins that can each match a *different* user's row. Server-rendered card grids (`_card.html`) can't do that join generically, so views call the `_attach_playback(videos, user)` helper (near `base_ctx` in `views.py`) to stick each video's own-user resume row on as `.my_playback` before rendering — `_card.html` reads `video.my_playback|first|pct:video`, never `video.playback` (that related name no longer exists). Preferences that used to live in the global `Setting` model (theme, autoplay, repeat, shuffle, seek_step) moved to `UserPref` (same `get`/`set` classmethod shape, plus a `user` argument) for the same reason — `default_thumb_percent` is the one preference that *stays* on `Setting`, because `services.scan_library()`'s background thread reads it with no request/user in scope.
+
+**`request.user` vs. `AnonymousUser`:** with `HOMEFLIX_PUBLIC=1` some of the above views run for anonymous visitors. `AnonymousUser` is not a real `User` row, so handing it to a `PlaybackState`/`WatchEvent`/`UserPref` query crashes (`TypeError`/`ValueError` — confirmed directly against these models while building this). `views._state_user(request)` returns the real user or `None` (Django's ORM treats `user=None` as "no such user" for these nullable FKs, which is what lets a read query degrade to "nothing personalized" instead of erroring); it's used *only* at the handful of sites building one of those queries, never as a blanket rename of `request.user` — several of the same functions also check `.is_staff`/`.is_authenticated`, which work fine on the real `AnonymousUser` and would break on `None`. `UserPref.get`/`.set` and `_attach_playback` have their own internal anonymous guards for the same reason. Any new per-user-state code path needs the same treatment — see `AnonymousSafeQueryTests` in `library/tests.py`, which calls views directly with a `RequestFactory` + `AnonymousUser()` request (bypassing the login-required dispatch entirely) specifically to catch this class of bug.
 
 **Data flow for a new video:**
 1. `services.scan_library()` walks `LIBRARY_ROOT`, calls `ffprobe` via `services.probe()`, reads optional yt-dlp `.info.json` sidecars via `services.read_sidecar()`, creates `Video` rows (re-probing only when mtime changed), and generates a thumbnail at 0% via `services.generate_thumbnail()`.
@@ -57,11 +70,12 @@ Django project package is `config/` (`config.settings`, `config.urls`, `config.w
 
 **SPA navigation:** The frontend is a thin SPA — page links send `X-SPA: 1` headers, and views check `is_spa(request)` to render either the full shell (`library/base.html`) or just a content fragment (`library/_spa.html`). All views share context via `base_ctx()` in `views.py`.
 
-**Persistent user state** (theme, autoplay, resume position) lives in the DB via:
-- `Setting` model — key/value store (theme, autoplay, loop)
-- `PlaybackState` model — one row per video, updated by `/video/<pk>/progress/` (POST from the player every few seconds)
-- `WatchEvent` model — one row per viewing session, feeds the History page
-- `VideoNote` model — user-added timestamped notes/bookmarks on a video
+**Persistent user state** lives in the DB via:
+- `Setting` model — global key/value store (currently just `default_thumb_percent`)
+- `UserPref` model — per-user key/value store (theme, autoplay, repeat, shuffle, seek_step)
+- `PlaybackState` model — one row per (video, user), updated by `/video/<pk>/progress/` (POST from the player every few seconds)
+- `WatchEvent` model — one row per (video, user) viewing session, feeds the History page
+- `VideoNote` model — user-added timestamped notes/bookmarks on a video (shared, not per-user — any logged-in account can add/see/delete a video's notes)
 
 **Playlists:** Two kinds — manual `Playlist` (ordered via `PlaylistItem.order`) and `SmartPlaylist` (JSON `rules` evaluated at query time in `SmartPlaylist.get_videos()`). Both support a collage thumbnail via `services.generate_collage_thumbnail()`.
 
@@ -72,6 +86,10 @@ Django project package is `config/` (`config.settings`, `config.urls`, `config.w
 **Streaming:** `/stream/<pk>/` in `views.py` handles HTTP Range requests manually (regex `RANGE_RE`, chunked `StreamingHttpResponse`) to support seeking and 4K files without loading everything into memory. It serves the converted copy when one exists.
 
 **PWA:** `views.pwa_manifest` and `views.pwa_icon(size)` generate the manifest and PNG app icons (play-triangle) in pure Python (`struct`/`zlib`, no image library).
+
+**Mobile safe-area gotcha:** `--bottom-nav-h` (`base.html`'s mobile media query) is what `#bulkBar`/`#reorderBar` sit `bottom:` above the tab bar with — it must equal the tab bar's *true* on-screen height, i.e. `calc(<content height> + env(safe-area-inset-bottom,0px))`, not a bare pixel value. A bare-pixel `--bottom-nav-h` is exactly what put those bars behind/overlapping the tab bar on notched iPhones (Safari, normal tab — not installed-to-homescreen). Any new `position:fixed` element anchored to the bottom of the screen needs the same `env(safe-area-inset-bottom)` treatment.
+
+**Shorts mode:** any portrait video (`data.is_portrait`, not just ones opened from the Shorts page) auto-enters `.ph-shorts` mode in the player (`applyData()`, `base.html`), which hides `#phInfo` (the favorite/rating/hide/delete/playlist/notes/rename/convert panel `renderInfo()` builds) entirely — there's no room for it in the swipe-feed layout. `renderShortsRail()`/`bindShortsRail()` (`base.html`, right after `bindInfo()`) render a compact stand-in: favorite, rating (popover), add-to-playlist (popover), and a `•••` overflow for the owner-only actions plus a quick add-note field, reusing the same `.bulk-aw`/`.bulk-pop` popover chrome (and its page-wide outside-click-closes-popover listener) the bulk-select bar already has. Called alongside `renderInfo(data)` on every video load; which one is actually visible is CSS-only (`#player.ph-expanded.ph-shorts #phShortsRail`/`#phInfo`), so the two can never desync.
 
 ## Production deployment
 

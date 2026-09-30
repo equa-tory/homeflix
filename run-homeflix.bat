@@ -22,6 +22,16 @@ set "HOMEFLIX_REMOTE_ROOT="
 REM Port to serve on. 80 needs the terminal running "as Administrator";
 REM 8002 (or anything >1024) does not.
 set "PORT=80"
+
+REM HOMEFLIX_DEBUG=1 keeps Django's dev server serving /static/ itself
+REM (needed for /admin's styling) since this always runs via runserver, not
+REM gunicorn+nginx. Leave this at 1 for LAN-only use; a real deployment
+REM (see README.md's nginx section) should run with it unset.
+set "HOMEFLIX_DEBUG=1"
+
+REM Paste a generated key here before exposing this beyond your own LAN:
+REM   python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
+set "HOMEFLIX_SECRET_KEY="
 REM -------------------------------------------------------------------------
 
 cd /d "%~dp0"
@@ -148,6 +158,11 @@ echo Running migrations ...
 echo Scanning library (first run may take a while) ...
 :: "%VENV_PY%" manage.py scan
 
+echo.
+echo First time here? Every page now requires signing in. If you haven't yet,
+echo stop this window (Ctrl+C) and run once:
+echo     "%VENV_PY%" manage.py createsuperuser
+echo Then re-run this script.
 echo.
 echo == Starting HomeFlix on http://0.0.0.0:%PORT%/  (Ctrl+C to stop) ==
 echo    From another device on your LAN, browse to http://^<this-PC's-IP^>:%PORT%/

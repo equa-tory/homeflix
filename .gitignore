@@ -1,8 +1,12 @@
 __pycache__/
 *.pyc
 db.sqlite3
+*.bak
 thumbnails/
-media_library/
 converted/
+hls/
+subtitles/
+cache/
+staticfiles/
 /venv
 /.venv

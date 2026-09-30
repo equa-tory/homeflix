@@ -5,6 +5,7 @@ import difflib
 import mimetypes
 
 from django.conf import settings
+from django.contrib.auth.decorators import login_not_required
 from django.db.models import Q, Sum, F, Value
 from django.db.models.functions import Replace
 from django.http import (
@@ -16,7 +17,11 @@ from django.views.decorators.http import require_POST
 from django.utils.http import http_date
 from django.views.static import was_modified_since
 
-from .models import Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting, VideoSubtitle
+from .auth import owner_required, public_when_enabled
+from .models import (
+    Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
+    UserPref, VideoSubtitle,
+)
 from . import services
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
@@ -40,7 +45,7 @@ EXTRA_MIME_TYPES = {
 # ---- helpers ---------------------------------------------------------------
 
 def theme(request):
-    return Setting.get("theme", "dark")
+    return UserPref.get(request.user, "theme", "dark")
 
 
 def is_spa(request):
@@ -55,12 +60,51 @@ def base_ctx(request, *, active_nav="", page_id="", spa_title="HomeFlix", **extr
         "active_nav": active_nav,
         "page_id": page_id,
         "spa_title": spa_title,
+        # default_thumb_percent stays a global Setting (not per-user) --
+        # it's also read by the background scanner, which has no user.
         "default_thumb_percent": Setting.get("default_thumb_percent", "0"),
+        "is_owner": request.user.is_authenticated and request.user.is_staff,
         # The page templates extend this. Full load -> shell; SPA fetch -> fragment.
         "base_template": "library/_spa.html" if is_spa(request) else "library/base.html",
     }
     ctx.update(extra)
     return ctx
+
+
+def _state_user(request):
+    """The real User for per-(video,user) state (PlaybackState/WatchEvent/
+    UserPref queries), or None for an anonymous visitor (HOMEFLIX_PUBLIC
+    read-only mode). Passing request.user directly into one of those crashes
+    for AnonymousUser -- it isn't a real model instance, so the ORM can
+    neither filter nor assign it as a FK value. None is what Django's ORM
+    treats as "no such user" for these nullable FKs, which is what lets a
+    public/anonymous request degrade to "no personalized state" instead of
+    erroring. Do NOT use this for .is_staff/.is_authenticated checks -- those
+    work fine on the real request.user and would break on None."""
+    u = request.user
+    return u if u.is_authenticated else None
+
+
+def _attach_playback(videos, user):
+    """Attach `.my_playback` (a 0-or-1-item list holding this user's own
+    PlaybackState) to each Video in `videos`, in one extra query. Since
+    PlaybackState is now per-(video,user), a plain select_related/reverse
+    accessor would match whichever user's row happens to be first -- every
+    server-rendered card grid (_card.html reads `video.my_playback|first`)
+    needs its videos passed through this before rendering.
+
+    `user` should be the result of _state_user() (a real User or None) --
+    but this also tolerates a raw AnonymousUser reaching it by mistake."""
+    videos = list(videos)
+    if user is None or not user.is_authenticated:
+        for v in videos:
+            v.my_playback = []
+        return videos
+    ids = [v.pk for v in videos]
+    states = {s.video_id: s for s in PlaybackState.objects.filter(video_id__in=ids, user=user)}
+    for v in videos:
+        v.my_playback = [states[v.pk]] if v.pk in states else []
+    return videos
 
 
 SORTS = {
@@ -181,16 +225,19 @@ def _filtered_videos(request):
 
 # ---- pages -----------------------------------------------------------------
 
+@public_when_enabled
 def home(request):
+    u = _state_user(request)
     recent = Video.objects.filter(missing=False, hidden=False).order_by("-date_added")[:12]
     continue_watching = (
-        Video.objects.filter(missing=False, hidden=False, playback__finished=False,
-                             playback__position_seconds__gt=5)
-        .select_related("playback").order_by("-playback__updated_at")[:12]
+        Video.objects.filter(missing=False, hidden=False,
+                             playback_states__user=u, playback_states__finished=False,
+                             playback_states__position_seconds__gt=5)
+        .order_by("-playback_states__updated_at")[:12]
     )
 
     recent_watch_ids = list(
-        WatchEvent.objects.filter(video__missing=False)
+        WatchEvent.objects.filter(user=u, video__missing=False)
         .order_by("-watched_at").values_list("video_id", flat=True)[:5]
     )
     tag_ids = list(
@@ -203,25 +250,27 @@ def home(request):
         discovery = list(
             Video.objects.filter(tags__in=tag_ids, missing=False, hidden=False)
             .exclude(pk__in=recent_watch_ids)
-            .exclude(playback__finished=True)
+            .exclude(playback_states__user=u, playback_states__finished=True)
             .distinct().order_by("?")[:12]
         )
     if len(discovery) < 6 and recent_watch_ids:
         excl = set(recent_watch_ids) | {v.pk for v in discovery}
         discovery += list(
             Video.objects.filter(missing=False, hidden=False).exclude(pk__in=excl)
-            .exclude(playback__finished=True).order_by("-date_added")
+            .exclude(playback_states__user=u, playback_states__finished=True).order_by("-date_added")
             [:12 - len(discovery)]
         )
 
     return render(request, "library/home.html", base_ctx(
         request, active_nav="home", page_id="home", spa_title="HomeFlix",
-        recent=recent, continue_watching=continue_watching,
-        discovery=discovery,
+        recent=_attach_playback(recent, u),
+        continue_watching=_attach_playback(continue_watching, u),
+        discovery=_attach_playback(discovery, u),
         total=Video.objects.filter(missing=False, hidden=False).count(),
     ))
 
 
+@public_when_enabled
 def library(request):
     qs, q, sort, rev = _filtered_videos(request)
     total_secs = Video.objects.filter(missing=False, hidden=False).aggregate(s=Sum('duration_seconds'))['s'] or 0
@@ -239,22 +288,26 @@ def library(request):
     ))
 
 
+@owner_required
 def hidden_videos(request):
     videos = Video.objects.filter(missing=False, hidden=True).order_by("-date_added")
+    total_hidden = videos.count()
     return render(request, "library/hidden.html", base_ctx(
         request, active_nav="", page_id="hidden", spa_title="Hidden — HomeFlix",
-        videos=videos, total_hidden=videos.count(),
+        videos=_attach_playback(videos, request.user), total_hidden=total_hidden,
     ))
 
 
 def history(request):
-    events = (WatchEvent.objects.select_related("video")
-              .filter(video__missing=False)[:200])
+    events = list(WatchEvent.objects.select_related("video")
+                  .filter(user=request.user, video__missing=False)[:200])
+    _attach_playback([e.video for e in events], request.user)
     return render(request, "library/history.html", base_ctx(
         request, active_nav="history", spa_title="History — HomeFlix",
         events=events))
 
 
+@public_when_enabled
 def playlists(request):
     return render(request, "library/playlists.html", base_ctx(
         request, active_nav="playlists", page_id="playlists", spa_title="Playlists — HomeFlix",
@@ -263,6 +316,7 @@ def playlists(request):
         total_hidden=Video.objects.filter(missing=False, hidden=True).count()))
 
 
+@public_when_enabled
 def playlist_detail(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
     sort = request.GET.get("sort", "manual")
@@ -271,8 +325,9 @@ def playlist_detail(request, pk):
         order = PLAYLIST_RATING_ORDER_REV if rev else PLAYLIST_RATING_ORDER
     else:
         order = (_apply_sort(PLAYLIST_SORTS.get(sort, "order"), rev),)
-    items = (pl.items.select_related("video").filter(video__missing=False)
-             .order_by(*order))
+    items = list(pl.items.select_related("video").filter(video__missing=False)
+                 .order_by(*order))
+    _attach_playback([it.video for it in items], _state_user(request))
     return render(request, "library/playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="playlist_detail",
         spa_title=f"{pl.name} — HomeFlix",
@@ -298,7 +353,10 @@ def _build_watch_data(request, pk):
     from .templatetags.library_extras import duration as fmt_dur, filesize as fmt_size
     import random as _rnd
 
+    u = _state_user(request)
     video = get_object_or_404(Video, pk=pk, missing=False)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
 
     # "Next"/"prev" queue: which list of videos this play was opened from.
     # Cards carry that context in the watch URL's query string (pl=, sp=,
@@ -321,7 +379,7 @@ def _build_watch_data(request, pk):
         # WatchEvent is already deduped for consecutive repeats (see below) —
         # collapse here too in case older rows predate that fix.
         seen = []
-        for vid in (WatchEvent.objects.filter(video__missing=False)
+        for vid in (WatchEvent.objects.filter(user=u, video__missing=False)
                     .order_by("-watched_at").values_list("video_id", flat=True)):
             if not seen or seen[-1] != vid:
                 seen.append(vid)
@@ -342,29 +400,36 @@ def _build_watch_data(request, pk):
         if i < len(queue_ids) - 1:
             next_id = queue_ids[i + 1]
 
-    state, _ = PlaybackState.objects.get_or_create(video=video)
-    # Only log a new History row when it's a different video than the most
-    # recent one — _build_watch_data runs on every player open *and* every
-    # re-fetch (favorite toggle, add-to-playlist, download, etc.), so without
-    # this the same video watched/reopened repeatedly fills History with runs
-    # of duplicates.
-    last_event = WatchEvent.objects.order_by("-id").first()
-    if not last_event or last_event.video_id != video.id:
-        WatchEvent.objects.create(video=video, progress_seconds=state.position_seconds)
+    # Anonymous (HOMEFLIX_PUBLIC) visitor: no account to attach a resume row
+    # or history entry to. Skip both rather than writing a shared "anonymous"
+    # row -- that would make every anonymous visitor's progress/history bleed
+    # into every other anonymous visitor's.
+    if u is not None:
+        state, _ = PlaybackState.objects.get_or_create(video=video, user=u)
+        # Only log a new History row when it's a different video than the most
+        # recent one — _build_watch_data runs on every player open *and* every
+        # re-fetch (favorite toggle, add-to-playlist, download, etc.), so without
+        # this the same video watched/reopened repeatedly fills History with runs
+        # of duplicates.
+        last_event = WatchEvent.objects.filter(user=u).order_by("-id").first()
+        if not last_event or last_event.video_id != video.id:
+            WatchEvent.objects.create(video=video, user=u, progress_seconds=state.position_seconds)
+    else:
+        state = None
 
     tag_ids = list(video.tags.values_list("pk", flat=True))
     recommended = []
     if tag_ids:
         recommended += list(
             Video.objects.filter(tags__in=tag_ids, missing=False, hidden=False)
-            .exclude(pk=video.pk).exclude(playback__finished=True)
+            .exclude(pk=video.pk).exclude(playback_states__user=u, playback_states__finished=True)
             .distinct().order_by("?")[:8]
         )
     if video.channel and len(recommended) < 8:
         excl = {video.pk} | {v.pk for v in recommended}
         recommended += list(
             Video.objects.filter(channel=video.channel, missing=False, hidden=False)
-            .exclude(pk__in=excl).exclude(playback__finished=True)
+            .exclude(pk__in=excl).exclude(playback_states__user=u, playback_states__finished=True)
             .order_by("?")[:4]
         )
     if len(recommended) < 12:
@@ -378,7 +443,7 @@ def _build_watch_data(request, pk):
 
     rec_pks = [v.pk for v in recommended]
     rec_states = {ps.video_id: ps
-                  for ps in PlaybackState.objects.filter(video_id__in=rec_pks)}
+                  for ps in PlaybackState.objects.filter(video_id__in=rec_pks, user=u)}
 
     def rec_dict(v):
         st = rec_states.get(v.pk)
@@ -421,7 +486,7 @@ def _build_watch_data(request, pk):
     # video you finished (or nearly did) starts fresh instead of a few
     # seconds from the end. The stored position (and card progress bar) is
     # untouched — only the resume *start point* for this open is affected.
-    resume_pos = state.position_seconds
+    resume_pos = state.position_seconds if state else 0.0
     if video.duration_seconds and resume_pos >= 0.8 * video.duration_seconds:
         resume_pos = 0.0
 
@@ -447,10 +512,18 @@ def _build_watch_data(request, pk):
         "convert_status_url": f"/video/{pk}/convert/status/",
         "convert_cancel_url": f"/video/{pk}/convert/cancel/",
         "needs_convert": video.needs_convert_ui,
-        "repeat": Setting.get("repeat", "off"),
+        "repeat": UserPref.get(u, "repeat", "off"),
         "repeat_toggle_url": "/repeat/",
-        "shuffle": Setting.get("shuffle", "0") == "1",
+        "shuffle": UserPref.get(u, "shuffle", "0") == "1",
         "shuffle_toggle_url": "/shuffle/",
+        # Server value wins for a logged-in user (follows the account across
+        # devices); an anonymous visitor has no account, so the frontend
+        # falls back to its own localStorage-only value when this key is
+        # absent from a request that skipped auth entirely -- it's never
+        # absent here, but UserPref.get(None, ...) returns the same "10"
+        # default any fresh browser would start with anyway.
+        "seek_step": int(float(UserPref.get(u, "seek_step", "10"))),
+        "seek_step_url": "/seek-step/",
         "next_id": next_id, "prev_id": prev_id,
         "queue_ids": queue_ids,
         "thumb_url": f"/thumb/{pk}/?v={_thumb_v(video.thumbnail_path)}" if video.thumbnail_path else "",
@@ -465,7 +538,7 @@ def _build_watch_data(request, pk):
         "rating_url": f"/video/{pk}/rating/",
         "playlist_url": f"/video/{pk}/playlist/",
         "autoplay_toggle_url": "/autoplay/",
-        "autoplay": Setting.get("autoplay", "1") == "1",
+        "autoplay": UserPref.get(u, "autoplay", "1") == "1",
         "notes": [
             {"id": n.pk, "ts": n.timestamp_seconds,
              "ts_label": fmt_dur(n.timestamp_seconds), "text": n.text,
@@ -484,9 +557,11 @@ def _build_watch_data(request, pk):
         "hidden": video.hidden,
         "hide_url": f"/video/{pk}/hide/",
         "delete_url": f"/video/{pk}/delete/",
+        "is_owner": request.user.is_authenticated and request.user.is_staff,
     }
 
 
+@public_when_enabled
 def watch(request, pk):
     """Hard load of /watch/<id>/ -> render the shell and auto-open the player."""
     data = _build_watch_data(request, pk)
@@ -497,6 +572,7 @@ def watch(request, pk):
     ))
 
 
+@public_when_enabled
 def watch_api(request, pk):
     """JSON for the player — used by card clicks and prev/next/recommendations."""
     return JsonResponse(_build_watch_data(request, pk))
@@ -519,6 +595,7 @@ def _thumb_file_response(request, path, content_type="image/jpeg"):
     return resp
 
 
+@public_when_enabled
 def thumb(request, pk):
     video = get_object_or_404(Video, pk=pk)
     if video.thumbnail_path and os.path.exists(video.thumbnail_path):
@@ -526,6 +603,7 @@ def thumb(request, pk):
     raise Http404("No thumbnail")
 
 
+@public_when_enabled
 def playlist_thumb(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
     if pl.thumbnail_path and os.path.exists(pl.thumbnail_path):
@@ -534,6 +612,7 @@ def playlist_thumb(request, pk):
     raise Http404("No thumbnail")
 
 
+@public_when_enabled
 def frame_thumb(request, pk, t):
     video = get_object_or_404(Video, pk=pk)
     dur = int(video.duration_seconds or 0)
@@ -554,8 +633,11 @@ def frame_thumb(request, pk, t):
     return FileResponse(open(path, "rb"), content_type="image/jpeg")
 
 
+@public_when_enabled
 def stream(request, pk):
     video = get_object_or_404(Video, pk=pk)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
     path = video.file_path
     if (video.convert_status == Video.CONVERT_DONE and video.converted_path
             and os.path.exists(video.converted_path)):
@@ -605,12 +687,14 @@ def stream(request, pk):
 # ---- actions (POST) --------------------------------------------------------
 
 @require_POST
+@owner_required
 def scan(request):
     services.scan_library()
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
 @require_POST
+@owner_required
 def regen_thumb(request, pk):
     video = get_object_or_404(Video, pk=pk)
     try:
@@ -625,6 +709,7 @@ def regen_thumb(request, pk):
 
 
 @require_POST
+@owner_required
 def rename_video_view(request, pk):
     video = get_object_or_404(Video, pk=pk)
     title = request.POST.get("title")
@@ -697,6 +782,7 @@ def playlist_thumb_upload(request, pk):
     return _upload_thumb(request, pl, f"playlist_{pk}")
 
 
+@public_when_enabled
 def smart_playlist_thumb(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     if sp.thumbnail_path and os.path.exists(sp.thumbnail_path):
@@ -731,13 +817,20 @@ def smart_playlist_thumb_upload(request, pk):
 
 
 @require_POST
+@public_when_enabled
 def save_progress(request, pk):
+    u = _state_user(request)
+    if u is None:
+        # Anonymous (HOMEFLIX_PUBLIC) visitor: no account to persist to.
+        # Silent no-op -- the video keeps playing, it just won't resume next
+        # time, which is correct for a visitor with no account.
+        return JsonResponse({"ok": True})
     video = get_object_or_404(Video, pk=pk)
     try:
         pos = float(request.POST.get("position", 0))
     except ValueError:
         pos = 0.0
-    state, _ = PlaybackState.objects.get_or_create(video=video)
+    state, _ = PlaybackState.objects.get_or_create(video=video, user=u)
     state.position_seconds = pos
     if video.duration_seconds and pos >= 0.9 * video.duration_seconds:
         state.finished = True
@@ -756,6 +849,7 @@ def toggle_favorite(request, pk):
 
 
 @require_POST
+@owner_required
 def toggle_hidden(request, pk):
     video = get_object_or_404(Video, pk=pk)
     video.hidden = not video.hidden
@@ -764,6 +858,7 @@ def toggle_hidden(request, pk):
 
 
 @require_POST
+@owner_required
 def delete_video(request, pk):
     video = get_object_or_404(Video, pk=pk)
     _delete_videos([video], delete_file=request.POST.get("mode") == "file")
@@ -783,20 +878,23 @@ def set_rating(request, pk):
 
 
 @require_POST
+@public_when_enabled
 def toggle_theme(request):
     new = "light" if theme(request) == "dark" else "dark"
-    Setting.set("theme", new)
+    UserPref.set(request.user, "theme", new)
     return JsonResponse({"theme": new})
 
 
 @require_POST
+@public_when_enabled
 def toggle_autoplay(request):
-    new = "0" if Setting.get("autoplay", "1") == "1" else "1"
-    Setting.set("autoplay", new)
+    new = "0" if UserPref.get(request.user, "autoplay", "1") == "1" else "1"
+    UserPref.set(request.user, "autoplay", new)
     return JsonResponse({"autoplay": new == "1"})
 
 
 @require_POST
+@owner_required
 def set_default_thumb_percent(request):
     try:
         pct = float(request.POST.get("percent", 0))
@@ -808,20 +906,38 @@ def set_default_thumb_percent(request):
 
 
 @require_POST
+@public_when_enabled
 def toggle_repeat(request):
     # Cycle: off -> all (loop the whole queue) -> one (loop this video) -> off.
     order = ["off", "all", "one"]
-    cur = Setting.get("repeat", "off")
+    cur = UserPref.get(request.user, "repeat", "off")
     new = order[(order.index(cur) + 1) % len(order)] if cur in order else "off"
-    Setting.set("repeat", new)
+    UserPref.set(request.user, "repeat", new)
     return JsonResponse({"repeat": new})
 
 
 @require_POST
+@public_when_enabled
 def toggle_shuffle(request):
-    new = "0" if Setting.get("shuffle", "0") == "1" else "1"
-    Setting.set("shuffle", new)
+    new = "0" if UserPref.get(request.user, "shuffle", "0") == "1" else "1"
+    UserPref.set(request.user, "shuffle", new)
     return JsonResponse({"shuffle": new == "1"})
+
+
+@require_POST
+@public_when_enabled
+def set_seek_step(request):
+    """The ◀▶/media-key/double-tap seek amount, synced per-account so it
+    follows you across devices (like autoplay/repeat/shuffle). Anonymous
+    (HOMEFLIX_PUBLIC) visitors keep working here too -- UserPref.set() is a
+    silent no-op for them, so the client just falls back to its own
+    localStorage-only value (see setSeekStep() in base.html)."""
+    try:
+        v = max(1, min(600, int(float(request.POST.get("value", 10)))))
+    except ValueError:
+        v = 10
+    UserPref.set(request.user, "seek_step", v)
+    return JsonResponse({"seek_step": v})
 
 
 @require_POST
@@ -875,7 +991,7 @@ def _thumb_v(path):
 
 # ---- Infinite-scroll JSON API ----------------------------------------------
 def _serialize(video, qs_suffix=""):
-    state = getattr(video, "playback", None)
+    state = next(iter(getattr(video, "my_playback", ())), None)
     progress = 0
     if state and video.duration_seconds:
         progress = min(100, (state.position_seconds / video.duration_seconds) * 100)
@@ -894,9 +1010,9 @@ def _serialize(video, qs_suffix=""):
     }
 
 
+@public_when_enabled
 def api_videos(request):
     qs, _q, _sort, _rev = _filtered_videos(request)
-    qs = qs.select_related("playback")
     try:
         page = max(1, int(request.GET.get("page", 1)))
     except ValueError:
@@ -907,7 +1023,8 @@ def api_videos(request):
     filt = request.GET.copy()
     filt.pop("page", None)
     qs_suffix = f"?{filt.urlencode()}" if filt else ""
-    items = [_serialize(v, qs_suffix) for v in qs[start:start + size]]
+    page_videos = _attach_playback(qs[start:start + size], _state_user(request))
+    items = [_serialize(v, qs_suffix) for v in page_videos]
     return JsonResponse({
         "items": items, "page": page, "total": total,
         "has_more": start + size < total,
@@ -916,6 +1033,7 @@ def api_videos(request):
 
 # ---- Conversion endpoints ---------------------------------------------------
 @require_POST
+@owner_required
 def convert(request, pk):
     video = get_object_or_404(Video, pk=pk)
     services.start_conversion(video)
@@ -932,6 +1050,7 @@ def convert_status(request, pk):
 
 
 @require_POST
+@owner_required
 def cancel_convert(request, pk):
     video = get_object_or_404(Video, pk=pk)
     services.cancel_conversion(video)
@@ -945,10 +1064,13 @@ _HLS_SEG_RE = re.compile(r"^seg_\d+\.ts$")
 _HLS_JS_PATH = os.path.join(os.path.dirname(__file__), "vendor", "hls.min.js")
 
 
+@public_when_enabled
 def hls_playlist(request, pk):
     """Start (or reuse) the live transcode and serve its .m3u8. hls.js re-fetches
     this periodically to pick up newly-produced segments."""
     video = get_object_or_404(Video, pk=pk)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
     if not os.path.exists(video.file_path):
         raise Http404("File missing")
     session_dir = services.start_hls(video)
@@ -965,6 +1087,7 @@ def hls_playlist(request, pk):
     return resp
 
 
+@public_when_enabled
 def hls_segment(request, pk, name):
     if not _HLS_SEG_RE.match(name):
         raise Http404("Bad segment")
@@ -983,6 +1106,7 @@ def hls_stop(request, pk):
     return JsonResponse({"ok": True})
 
 
+@public_when_enabled
 def hls_js(request):
     if not os.path.exists(_HLS_JS_PATH):
         raise Http404("hls.js not vendored")
@@ -992,6 +1116,7 @@ def hls_js(request):
 
 
 # ---- Subtitles (sidecar / embedded -> cached WebVTT) ------------------------
+@public_when_enabled
 def subtitles(request, pk, idx):
     video = get_object_or_404(Video, pk=pk)
     if not os.path.exists(video.file_path):
@@ -1034,6 +1159,7 @@ def delete_subtitle(request, pk, sub_pk):
 
 
 # ---- Organize / maintenance -------------------------------------------------
+@owner_required
 def organize(request):
     if request.method == "POST" and request.POST.get("confirm") == "1":
         result = services.organize_by_mtime(execute=True)
@@ -1046,8 +1172,10 @@ def organize(request):
         result=result, done=False))
 
 
+@owner_required
 def duplicates(request):
     groups = services.find_duplicates()
+    _attach_playback([v for g in groups for v in g], request.user)
     return render(request, "library/duplicates.html", base_ctx(
         request, page_id="duplicates", spa_title="Duplicates — HomeFlix",
         groups=groups,
@@ -1055,12 +1183,14 @@ def duplicates(request):
 
 
 @require_POST
+@owner_required
 def purge_missing(request):
     services.purge_missing()
     return redirect(request.META.get("HTTP_REFERER", "/"))
 
 
 @require_POST
+@owner_required
 def reset_library(request):
     services.reset_library()
     services.scan_library()
@@ -1068,6 +1198,7 @@ def reset_library(request):
 
 
 # ---- Random video ----------------------------------------------------------
+@public_when_enabled
 def shorts(request):
     videos = (Video.objects.filter(missing=False, hidden=False).filter(PORTRAIT_Q)
               .order_by("-date_added"))
@@ -1077,6 +1208,7 @@ def shorts(request):
     ))
 
 
+@public_when_enabled
 def random_video(request):
     import random as _rnd
     pl_id = request.GET.get("pl")
@@ -1174,6 +1306,7 @@ def reorder_playlist(request, pk):
 from .models import SmartPlaylist
 
 
+@public_when_enabled
 def smart_playlist_detail(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
     sort = request.GET.get("sort", "added")
@@ -1183,6 +1316,7 @@ def smart_playlist_detail(request, pk):
     else:
         order = (_apply_sort(SORTS.get(sort, "-date_added"), rev),)
     videos = list(sp.get_videos().order_by(*order)[:200])
+    _attach_playback(videos, _state_user(request))
     return render(request, "library/smart_playlist_detail.html", base_ctx(
         request, active_nav="playlists", page_id="smart_playlist",
         spa_title=f"{sp.name} — HomeFlix", sp=sp, videos=videos, sort=sort, rev=rev))
@@ -1221,6 +1355,7 @@ def save_smart_rules(request, pk):
 # ---- Bulk actions ----------------------------------------------------------
 
 @require_POST
+@owner_required
 def bulk_regen_thumb(request):
     try:
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
@@ -1279,6 +1414,7 @@ def bulk_favorite(request):
 
 
 @require_POST
+@owner_required
 def bulk_rename(request):
     ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
     pattern = request.POST.get('pattern', '')
@@ -1294,6 +1430,7 @@ def bulk_rename(request):
 
 
 @require_POST
+@owner_required
 def bulk_hide(request):
     try:
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
@@ -1304,6 +1441,7 @@ def bulk_hide(request):
 
 
 @require_POST
+@owner_required
 def bulk_unhide(request):
     try:
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
@@ -1339,6 +1477,7 @@ def _delete_videos(videos, delete_file):
 
 
 @require_POST
+@owner_required
 def bulk_delete(request):
     try:
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
@@ -1348,6 +1487,7 @@ def bulk_delete(request):
     return JsonResponse({'ok': True, 'count': count})
 
 
+@public_when_enabled
 def api_playlists(request):
     return JsonResponse({'playlists': [{'id': p.pk, 'name': p.name}
                                        for p in Playlist.objects.all()]})
@@ -1355,6 +1495,7 @@ def api_playlists(request):
 
 # ---- PWA manifest + icon ---------------------------------------------------
 
+@login_not_required
 def pwa_manifest(request):
     return JsonResponse({
         "name": "HomeFlix",
@@ -1372,6 +1513,7 @@ def pwa_manifest(request):
     }, content_type="application/manifest+json")
 
 
+@login_not_required
 def pwa_icon(request, size):
     import struct, zlib
     if size not in (16, 32, 48, 64, 96, 128, 180, 192, 256, 512):

@@ -13,7 +13,7 @@
       <span class="qbadge">{{ video.aspect_label }}</span>
     {% endif %}
     <span class="dur">{{ video.duration_seconds|duration }}</span>
-    {% with p=video.playback|pct:video %}
+    {% with p=video.my_playback|first|pct:video %}
       {% if p > 1 %}<div class="progress" style="width:{{ p }}%"></div>{% endif %}
     {% endwith %}
   </div>

@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -19,13 +20,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-t*238c1cxca(qku_jc*d##7d3chdgs5840-@kil=#lotn3()gm'
+# SECURITY WARNING: keep the secret key used in production secret! The old
+# hardcoded key was committed to git (and is public in history), so it can
+# never be trusted again -- generate a fresh one and pass it via env:
+#   python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
+# The literal fallback below is for a throwaway local/dev DB only.
+SECRET_KEY = os.environ.get(
+    "HOMEFLIX_SECRET_KEY",
+    "django-insecure-dev-only-not-for-production-use-HOMEFLIX_SECRET_KEY")
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# SECURITY WARNING: don't run with debug turned on in production! DEBUG=True
+# renders full tracebacks (including settings) to any visitor on error.
+# Set HOMEFLIX_DEBUG=1 for local development only.
+DEBUG = os.environ.get("HOMEFLIX_DEBUG") == "1"
 
-ALLOWED_HOSTS = ["*"]  # personal LAN server
+# Set HOMEFLIX_HOSTS to a comma-separated list of hostnames/IPs this server
+# is reachable as (e.g. "192.168.1.50,homeflix.example.com"). Required once
+# DEBUG=False -- Django rejects requests with an unrecognized Host header.
+_hosts = os.environ.get("HOMEFLIX_HOSTS", "").strip()
+ALLOWED_HOSTS = [h.strip() for h in _hosts.split(",") if h.strip()] or ["localhost", "127.0.0.1"]
+
+# Set HOMEFLIX_PUBLIC=1 to let anyone browse/search/watch/stream without an
+# account (a "YouTube, not Fort Knox" mode for casually sharing the link) --
+# see library/auth.py's public_when_enabled decorator for exactly which
+# views that exempts. Anything that writes shared library data (favorite,
+# rating, playlists, notes) or touches the filesystem/catalog (owner-only)
+# still requires logging in. Off by default -- an existing deployment's
+# behavior doesn't change unless this is explicitly set.
+PUBLIC_ACCESS = os.environ.get("HOMEFLIX_PUBLIC") == "1"
 
 
 # Application definition
@@ -46,6 +68,10 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Default-deny: every view requires login unless decorated with
+    # @login_not_required (see library/views.py: pwa_manifest, pwa_icon) or
+    # it's the login view itself (library/auth.py).
+    'django.contrib.auth.middleware.LoginRequiredMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -116,10 +142,47 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+# Only needed once DEBUG=False (Django's dev server stops auto-serving
+# /static/ then) -- mainly for /admin's CSS. Run `manage.py collectstatic`
+# and point nginx at this folder (see nginx-homeflix.conf).
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+
+# ---- Authentication / sessions ----------------------------------------------
+LOGIN_URL = "login"
+LOGIN_REDIRECT_URL = "home"
+LOGOUT_REDIRECT_URL = "login"
+
+# TVs and phones must stay logged in -- the session is the only credential,
+# and re-typing a password on an LG remote is painful. A year-long cookie
+# refreshed on every request effectively never expires under normal use.
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 365
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+
+# Only mark cookies Secure when actually served over HTTPS (nginx, see
+# nginx-homeflix.conf) -- if this were unconditional, a plain LAN
+# http:// deployment would silently fail to log in.
+_https = os.environ.get("HOMEFLIX_HTTPS") == "1"
+SESSION_COOKIE_SECURE = _https
+CSRF_COOKIE_SECURE = _https
+
+# Filesystem cache (stdlib, no extra dependency) shared across gunicorn
+# workers -- used to throttle repeated failed logins per IP (library/auth.py),
+# the same reason services.start_hls tracks sessions on the filesystem
+# instead of in-process.
+CACHE_DIR = str(BASE_DIR / "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.filebased.FileBasedCache",
+        "LOCATION": CACHE_DIR,
+    }
+}
 
 
 # ---- HomeFlix configuration -------------------------------------------------
-import os
 
 # The folder that holds all your videos (scanned recursively).
 # Override with the HOMEFLIX_LIBRARY environment variable.

@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Sign in — HomeFlix</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/32.png">
+<meta name="theme-color" content="#f0654a">
+<style>
+:root{
+  --bg:#0e0f12; --surface:#17191e; --surface2:#1f222a; --border:#2a2e38;
+  --text:#e8e9ed; --muted:#9aa0ad; --accent:#f0654a; --accent-soft:#f0654a33;
+  --radius:12px;
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{margin:0; touch-action:manipulation}
+body{background:var(--bg); color:var(--text); min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  display:flex; align-items:center; justify-content:center; padding:24px;}
+.card{width:100%; max-width:340px; background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius); padding:28px 24px;}
+.brand{font-weight:800; letter-spacing:-.02em; font-size:22px; margin:0 0 4px; text-align:center}
+.brand b{color:var(--accent)}
+.sub{color:var(--muted); font-size:13px; text-align:center; margin:0 0 22px}
+label{display:block; font-size:13px; color:var(--muted); margin:14px 0 6px}
+input[type="text"],input[type="password"]{
+  width:100%; padding:11px 12px; border-radius:8px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:16px;}
+input:focus{outline:2px solid var(--accent-soft); border-color:var(--accent)}
+.btn{width:100%; margin-top:20px; background:var(--accent); color:#fff; border:0;
+  border-radius:8px; cursor:pointer; padding:12px 16px; font-weight:700; font-size:15px;}
+.btn:hover{filter:brightness(1.06)}
+.err{background:var(--accent-soft); color:var(--accent); border-radius:8px;
+  padding:10px 12px; font-size:13px; margin-top:16px;}
+</style>
+</head>
+<body>
+<div class="card">
+  <p class="brand">Home<b>Flix</b></p>
+  <p class="sub">Sign in to watch</p>
+  {% if throttled %}
+    <div class="err">Too many failed attempts. Try again in a few minutes.</div>
+  {% elif form.errors %}
+    <div class="err">Incorrect username or password.</div>
+  {% endif %}
+  <form method="post" action="{% url 'login' %}">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+    <label for="id_username">Username</label>
+    <input type="text" id="id_username" name="username" autofocus autocapitalize="off"
+           autocorrect="off" enterkeyhint="next" required>
+    <label for="id_password">Password</label>
+    <input type="password" id="id_password" name="password" enterkeyhint="go" required>
+    <button type="submit" class="btn">Sign in</button>
+  </form>
+</div>
+</body>
+</html>

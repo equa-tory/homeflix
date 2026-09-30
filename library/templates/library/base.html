@@ -343,6 +343,41 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
     aspect-ratio:var(--vid-ar,9/16); width:auto; max-width:100%; margin:0 auto; border-radius:var(--radius);
   }
 }
+
+/* ---- Shorts action rail (favorite/rating/playlist + a ••• overflow for
+   owner tools) -- see renderShortsRail()/bindShortsRail() JS. #phInfo is
+   hidden in shorts mode (rule above), so this is the only place those
+   actions are reachable there. Hidden entirely outside shorts mode. ---- */
+#phShortsRail{display:none}
+#player.ph-expanded.ph-shorts #phShortsRail{
+  display:flex; flex-direction:column; align-items:center; gap:14px;
+  position:absolute; right:10px; bottom:90px; z-index:5;
+  transition:opacity .15s ease;
+}
+/* Fades with the rest of the controls (phone overlay) -- same show/hide
+   classes .ph-subbar already keys off (base rule near .ph-subbar above). */
+.ph-stage:not(.show-ctrls):not(.paused) ~ #phShortsRail,
+.ph-stage.force-hide-ctrls ~ #phShortsRail{opacity:0; pointer-events:none}
+@media(min-width:701px){
+  /* Desktop: lay the (already centered, 9:16) stage and the rail out as a
+     flex pair instead of overlaying the video -- there's real side space
+     next to a portrait video on a landscape screen. */
+  #player.ph-expanded.ph-shorts .ph-stage-wrap{
+    display:flex; align-items:center; justify-content:center; gap:16px;
+  }
+  #player.ph-expanded.ph-shorts .ph-stage{margin:0}
+  #player.ph-expanded.ph-shorts #phShortsRail{
+    position:static; right:auto; bottom:auto;
+    opacity:1!important; pointer-events:auto!important;
+  }
+}
+.rail-btn{width:48px; height:48px; border-radius:50%; flex-shrink:0;
+  background:rgba(0,0,0,.45); border:1px solid rgba(255,255,255,.3);
+  color:#fff; font-size:20px; cursor:pointer; display:grid; place-items:center}
+.rail-btn:hover{border-color:var(--accent)}
+.rail-btn.on{color:var(--accent); border-color:var(--accent)}
+@media(min-width:701px){.rail-btn{background:var(--surface); border-color:var(--border); color:var(--text)}}
+@media(max-width:700px){.rail-btn{width:40px; height:40px; font-size:16px}}
 /* Phone in landscape: viewport is short, so the -220px reserve (sized for portrait
    phones/desktop) leaves almost no room for video. Give it nearly the full height.
    hover:none+pointer:coarse scopes this to touch phones, not short desktop windows. */
@@ -647,24 +682,25 @@ html.player-locked{overflow:hidden}
 
 /* ====== MOBILE ====== */
 @media (max-width:700px){
-  :root{--bottom-nav-h:62px}
+  /* Plain fixed bar pinned to the bottom of the viewport (below) -- sized by
+     its own content, not a computed viewport height. This variable is only
+     an estimate of that content height (icons+labels) plus the home-
+     indicator safe area, used to (a) keep the page's own bottom padding
+     clear of the bar and (b) stack #bulkBar/#reorderBar above it -- being a
+     few px off either way is harmless (a small gap, not a broken layout),
+     unlike when this fed a flex/100dvh page-height calculation that had to
+     be exact or the whole page layout broke. */
+  :root{--bottom-nav-h:calc(60px + env(safe-area-inset-bottom,0px))}
   nav.topnav{display:none}
   header{gap:10px; padding:calc(9px + env(safe-area-inset-top,0px)) 14px 9px}
   .hdr-search{max-width:none}
   .hdr-search input{font-size:16px}
-  html, body { height:100%; overflow:hidden }
-  /* dvh tracks the real visible viewport as Safari's toolbar shows/hides;
-     vh first as a fallback for browsers without dvh support (last-valid-wins). */
-  /* padding-bottom:0 — bottom-nav is a real flex item here (not fixed), it already
-     takes its own space; the base rule's --bottom-nav-h padding would double-reserve
-     it and leave a dead gap under the bar. */
-  body { display:flex; flex-direction:column; height:100vh; height:100dvh; padding-bottom:0; }
-  header{ flex-shrink:0; position:static }
-  main  { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
-          overscroll-behavior-y:contain; padding-bottom:16px }
   .grid{grid-template-columns:1fr 1fr; gap:10px}
-  .bottom-nav{display:flex; flex-shrink:0; background:var(--bg);
-    border-top:1px solid var(--border); padding:0 0 env(safe-area-inset-bottom,0px);}
+  .bottom-nav{
+    position:fixed; left:0; right:0; bottom:0; z-index:100;
+    display:flex; background:var(--bg);
+    border-top:1px solid var(--border); padding:0 0 env(safe-area-inset-bottom,0px);
+  }
   .bottom-nav a{flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
     padding:10px 6px 8px; color:var(--muted); font-size:10px; font-weight:600;
     text-transform:uppercase; letter-spacing:.04em;}
@@ -696,6 +732,7 @@ html.player-locked{overflow:hidden}
     </form>
   </div>
   <button class="iconbtn nav-item" id="themeBtn" title="Toggle theme">◐</button>
+  {% if user.is_staff %}
   <div class="menu" id="manageMenu">
     <button class="iconbtn nav-item" id="manageBtn" title="Manage">⋯</button>
     <div class="menu-panel">
@@ -718,6 +755,27 @@ html.player-locked{overflow:hidden}
         {% csrf_token %}<button class="nav-item danger">⟳ Reset &amp; rebuild</button></form>
     </div>
   </div>
+  {% endif %}
+  {% if user.is_authenticated %}
+  <div class="menu" id="accountMenu">
+    <button class="iconbtn nav-item" id="accountBtn" title="Account">{{ user.username|slice:":1"|upper }}</button>
+    <div class="menu-panel">
+      <div class="nav-item row-inline" style="cursor:default">
+        <span>{{ user.username }}{% if user.is_staff %} · owner{% endif %}</span>
+      </div>
+      <hr>
+      <form action="{% url 'logout' %}" method="post">{% csrf_token %}
+        <button class="nav-item">⎋ Sign out</button></form>
+    </div>
+  </div>
+  {% else %}
+  {% comment %}
+    Only reachable at all when HOMEFLIX_PUBLIC=1 let an anonymous request
+    render a page in the first place -- otherwise LoginRequiredMiddleware
+    would already have redirected before any template rendered.
+  {% endcomment %}
+  <a href="{% url 'login' %}?next={{ request.path|urlencode }}" class="iconbtn nav-item" title="Log in" style="width:auto;padding:0 12px;font-size:13px;font-weight:700">Log in</a>
+  {% endif %}
 </header>
 
 <main id="app">{% block content %}{% endblock %}</main>
@@ -736,6 +794,7 @@ html.player-locked{overflow:hidden}
   <button class="btn ghost" id="bulkClearBtn" style="padding:7px 10px">✕ Clear</button>
   <span style="flex:1"></span>
 
+  {% if user.is_staff %}
   <div class="bulk-aw">
     <button class="btn ghost" id="bulkThumbBtn">🖼 Thumbnail %</button>
     <div class="bulk-pop" id="bulkThumbPop">
@@ -747,6 +806,7 @@ html.player-locked{overflow:hidden}
       </div>
     </div>
   </div>
+  {% endif %}
 
   <div class="bulk-aw">
     <button class="btn ghost" id="bulkPlBtn">☰ Playlist</button>
@@ -774,6 +834,7 @@ html.player-locked{overflow:hidden}
   </div>
 
   <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
+  {% if user.is_staff %}
   <button class="btn ghost" id="bulkHideBtn">🙈 Hide</button>
   <button class="btn ghost" id="bulkUnhideBtn" style="display:none">👁 Unhide</button>
 
@@ -806,6 +867,7 @@ html.player-locked{overflow:hidden}
       </div>
     </div>
   </div>
+  {% endif %}
 </div>
 
 <!-- select FAB (visible only on library page) -->
@@ -932,6 +994,16 @@ html.player-locked{overflow:hidden}
              captions, one fixed position. -->
         <div class="ph-subbar" id="phSubBar"><span id="phSubText"></span></div>
       </div>
+
+      <!-- Shorts-mode action rail (see renderShortsRail/bindShortsRail below):
+           #phInfo (renderInfo's favorite/rating/playlist/hide/delete/etc.) is
+           hidden entirely in .ph-shorts mode (#player.ph-expanded.ph-shorts
+           #phInfo{display:none} above) -- this is a compact sibling exposing
+           the same actions, positioned beside the stage on desktop and as an
+           overlay on it on phone. A sibling of .ph-stage (not a child of it)
+           on purpose: .ph-stage has overflow:hidden, which would clip a
+           desktop rail meant to sit outside the stage's own box. -->
+      <div id="phShortsRail"></div>
     </div>
 
     <!-- dynamic info -->
@@ -961,7 +1033,20 @@ if(/webOS|Tizen|SmartTV|GoogleTV|AFTT|AFTM|AFTB|AFTS|BRAVIA|NetCast|CrKey|HbbTV/
 }
 function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
   'X-SPA':'1','Content-Type':'application/x-www-form-urlencoded'},
-  body:new URLSearchParams(d||{})}).then(r=>r.json());}
+  body:new URLSearchParams(d||{})}).then(r=>{
+    // An expired/logged-out session gets redirected to the login page by
+    // LoginRequiredMiddleware -- fetch follows that redirect and comes back
+    // with HTML, not JSON. Hard-navigate instead of trying to parse it.
+    if(r.redirected&&/\/login\/(\?|$)/.test(r.url)){location.href=r.url;return new Promise(()=>{});}
+    return r.json().then(j=>{
+      // owner_required (see library/auth.py) returns a 403 JSON error for a
+      // viewer hitting an owner-only action -- surface it instead of
+      // silently doing nothing (the buttons themselves are hidden for
+      // viewers, so this only fires on a stale UI or a direct API call).
+      if(r.status===403)alert(j.error||'Owner only');
+      return j;
+    });
+  });}
 function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // Grid thumbnails: TV browsers under load sometimes drop an image request
 // (see the /thumb/ Cache-Control fix -- this is the client-side half). One
@@ -977,13 +1062,21 @@ function thumbErr(img){
 function fmt(s){s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
   return h?`${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`:`${m}:${String(x).padStart(2,'0')}`;}
 
-/* theme + manage menu */
+/* theme + manage/account menus. manageMenu (and everything inside it) only
+   renders for the owner (see the is_staff check in the header above), so
+   every lookup here is null-guarded -- a viewer simply has no menu to open. */
 document.getElementById('themeBtn').onclick=()=>post('/theme/')
   .then(d=>document.documentElement.setAttribute('data-theme',d.theme));
-const mm=document.getElementById('manageMenu');
-document.getElementById('manageBtn').onclick=e=>{e.stopPropagation();mm.classList.toggle('open');};
-document.addEventListener('click',()=>mm.classList.remove('open'));
-document.getElementById('defThumbSave').onclick=e=>{e.stopPropagation();
+function wireDropdown(menuId,btnId){
+  const menu=document.getElementById(menuId),btn=document.getElementById(btnId);
+  if(!menu||!btn)return;
+  btn.onclick=e=>{e.stopPropagation();menu.classList.toggle('open');};
+  document.addEventListener('click',()=>menu.classList.remove('open'));
+}
+wireDropdown('manageMenu','manageBtn');
+wireDropdown('accountMenu','accountBtn');
+const defThumbSave=document.getElementById('defThumbSave');
+if(defThumbSave)defThumbSave.onclick=e=>{e.stopPropagation();
   const btn=e.currentTarget,pct=document.getElementById('defThumbPct').value;
   post('/settings/thumb-percent/',{percent:pct}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='Save',1200);});};
 
@@ -1035,6 +1128,11 @@ const ROUTER=(function(){
     showBar();
     return fetch(url,{headers:{'X-SPA':'1'},credentials:'same-origin'})
       .then(r=>{
+        // An expired/logged-out session gets redirected here by
+        // LoginRequiredMiddleware -- that's a full standalone page (see
+        // login.html), not an SPA fragment, so hard-navigate instead of
+        // injecting it into #app.
+        if(/\/login\/(\?|$)/.test(r.url)){doneBar();location.href=r.url;return null;}
         // If server redirected to a watch page, open the player instead
         if(/\/watch\/(\d+)\//.test(r.url)){
           const id=r.url.match(/\/watch\/(\d+)\//)[1];
@@ -1127,12 +1225,15 @@ const SELECT_MODE=(function(){
 
     document.getElementById('bulkClearBtn').onclick=()=>clear();
 
-    // popup toggles
+    // popup toggles. bulkThumbBtn/bulkRenBtn/bulkDelBtn only exist for the
+    // owner (see the is_staff check around the bulk bar above) -- a viewer
+    // simply has none of those buttons to wire up.
     const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop',bulkRenBtn:'bulkRenPop',bulkDelBtn:'bulkDelPop'};
     Object.entries(pops).forEach(([btnId,popId])=>{
       const btn=document.getElementById(btnId),pop=document.getElementById(popId);
+      if(!btn||!pop)return;
       btn.onclick=e=>{e.stopPropagation();
-        Object.values(pops).forEach(p=>{if(p!==popId)document.getElementById(p).classList.remove('open');});
+        Object.values(pops).forEach(p=>{if(p!==popId){const o=document.getElementById(p);if(o)o.classList.remove('open');}});
         if(pop.classList.toggle('open')&&popId==='bulkPlPop'){
           fetch('/api/playlists/',{headers:{'X-SPA':'1'}}).then(r=>r.json()).then(d=>{
             const s=document.getElementById('bulkPlSel');
@@ -1149,8 +1250,9 @@ const SELECT_MODE=(function(){
     });
     document.addEventListener('click',()=>document.querySelectorAll('.bulk-pop.open').forEach(p=>p.classList.remove('open')));
 
-    // thumbnail %
-    document.getElementById('bulkThumbGo').onclick=e=>{e.stopPropagation();
+    // thumbnail % (owner only -- element absent for a viewer)
+    const bulkThumbGo=document.getElementById('bulkThumbGo');
+    if(bulkThumbGo)bulkThumbGo.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(','); if(!ids)return;
       const pct=parseFloat(document.getElementById('bulkThumbPct').value)||0;
       const btn=e.currentTarget;
@@ -1202,15 +1304,20 @@ const SELECT_MODE=(function(){
     function refreshAfter(promise){
       promise.then(()=>{clear();ROUTER.go(location.pathname+location.search,{push:false});});
     }
-    document.getElementById('bulkHideBtn').onclick=e=>{e.stopPropagation();
+    // Hide/unhide/rename/delete are owner-only -- these elements are absent
+    // from the DOM entirely for a viewer (see the bulk bar markup above).
+    const bulkHideBtn=document.getElementById('bulkHideBtn');
+    if(bulkHideBtn)bulkHideBtn.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       refreshAfter(post('/bulk/hide/',{ids}));
     };
-    document.getElementById('bulkUnhideBtn').onclick=e=>{e.stopPropagation();
+    const bulkUnhideBtn=document.getElementById('bulkUnhideBtn');
+    if(bulkUnhideBtn)bulkUnhideBtn.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       refreshAfter(post('/bulk/unhide/',{ids}));
     };
-    document.getElementById('bulkRenGo').onclick=e=>{e.stopPropagation();
+    const bulkRenGo=document.getElementById('bulkRenGo');
+    if(bulkRenGo)bulkRenGo.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       const pattern=document.getElementById('bulkRenPattern').value;
       if(!pattern.trim())return;
@@ -1218,11 +1325,13 @@ const SELECT_MODE=(function(){
       const pad=document.getElementById('bulkRenPad').value||2;
       refreshAfter(post('/bulk/rename/',{ids,pattern,start,pad}));
     };
-    document.getElementById('bulkDelEntryGo').onclick=e=>{e.stopPropagation();
+    const bulkDelEntryGo=document.getElementById('bulkDelEntryGo');
+    if(bulkDelEntryGo)bulkDelEntryGo.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       refreshAfter(post('/bulk/delete/',{ids,mode:'entry'}));
     };
-    document.getElementById('bulkDelFileGo').onclick=e=>{e.stopPropagation();
+    const bulkDelFileGo=document.getElementById('bulkDelFileGo');
+    if(bulkDelFileGo)bulkDelFileGo.onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;
       if(!confirm('Delete '+ids.split(',').length+' file(s) from disk permanently? This cannot be undone.'))return;
       refreshAfter(post('/bulk/delete/',{ids,mode:'file'}));
@@ -2048,23 +2157,32 @@ const PLAYER=(function(){
       }).catch(()=>{if(CCADDSTATUS)CCADDSTATUS.textContent='Failed to attach';});
   };
 
-  /* ---- seek step (◀ ▶ / media-key / double-tap seek amount, remembered
-     client-side the same way subtitle size/background are, above) ---- */
+  /* ---- seek step (◀ ▶ / media-key / double-tap seek amount) ----
+     Synced per-account via UserPref (like autoplay/repeat/shuffle) so it
+     follows you across devices -- localStorage is now just the instant-apply
+     client cache (avoids a flash of "10s" before applyData's server value
+     lands) and the only source of truth for an anonymous (HOMEFLIX_PUBLIC)
+     visitor, who has no account to persist to (set_seek_step no-ops for
+     them server-side; see UserPref.set). */
   const SEEKKEY='homeflix_seek_step';
+  let SEEK_STEP_URL='/seek-step/';
   function loadSeekStep(){
     try{const v=parseInt(localStorage.getItem(SEEKKEY),10);return(v>=1&&v<=600)?v:10;}
     catch{return 10;}
   }
   let SEEK_STEP=loadSeekStep();
-  function setSeekStep(v){
+  function setSeekStep(v,sync=true){
     v=Math.max(1,Math.min(600,Math.round(v)||10));
     SEEK_STEP=v;
     try{localStorage.setItem(SEEKKEY,String(v));}catch{}
     if(SEEKBTN)SEEKBTN.textContent=v+'s';
     if(SEEKINPUT)SEEKINPUT.value=v;
     const legend=document.getElementById('phKeySeek');if(legend)legend.textContent=v;
+    // sync=false when applying the server's own value back (applyData) --
+    // no need to immediately POST it right back to where it came from.
+    if(sync)post(SEEK_STEP_URL,{value:v});
   }
-  setSeekStep(SEEK_STEP);
+  setSeekStep(SEEK_STEP,false);
   if(SEEKBTN)SEEKBTN.onclick=e=>{e.stopPropagation();if(SEEKPOP)SEEKPOP.classList.toggle('open');};
   if(SEEKPOP)SEEKPOP.addEventListener('click',e=>e.stopPropagation());
   if(SEEKINPUT){
@@ -2082,6 +2200,11 @@ const PLAYER=(function(){
     if(d)prevVideoId=d.id; // track where we came from for shuffle prev
     d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
     repeat=data.repeat||'off'; shuffle=!!data.shuffle;
+    // Server value (per-account, via UserPref) wins over whatever this
+    // browser had cached in localStorage -- that's what makes the seek step
+    // follow the account across devices.
+    if(data.seek_step_url)SEEK_STEP_URL=data.seek_step_url;
+    if(data.seek_step)setSeekStep(data.seek_step,false);
     HDR.textContent=data.title; MBAR_T.textContent=data.title;
     PREV.disabled=!prevId(); NEXT.disabled=!nextId();
     if(MBAR_SB)MBAR_SB.disabled=!prevId(); if(MBAR_SF)MBAR_SF.disabled=!nextId();
@@ -2122,6 +2245,7 @@ const PLAYER=(function(){
     loadSubtitles(data.subtitles);
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
+    renderShortsRail(data);
   }
 
   function fetchApply(id,play,startPos,qp){
@@ -2197,19 +2321,19 @@ const PLAYER=(function(){
       `<div class="wbar"><span id="phStars" data-url="${esc(data.rating_url)}">${stars}</span>`+
       `<button class="iconbtn" id="phFav" data-url="${esc(data.favorite_url)}" title="Favorite"`+
         (data.favorite?' style="color:var(--accent);border-color:var(--accent)"':'')+`>♥</button>`+
-      `<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
-        (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`+
-      `<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
+      (data.is_owner?`<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
+        (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`:'')+
+      (data.is_owner?`<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
         `<div class="bulk-pop" id="phDelPop" style="left:auto;right:0">`+
           `<label>Delete this video</label>`+
           `<div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">`+
             `<button class="btn ghost" id="phDelEntryGo">Remove from library (keep file)</button>`+
             `<button class="btn" id="phDelFileGo" style="background:#c0392b">Delete file permanently</button>`+
-          `</div></div></div>`+
+          `</div></div></div>`:'')+
       `<span class="spacer"></span>`+
       `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${data.autoplay?'▶▶ Auto On':'▶▶ Auto Off'}</button></div>`+
       `<div class="tech">${tech}${data.source_url?`<a href="${esc(data.source_url)}" target="_blank" style="color:var(--accent)">source ↗</a>`:''}</div>`+
-      (data.needs_convert?`<div class="conv-inline" id="phConvInline">`+
+      (data.needs_convert&&data.is_owner?`<div class="conv-inline" id="phConvInline">`+
         `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
         `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+
         `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
@@ -2218,7 +2342,7 @@ const PLAYER=(function(){
       `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
-      `<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
+      (data.is_owner?`<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
       `<div class="thumb-tool"><div class="row-inline"><strong>Rename</strong></div>`+
@@ -2230,7 +2354,7 @@ const PLAYER=(function(){
           `<span class="sub" id="phRenameExt">${esc(data.filename_ext||'')}</span>`+
           `<button class="btn ghost" id="phRenameBtn">Save</button>`+
         `</div>`+
-        `<div class="sub" id="phRenameStatus" style="margin-top:6px;min-height:14px"></div></div>`+
+        `<div class="sub" id="phRenameStatus" style="margin-top:6px;min-height:14px"></div></div>`:'')+
       (data.description?`<div class="desc">${esc(data.description)}</div>`:'')+
       `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
         `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+
@@ -2341,6 +2465,139 @@ const PLAYER=(function(){
     }
     if(nl)nl.querySelectorAll('.note-item').forEach(bindNote);
   }
+
+  /* ---- Shorts action rail --------------------------------------------
+     Compact stand-in for #phInfo (hidden entirely in .ph-shorts mode --
+     see the CSS near .ph-stage-wrap above): favorite, rating, add-to-
+     playlist, and a ••• overflow for the rest (hide/delete/convert, all
+     owner-only like they are in renderInfo, plus a quick add-note field).
+     Reuses the same .bulk-aw/.bulk-pop popover chrome the bulk-select bar
+     already uses -- including the page-wide "close any open .bulk-pop on
+     an outside click" listener registered in initBar() below, so these
+     popovers don't need their own outside-click handling. Always
+     (re)rendered alongside renderInfo(); which one is actually visible is
+     CSS-only, driven by the .ph-shorts class (see applyData). */
+  function renderShortsRail(data){
+    const rail=document.getElementById('phShortsRail');
+    if(!rail)return;
+    const plOpts=(data.playlists||[]).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+    const plNewOpt=`<option value="__new__">＋ New playlist…</option>`;
+    const stars=[1,2,3,4,5].map(i=>`<span data-v="${i}" class="${i<=data.rating?'on':''}">★</span>`).join('');
+    rail.innerHTML=
+      `<button class="rail-btn${data.favorite?' on':''}" id="railFavBtn" title="Favorite">♥</button>`+
+      `<div class="bulk-aw"><button class="rail-btn" id="railRateBtn" title="Rate">★</button>`+
+        `<div class="bulk-pop" id="railRatePop" style="left:auto;right:0;bottom:calc(100% + 8px)">`+
+          `<label>Rating</label><div class="bulk-stars" id="railStars">${stars}</div></div></div>`+
+      `<div class="bulk-aw"><button class="rail-btn" id="railPlaylistBtn" title="Add to playlist">☰</button>`+
+        `<div class="bulk-pop" id="railPlaylistPop" style="left:auto;right:0;bottom:calc(100% + 8px)">`+
+          `<label>Add to playlist</label>`+
+          `<div class="brow"><select id="railPlSel">${plNewOpt}${plOpts}</select>`+
+            `<button class="btn" id="railPlGo">Add</button></div>`+
+          `<input type="text" id="railPlNew" placeholder="New playlist name…" `+
+            `style="display:none;margin-top:8px;width:100%;padding:7px 10px;border-radius:7px;`+
+            `border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px">`+
+        `</div></div>`+
+      `<div class="bulk-aw"><button class="rail-btn" id="railMoreBtn" title="More">•••</button>`+
+        `<div class="bulk-pop" id="railMorePop" style="left:auto;right:0;bottom:calc(100% + 8px);min-width:220px">`+
+          (data.is_owner?
+            `<button class="nav-item" id="railHideBtn">${data.hidden?'👁 Unhide':'🙈 Hide from library'}</button>`+
+            `<button class="nav-item danger" id="railDeleteBtn">🗑 Delete…</button>`+
+            `<div id="railDeleteConfirm" style="display:none;margin-top:6px">`+
+              `<button class="btn ghost" id="railDeleteEntryGo" style="width:100%;margin-bottom:6px">Remove from library (keep file)</button>`+
+              `<button class="btn" id="railDeleteFileGo" style="width:100%;background:#c0392b">Delete file permanently</button>`+
+            `</div>`+
+            (data.needs_convert?`<button class="nav-item" id="railConvertBtn">⇄ Convert to MP4</button>`:'')+
+            `<hr>`
+          :'')+
+          `<label>Add a note</label>`+
+          `<div class="brow"><input type="text" id="railNoteInput" placeholder="Note at current time…" `+
+            `style="flex:1;padding:7px 10px;border-radius:7px;border:1px solid var(--border);`+
+            `background:var(--bg);color:var(--text);font-size:13px">`+
+            `<button class="btn ghost" id="railNoteAdd">Add</button></div>`+
+        `</div></div>`;
+    bindShortsRail(data);
+  }
+
+  function bindShortsRail(data){
+    const rail=document.getElementById('phShortsRail');
+    if(!rail)return;
+    const fav=document.getElementById('railFavBtn');
+    if(fav)fav.onclick=e=>{e.stopPropagation();post(data.favorite_url).then(r=>{
+      data.favorite=r.favorite;fav.classList.toggle('on',r.favorite);});};
+    const rateBtn=document.getElementById('railRateBtn'),ratePop=document.getElementById('railRatePop');
+    if(rateBtn&&ratePop)rateBtn.onclick=e=>{e.stopPropagation();ratePop.classList.toggle('open');};
+    const stars=document.getElementById('railStars');
+    if(stars)stars.querySelectorAll('span').forEach(s=>s.onclick=e=>{e.stopPropagation();
+      post(data.rating_url,{rating:s.dataset.v}).then(r=>{
+        stars.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r.rating));
+        ratePop.classList.remove('open');});});
+    const plBtn=document.getElementById('railPlaylistBtn'),plPop=document.getElementById('railPlaylistPop');
+    if(plBtn&&plPop)plBtn.onclick=e=>{e.stopPropagation();plPop.classList.toggle('open');};
+    const plSel=document.getElementById('railPlSel'),plNew=document.getElementById('railPlNew'),
+          plGo=document.getElementById('railPlGo');
+    if(plSel&&plNew)plSel.onchange=()=>{plNew.style.display=plSel.value==='__new__'?'':'none';
+      if(plSel.value==='__new__')plNew.focus();};
+    if(plGo)plGo.onclick=e=>{e.stopPropagation();
+      if(!plSel)return;
+      if(plSel.value==='__new__'){
+        const name=(plNew?plNew.value:'').trim();
+        if(!name){if(plNew)plNew.focus();return;}
+        post(data.playlist_url,{new_name:name}).then(r=>{
+          if(!r.ok)return;
+          plGo.textContent='✓ Added';
+          if(r.playlist_id){const opt=document.createElement('option');opt.value=r.playlist_id;
+            opt.textContent=r.playlist;plSel.appendChild(opt);plSel.value=r.playlist_id;}
+          if(plNew){plNew.value='';plNew.style.display='none';}
+          setTimeout(()=>plGo.textContent='Add',1200);
+        });
+      }else if(plSel.value){
+        post(data.playlist_url,{playlist:plSel.value}).then(()=>{
+          plGo.textContent='✓ Added';setTimeout(()=>plGo.textContent='Add',1200);});
+      }};
+    const moreBtn=document.getElementById('railMoreBtn'),morePop=document.getElementById('railMorePop');
+    if(moreBtn&&morePop)moreBtn.onclick=e=>{e.stopPropagation();morePop.classList.toggle('open');};
+    const hideBtn=document.getElementById('railHideBtn');
+    if(hideBtn)hideBtn.onclick=e=>{e.stopPropagation();post(data.hide_url).then(r=>{
+      data.hidden=r.hidden;hideBtn.textContent=r.hidden?'👁 Unhide':'🙈 Hide from library';});};
+    const delBtn=document.getElementById('railDeleteBtn'),delConfirm=document.getElementById('railDeleteConfirm');
+    if(delBtn&&delConfirm)delBtn.onclick=e=>{e.stopPropagation();
+      delConfirm.style.display=delConfirm.style.display==='none'?'':'none';};
+    const delEntry=document.getElementById('railDeleteEntryGo'),delFile=document.getElementById('railDeleteFileGo');
+    if(delEntry)delEntry.onclick=e=>{e.stopPropagation();post(data.delete_url,{mode:'entry'}).then(()=>close());};
+    if(delFile)delFile.onclick=e=>{e.stopPropagation();
+      if(!confirm('Delete this file from disk permanently? This cannot be undone.'))return;
+      post(data.delete_url,{mode:'file'}).then(()=>close());};
+    const convBtn=document.getElementById('railConvertBtn');
+    if(convBtn)convBtn.onclick=e=>{e.stopPropagation();
+      post(data.convert_url).then(()=>{convBtn.textContent='Converting…';convBtn.disabled=true;});};
+    const rni=document.getElementById('railNoteInput'),rna=document.getElementById('railNoteAdd');
+    if(rni&&rna){
+      rni.addEventListener('click',e=>e.stopPropagation());
+      rni.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();rna.click();}});
+      rna.onclick=e=>{e.stopPropagation();
+        const text=rni.value.trim();if(!text)return;const ts=curTime();
+        post(data.note_add_url,{text,timestamp:ts.toFixed(1)}).then(r=>{
+          if(!r.ok)return;
+          notes.push({id:r.id,ts:r.ts,text:r.text});notes.sort((a,b)=>a.ts-b.ts);renderNoteDots();
+          rni.value='';rna.textContent='✓';setTimeout(()=>rna.textContent='Add',1000);
+          // Keep #phInfo's (hidden but still-live) note list in sync too, in
+          // case the user leaves shorts mode later in this same session.
+          const nl=document.getElementById('phNoteList');
+          if(nl){
+            const empty=nl.querySelector('#phEmptyNotes,p.sub');if(empty)empty.remove();
+            const el=document.createElement('div');el.className='note-item';el.dataset.id=r.id;
+            el.innerHTML=`<button class="note-ts-btn" data-t="${r.ts}">${esc(r.ts_label)}</button>`+
+              `<span class="note-text">${esc(r.text)}</span>`+
+              `<button class="note-del" data-url="/video/${data.id}/notes/${r.id}/delete/">×</button>`;
+            const items=[...nl.querySelectorAll('.note-item')];
+            const after=items.find(i=>parseFloat(i.querySelector('.note-ts-btn').dataset.t)>r.ts);
+            after?nl.insertBefore(el,after):nl.appendChild(el);bindNote(el);
+          }
+        });
+      };
+    }
+  }
+
   function bindNote(el){
     el.querySelector('.note-ts-btn').onclick=e=>{seekTo(parseFloat(e.currentTarget.dataset.t));V.play().catch(()=>{});};
     el.querySelector('.note-del').onclick=()=>post(el.querySelector('.note-del').dataset.url).then(r=>{
