@@ -6,8 +6,7 @@ import mimetypes
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
-from django.db.models import Q, Sum, F, Value
-from django.db.models.functions import Replace
+from django.db.models import Q, Sum, F
 from django.http import (
     StreamingHttpResponse, HttpResponse, JsonResponse, Http404, FileResponse,
     HttpResponseNotModified,
@@ -85,6 +84,16 @@ def _state_user(request):
     return u if u.is_authenticated else None
 
 
+def _saved_seek_step(user):
+    """The account's saved seek step in seconds, or None if never set (or
+    anonymous) -- see the seek_step note in _build_watch_data."""
+    raw = UserPref.get(user, "seek_step", "")
+    try:
+        return max(1, min(600, int(float(raw)))) if raw != "" else None
+    except ValueError:
+        return None
+
+
 def _attach_playback(videos, user):
     """Attach `.my_playback` (a 0-or-1-item list holding this user's own
     PlaybackState) to each Video in `videos`, in one extra query. Since
@@ -146,53 +155,56 @@ def _apply_sort(order, rev):
 _SEP_RE = re.compile(r"[-_.\s]+")
 
 
-def _normalize_field(name):
-    """DB-side expression stripping -, _, ., and whitespace from a field,
-    so 'r-906'/'r_906'/'r 906' all match a search for 'r906'."""
-    expr = F(name)
-    for ch in ("-", "_", ".", " "):
-        expr = Replace(expr, Value(ch), Value(""))
-    return expr
-
-
 _WORD_RE = re.compile(r"\w+")
-_FUZZY_THRESHOLD = 0.72
+_FUZZY_THRESHOLD = 0.8
+_FUZZY_MIN_LEN = 4
+
+
+def _squash(text):
+    """casefold + drop -, _, ., whitespace -- so 'r-906'/'r_906'/'r 906' all
+    match 'r906'. casefold() (unlike SQLite's LIKE, which only folds ASCII)
+    handles Cyrillic/accented text too."""
+    return _SEP_RE.sub("", text.casefold())
 
 
 def _search_filter(qs, q):
-    """Loose title/filename search: separator-insensitive (ignores -, _, .,
-    space) and AND's multiple words. Falls back to typo-tolerant fuzzy
-    matching (stdlib difflib) when the loose search finds nothing at all."""
-    tokens = [t for t in (_SEP_RE.sub("", w).lower() for w in q.split()) if t]
+    """Loose search over title, filename, channel and tag names: case- and
+    separator-insensitive, every query word must match (AND). Falls back to
+    typo-tolerant fuzzy matching (stdlib difflib) when that finds nothing.
+
+    Done in Python rather than SQL because SQLite can't case-fold non-ASCII;
+    a single-user library is small enough that one pass is cheap."""
+    tokens = [t for t in (_squash(w) for w in q.split()) if t]
     if not tokens:
         return qs
-    loose = qs.annotate(_title_n=_normalize_field("title"), _filename_n=_normalize_field("filename"))
-    cond = Q()
-    for tok in tokens:
-        cond &= (Q(_title_n__icontains=tok) | Q(_filename_n__icontains=tok))
-    matched = loose.filter(cond)
-    if matched.exists():
-        return matched
+    rows = list(qs.values_list("pk", "title", "filename", "channel", "tags__name"))
+    by_pk = {}
+    for pk, title, filename, channel, tag in rows:
+        entry = by_pk.setdefault(pk, [title, filename, channel or "", []])
+        if tag:
+            entry[3].append(tag)
 
-    # Fuzzy fallback for typos (e.g. "vidoe" -> "video") — small single-user
-    # library, so a plain Python pass over title+filename is cheap enough.
-    #
-    # Compare PER WORD, not the whole title: matching a short query against an
-    # entire "title filename" string dilutes the ratio no matter how good the
-    # local match is (a 5-letter typo inside a 40-letter title barely moves the
-    # needle) — that's why a query like "toboe" failed to find "tooboe" when it
-    # was just one word inside a longer title. Instead, a video matches if every
-    # query token is a close match (ratio >= threshold) to *some* word in its
-    # name — same tolerance YouTube-style search gives a single typo'd word.
-    query_words = [w for w in (_WORD_RE.findall(q.lower())) if w] or tokens
+    hits = [pk for pk, (title, filename, channel, tags) in by_pk.items()
+            if all(tok in _squash(" ".join((title or "", filename or "", channel, *tags)))
+                   for tok in tokens)]
+    if hits:
+        return qs.filter(pk__in=hits)
+
+    # Fuzzy fallback for typos (e.g. "vidoe" -> "video"). Compare PER WORD, not
+    # the whole title (a short query barely moves the ratio against a long
+    # title): a video matches if every query word closely matches *some* word
+    # in its name. Very short words and first-letter mismatches are skipped,
+    # otherwise junk like "zzzqq" "matches" a title containing "zzz".
+    query_words = [w.casefold() for w in _WORD_RE.findall(q)] or tokens
     hits = []
-    for pk, title, filename in qs.values_list("pk", "title", "filename"):
-        name_words = _WORD_RE.findall(f"{title} {filename}".lower())
+    for pk, (title, filename, channel, tags) in by_pk.items():
+        name_words = _WORD_RE.findall(" ".join((title or "", filename or "", channel, *tags)).casefold())
         if not name_words:
             continue
         if all(
-            max((difflib.SequenceMatcher(None, qw, nw).ratio() for nw in name_words), default=0)
-            >= _FUZZY_THRESHOLD
+            len(qw) >= _FUZZY_MIN_LEN
+            and max((difflib.SequenceMatcher(None, qw, nw).ratio()
+                     for nw in name_words if nw[:1] == qw[:1]), default=0) >= _FUZZY_THRESHOLD
             for qw in query_words
         ):
             hits.append(pk)
@@ -517,12 +529,10 @@ def _build_watch_data(request, pk):
         "shuffle": UserPref.get(u, "shuffle", "0") == "1",
         "shuffle_toggle_url": "/shuffle/",
         # Server value wins for a logged-in user (follows the account across
-        # devices); an anonymous visitor has no account, so the frontend
-        # falls back to its own localStorage-only value when this key is
-        # absent from a request that skipped auth entirely -- it's never
-        # absent here, but UserPref.get(None, ...) returns the same "10"
-        # default any fresh browser would start with anyway.
-        "seek_step": int(float(UserPref.get(u, "seek_step", "10"))),
+        # devices) -- but ONLY once one has been saved. None means "this
+        # account never set one", so the client keeps (and uploads) its own
+        # localStorage value instead of a server default clobbering it.
+        "seek_step": _saved_seek_step(u),
         "seek_step_url": "/seek-step/",
         "next_id": next_id, "prev_id": prev_id,
         "queue_ids": queue_ids,

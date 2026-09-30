@@ -353,3 +353,62 @@ class AnonymousSafeQueryTests(AuthTestCase):
         request = self._anon_get(reverse("stream", args=[self.video.pk]))
         resp = views.stream(request, self.video.pk)
         self.assertEqual(resp.status_code, 200)
+
+
+class SearchTests(AuthTestCase):
+    """views._search_filter -- loose/fuzzy library search."""
+
+    def _titles(self, q):
+        qs = Video.objects.filter(missing=False, hidden=False)
+        return sorted(views._search_filter(qs, q).values_list("title", flat=True))
+
+    def setUp(self):
+        super().setUp()
+        self.video.title = "Unrelated"
+        self.video.save()
+        _make_video(title="Лучшие истории Про ИГРЫ")
+        _make_video(title="Candy", filename="r-906 candy.mp4")
+        _make_video(title="Other", channel="Sheeno Mirin")
+        _make_video(title="Tooboe song")
+
+    def test_non_ascii_search_is_case_insensitive(self):
+        self.assertEqual(self._titles("лучшие"), ["Лучшие истории Про ИГРЫ"])
+        self.assertEqual(self._titles("игры"), ["Лучшие истории Про ИГРЫ"])
+
+    def test_separators_are_ignored(self):
+        self.assertEqual(self._titles("r906"), ["Candy"])
+        self.assertEqual(self._titles("r_906"), ["Candy"])
+
+    def test_multiple_words_are_anded_and_channel_is_searched(self):
+        self.assertEqual(self._titles("sheeno mirin"), ["Other"])
+        self.assertEqual(self._titles("sheeno candy"), [])
+
+    def test_typo_still_matches_but_garbage_does_not(self):
+        self.assertEqual(self._titles("toboe"), ["Tooboe song"])
+        self.assertEqual(self._titles("zzzqq"), [])
+
+    def test_blank_query_returns_everything(self):
+        self.assertEqual(len(self._titles("   ")), 5)
+
+
+class SeekStepTests(AuthTestCase):
+    def _watch_data(self, user):
+        self.client.force_login(user)
+        resp = self.client.get(reverse("watch_api", args=[self.video.pk]), HTTP_X_SPA="1")
+        return resp.json()
+
+    def test_seek_step_absent_until_saved_then_persisted(self):
+        # None (not a default 10) lets the client keep its own localStorage
+        # value and upload it, instead of the default clobbering it.
+        self.assertIsNone(self._watch_data(self.owner)["seek_step"])
+        self.client.post(reverse("set_seek_step"), {"value": "30"}, HTTP_X_SPA="1")
+        self.assertEqual(self._watch_data(self.owner)["seek_step"], 30)
+        # Per-account: another user still has nothing saved.
+        self.assertIsNone(self._watch_data(self.viewer)["seek_step"])
+
+
+class CookieNameTests(TestCase):
+    def test_cookies_are_namespaced_so_other_local_apps_cannot_clobber_them(self):
+        from django.conf import settings
+        self.assertEqual(settings.SESSION_COOKIE_NAME, "homeflix_sessionid")
+        self.assertEqual(settings.CSRF_COOKIE_NAME, "homeflix_csrftoken")

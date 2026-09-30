@@ -1022,8 +1022,18 @@ html.player-locked{overflow:hidden}
 /* =========================================================
    UTILS
    ========================================================= */
-function getCookie(n){const m=document.cookie.match('(^|;)\s*'+n+'\s*=\s*([^;]+)');return m?m.pop():'';}
-const CSRF=getCookie('csrftoken');
+// (A regex built from a normal string literal turns '\s' into a plain 's',
+// which only ever matched when the cookie was first in document.cookie.)
+function getCookie(n){
+  for(const part of document.cookie.split(';')){
+    const i=part.indexOf('=');
+    if(i>0&&part.slice(0,i).trim()===n)return decodeURIComponent(part.slice(i+1).trim());
+  }
+  return '';
+}
+// Re-read on every use so a rotated token (e.g. after login) is picked up.
+const CSRF_COOKIE='homeflix_csrftoken';
+const CSRF_HDR=()=>getCookie(CSRF_COOKIE);
 
 /* Smart-TV browsers (LG webOS, Tizen, etc.) render the expanded player capped
    to the PC/phone-safe size, which overscan then crops down to ~80% of the
@@ -1031,7 +1041,7 @@ const CSRF=getCookie('csrftoken');
 if(/webOS|Tizen|SmartTV|GoogleTV|AFTT|AFTM|AFTB|AFTS|BRAVIA|NetCast|CrKey|HbbTV/i.test(navigator.userAgent)){
   document.documentElement.classList.add('tv-mode');
 }
-function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF,
+function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF_HDR(),
   'X-SPA':'1','Content-Type':'application/x-www-form-urlencoded'},
   body:new URLSearchParams(d||{})}).then(r=>{
     // An expired/logged-out session gets redirected to the login page by
@@ -1104,6 +1114,15 @@ const ROUTER=(function(){
     if(fn)cleanup=fn(APP)||null;
   }
 
+  /* The header search box lives outside #app, so the SPA never re-renders it:
+     mirror ?q= of the page we just landed on (and empty it elsewhere),
+     otherwise it keeps whatever was typed last. */
+  function syncSearchBox(pageId){
+    const inp=document.querySelector('#searchForm input[name=q]');
+    if(!inp||inp===document.activeElement)return;
+    inp.value=pageId==='library'?(new URLSearchParams(location.search).get('q')||''):'';
+  }
+
   /* Swap #app with a fetched fragment */
   function apply(html){
     // The fragment is a single wrapper <div data-spa-fragment ...>
@@ -1118,16 +1137,22 @@ const ROUTER=(function(){
     document.title=title;
     document.body.dataset.page=pageId;
     setActiveNav(nav);
+    syncSearchBox(pageId);
     if(APP.parentElement)APP.parentElement.scrollTop=0;
     window.scrollTo(0,0);
     runInit(pageId);
   }
 
   /* Navigate to a URL (SPA). push: add history entry. */
+  let navSeq=0;
   function go(url,{push=true,replace=false}={}){
     showBar();
+    // Only the most recent navigation may touch the page: a slower earlier
+    // response (double Enter, click-then-search) must not land on top of it.
+    const seq=++navSeq;
     return fetch(url,{headers:{'X-SPA':'1'},credentials:'same-origin'})
       .then(r=>{
+        if(seq!==navSeq)return null;
         // An expired/logged-out session gets redirected here by
         // LoginRequiredMiddleware -- that's a full standalone page (see
         // login.html), not an SPA fragment, so hard-navigate instead of
@@ -1143,7 +1168,7 @@ const ROUTER=(function(){
         return r.text().then(t=>({t,finalUrl:r.url}));
       })
       .then(res=>{
-        if(!res)return;
+        if(!res||seq!==navSeq)return;
         // pushState BEFORE apply(): PAGE_INIT.library reads location.search
         // synchronously to build its AJAX query params, so the URL must
         // already reflect the new query or the first load uses stale filters.
@@ -1159,7 +1184,9 @@ const ROUTER=(function(){
   /* Re-render the current page in place (after an action) */
   function reload(){return go(location.pathname+location.search,{push:false,replace:true});}
 
-  return {go,reload,apply,setActiveNav,runInit,
+  function search(q){return go('/library/?q='+encodeURIComponent((q||'').trim()));}
+
+  return {go,reload,apply,setActiveNav,runInit,search,
           get cleanup(){return cleanup;}, set cleanup(v){cleanup=v;}};
 })();
 
@@ -1358,7 +1385,7 @@ function wireThumbTool(root){
   if(up)up.onchange=()=>{
     if(!up.files||!up.files[0])return;
     const fd=new FormData();fd.append('image',up.files[0]);
-    fetch(tool.dataset.uploadUrl,{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
+    fetch(tool.dataset.uploadUrl,{method:'POST',headers:{'X-CSRFToken':CSRF_HDR()},body:fd})
       .then(r=>r.json()).then(r=>{if(r.ok)refresh();else alert(r.error||'Upload failed');});
   };
 }
@@ -1699,15 +1726,31 @@ const PAGE_INIT={
       else{if(dy>=-8)continue;pr=-dy;cr=Math.abs(dx);}
       const sc=pr+cr*2;if(sc<bs){bs=sc;best=el;}}
     if(best)focus(best);}
+  // Keep `cur` in step with real focus, so Enter can never "click" an element
+  // the user has since moved away from (e.g. by clicking into the search box).
+  document.addEventListener('focusin',e=>{
+    if(cur&&e.target!==cur){cur.classList.remove('focused');cur=null;}});
   document.addEventListener('keydown',e=>{
     if(document.body.dataset.page==='watch'||document.getElementById('player').classList.contains('ph-expanded'))return;
-    if(typing(document.activeElement)&&e.key!=='Enter'&&!e.key.startsWith('Arrow'))return;
+    const ae=document.activeElement;
+    if(typing(ae)){
+      // Typing in a field: Enter submits it, letters/Backspace type, and
+      // Left/Right move the caret. Only Up/Down (and Left/Right once the
+      // caret is at the edge) hand off to spatial navigation -- that's how a
+      // TV remote leaves the search box.
+      if(!e.key.startsWith('Arrow'))return;
+      if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+        let s=null,t=null;try{s=ae.selectionStart;t=ae.selectionEnd;}catch{}
+        const atEdge=s===null||(s===t&&(e.key==='ArrowLeft'?s===0:s===ae.value.length));
+        if(!atEdge)return;
+      }
+    }
     switch(e.key){
       case'ArrowRight':e.preventDefault();move('right');break;
       case'ArrowLeft':e.preventDefault();move('left');break;
       case'ArrowDown':e.preventDefault();move('down');break;
       case'ArrowUp':e.preventDefault();move('up');break;
-      case'Enter':if(cur&&!typing(cur)){e.preventDefault();cur.click();}break;
+      case'Enter':if(cur&&!typing(ae)&&(!ae||ae===cur||!ae.closest('a[href],button,summary'))){e.preventDefault();cur.click();}break;
       case'Backspace':case'GoBack':history.back();break;}});
 })();
 
@@ -2146,7 +2189,7 @@ const PLAYER=(function(){
     const fd=new FormData();
     fd.append('file',pendingSubFile);fd.append('lang',lang);fd.append('label',label);
     if(CCADDSTATUS)CCADDSTATUS.textContent='Uploading…';
-    fetch('/video/'+d.id+'/subtitles/add/',{method:'POST',headers:{'X-CSRFToken':CSRF},body:fd})
+    fetch('/video/'+d.id+'/subtitles/add/',{method:'POST',headers:{'X-CSRFToken':CSRF_HDR()},body:fd})
       .then(r=>r.json()).then(r=>{
         if(!r.ok){if(CCADDSTATUS)CCADDSTATUS.textContent=r.error||'Failed to attach';return;}
         d.subtitles=r.subtitles;
@@ -2166,6 +2209,7 @@ const PLAYER=(function(){
      them server-side; see UserPref.set). */
   const SEEKKEY='homeflix_seek_step';
   let SEEK_STEP_URL='/seek-step/';
+  let seekUploaded=false; // one-time localStorage -> account upload per page load
   function loadSeekStep(){
     try{const v=parseInt(localStorage.getItem(SEEKKEY),10);return(v>=1&&v<=600)?v:10;}
     catch{return 10;}
@@ -2187,7 +2231,15 @@ const PLAYER=(function(){
   if(SEEKPOP)SEEKPOP.addEventListener('click',e=>e.stopPropagation());
   if(SEEKINPUT){
     SEEKINPUT.addEventListener('click',e=>e.stopPropagation());
-    SEEKINPUT.addEventListener('change',()=>setSeekStep(parseInt(SEEKINPUT.value,10)));
+    // 'change' alone only fires on Enter/blur -- save while typing too
+    // (debounced) so closing the popover or navigating away can't drop it.
+    let seekT=null;
+    const commitSeek=()=>{clearTimeout(seekT);
+      const v=parseInt(SEEKINPUT.value,10);
+      if(v>=1&&v<=600&&v!==SEEK_STEP)setSeekStep(v);};
+    SEEKINPUT.addEventListener('input',()=>{clearTimeout(seekT);seekT=setTimeout(commitSeek,500);});
+    SEEKINPUT.addEventListener('change',commitSeek);
+    SEEKINPUT.addEventListener('blur',commitSeek);
   }
 
   document.addEventListener('click',e=>{
@@ -2204,7 +2256,10 @@ const PLAYER=(function(){
     // browser had cached in localStorage -- that's what makes the seek step
     // follow the account across devices.
     if(data.seek_step_url)SEEK_STEP_URL=data.seek_step_url;
+    // No saved server value yet (null) -> keep this browser's own step and
+    // upload it once, so a pre-account/localStorage setting isn't lost.
     if(data.seek_step)setSeekStep(data.seek_step,false);
+    else if(SEEK_STEP!==10&&!seekUploaded){seekUploaded=true;setSeekStep(SEEK_STEP,true);}
     HDR.textContent=data.title; MBAR_T.textContent=data.title;
     PREV.disabled=!prevId(); NEXT.disabled=!nextId();
     if(MBAR_SB)MBAR_SB.disabled=!prevId(); if(MBAR_SF)MBAR_SF.disabled=!nextId();
@@ -2898,7 +2953,7 @@ const PLAYER=(function(){
     // session here just ages out server-side (services.HLS_TTL).
     if(curTime()<1)return;persist();
     navigator.sendBeacon&&navigator.sendBeacon(d.save_url,
-      new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF}));});
+      new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF_HDR()}));});
 
   /* iOS: backgrounding the tab/PWA suspends <video> unless it's handed off to the
      native PiP window first — without this, playback just stops when minimized. */
@@ -2934,7 +2989,7 @@ const PLAYER=(function(){
       e.preventDefault();e.stopPropagation();
       const val=PHSEARCH.value.trim();
       minimize();
-      ROUTER.go('/library/?q='+encodeURIComponent(val));
+      ROUTER.search(val);
     });
   }
 
@@ -3139,8 +3194,7 @@ const PLAYER=(function(){
   // search form
   const sf=document.getElementById('searchForm');
   if(sf)sf.addEventListener('submit',e=>{e.preventDefault();
-    const q=sf.querySelector('input[name=q]').value;
-    ROUTER.go('/library/?q='+encodeURIComponent(q));});
+    ROUTER.search(sf.querySelector('input[name=q]').value);});
 
   // intercept internal POST forms -> fetch, then SPA-refresh to the result
   document.addEventListener('submit',e=>{
@@ -3153,7 +3207,7 @@ const PLAYER=(function(){
     if(form.dataset.confirm&&!confirm(form.dataset.confirm)){e.preventDefault();return;}
     e.preventDefault();
     const fd=new URLSearchParams(new FormData(form));
-    fetch(action,{method:'POST',headers:{'X-SPA':'1','X-CSRFToken':CSRF},body:fd,credentials:'same-origin'})
+    fetch(action,{method:'POST',headers:{'X-SPA':'1','X-CSRFToken':CSRF_HDR()},body:fd,credentials:'same-origin'})
       .then(r=>{
         const ct=r.headers.get('content-type')||'';
         if(ct.includes('application/json'))return r.json().then(()=>({json:true}));

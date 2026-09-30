@@ -161,6 +161,12 @@ SESSION_SAVE_EVERY_REQUEST = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 
+# Cookies are scoped by host, NOT port -- Django's default `sessionid` /
+# `csrftoken` names are shared with every other Django app on this machine
+# (another project on :8000 overwrites ours and logs us out). Namespace them.
+SESSION_COOKIE_NAME = "homeflix_sessionid"
+CSRF_COOKIE_NAME = "homeflix_csrftoken"
+
 # Only mark cookies Secure when actually served over HTTPS (nginx, see
 # nginx-homeflix.conf) -- if this were unconditional, a plain LAN
 # http:// deployment would silently fail to log in.
