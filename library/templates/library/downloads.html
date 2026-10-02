@@ -1,0 +1,104 @@
+{% extends base_template %}
+{% block content %}
+<h1>Download from playlist</h1>
+<p class="sub">Fetch a YouTube playlist, see which videos you don't have yet, tick the ones you want, and they download straight into your library. Works from your phone — everything runs on the server.</p>
+
+{{ sources|json_script:"dlSourcesData" }}
+{{ tools|json_script:"dlToolsData" }}
+{{ job|json_script:"dlJobData" }}
+
+<div id="dlWarn"></div>
+
+<section class="dl-card" id="dlCookieCard">
+  <h2>YouTube cookies <span class="dl-badge" id="dlCookieBadge"></span></h2>
+  <p class="dl-reco"><b>Strongly recommended.</b> Without cookies YouTube usually caps quality at 1080p, often blocks downloads with <i>"Sign in to confirm you're not a bot"</i>, and private/unlisted playlists can't be read at all. Paste them once — they're stored on the server (not shown again) and used for every download, including ones you start from your phone.</p>
+  <textarea id="dlCookieText" rows="3" class="nav-item" spellcheck="false" autocomplete="off" autocapitalize="off"
+            placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>
+  <div class="dl-row">
+    <button type="button" class="btn nav-item" id="dlCookieSave">Save cookies</button>
+    <button type="button" class="btn ghost nav-item" id="dlCookieClear">Remove</button>
+    <span class="sub" id="dlCookieMsg"></span>
+  </div>
+  <details class="dl-how">
+    <summary class="nav-item" tabindex="0">How do I get the cookies?</summary>
+    <p><b>Do it in a private window</b> so YouTube never rotates the cookies you export (a normal browser session keeps refreshing them, which invalidates the saved copy within days).</p>
+    <p><b>Option A — extension (easiest, PC or Firefox for Android)</b></p>
+    <ol>
+      <li>Install <i>Get cookies.txt LOCALLY</i> (Chrome / Edge) or <i>cookies.txt</i> (Firefox) and allow it in private windows.</li>
+      <li>Open a <b>private / incognito window</b>, sign in at youtube.com.</li>
+      <li>In that same tab go to <code>https://www.youtube.com/robots.txt</code> (keep it the only tab open).</li>
+      <li>Click the extension → <b>Export / Copy</b> the youtube.com cookies.</li>
+      <li>Close the private window <b>without signing out</b> (signing out invalidates them).</li>
+      <li>Paste the text in the box above and press <b>Save cookies</b>.</li>
+    </ol>
+    <p><b>Option B — no extension (PC)</b></p>
+    <ol>
+      <li>In a private window, sign in at youtube.com, then open <code>https://www.youtube.com/robots.txt</code>.</li>
+      <li>Press <b>F12</b> → <b>Network</b> tab → reload the page → click the <code>robots.txt</code> request.</li>
+      <li>Under <b>Request Headers</b> find <code>cookie:</code>, copy its whole value, and paste it above.</li>
+      <li>Close the private window without signing out.</li>
+    </ol>
+    <p><b>From your phone:</b> you only need to do this once, from any device. The cookies live on the server, so afterwards the phone just opens this page and downloads. (Pasting a long cookie string on a phone works fine — copy it from the PC to your phone with any notes/messaging app.)</p>
+    <p class="sub">Cookies expire eventually. If downloads start failing with a sign-in / "not a bot" error, repeat the steps and paste fresh ones.</p>
+  </details>
+</section>
+
+<section class="dl-card">
+  <h2>Playlists</h2>
+  <div id="dlSources" class="dl-sources"></div>
+  <form id="dlAddForm" class="dl-add">
+    <input type="url" id="dlAddUrl" class="nav-item" placeholder="https://www.youtube.com/playlist?list=…" required>
+    <input type="text" id="dlAddDir" class="nav-item" placeholder="Folder inside library (blank = library root)" autocapitalize="off">
+    <button class="btn nav-item" id="dlAddBtn">Save link</button>
+  </form>
+  <p class="sub" id="dlAddMsg"></p>
+  <p class="sub">Videos land in <code>{{ library_root }}</code> (plus the folder above). A video counts as already downloaded if a file with the same name exists anywhere under that folder.</p>
+</section>
+
+<section id="dlMain" hidden>
+  <div class="dl-head">
+    <h2 id="dlTitle" style="margin:0"></h2>
+    <button type="button" class="btn ghost nav-item" id="dlFetch">↻ Fetch list</button>
+  </div>
+  <p class="sub" id="dlFetchInfo"></p>
+
+  <div class="dl-tools">
+    <button type="button" class="btn ghost nav-item" id="dlSelAll">Select all new</button>
+    <button type="button" class="btn ghost nav-item" id="dlSelNone">None</button>
+    <span class="dl-range">
+      <input type="text" id="dlRange" class="nav-item" placeholder="Range e.g. 3-10" inputmode="numeric" size="12">
+      <button type="button" class="btn ghost nav-item" id="dlRangeBtn">Select</button>
+    </span>
+  </div>
+
+  <div id="dlNew" class="dl-list"></div>
+  <div id="dlGroups"></div>
+</section>
+
+<section class="dl-card" id="dlJobCard" hidden>
+  <h2>Download progress</h2>
+  <div id="dlJobText" class="dl-jobtext"></div>
+  <div class="dl-prog"><div id="dlJobBar"></div></div>
+  <div class="dl-row">
+    <button type="button" class="btn ghost nav-item" id="dlCancel" hidden>Cancel</button>
+    <span class="sub" id="dlJobSummary"></span>
+  </div>
+  <details class="dl-how"><summary class="nav-item" tabindex="0">Log</summary><pre id="dlJobLog"></pre></details>
+</section>
+
+<section class="dl-card">
+  <h2>yt-dlp</h2>
+  <p class="sub" id="dlToolInfo"></p>
+  <div class="dl-row">
+    <button type="button" class="btn ghost nav-item" id="dlUpdate">Update yt-dlp</button>
+    <span class="sub" id="dlUpdateMsg"></span>
+  </div>
+  <p class="sub">YouTube changes often; if downloads suddenly fail for every video, update yt-dlp first.</p>
+</section>
+
+<div id="dlActionBar" role="toolbar" aria-label="Download selection">
+  <span class="bulk-count" id="dlSelCount">0 selected</span>
+  <span style="flex:1"></span>
+  <button type="button" class="btn nav-item" id="dlStart" disabled>⬇ Download</button>
+</div>
+{% endblock %}

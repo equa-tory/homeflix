@@ -170,6 +170,63 @@ main{overflow-x:hidden}
 .arrow{color:var(--accent)}
 .scinfo{color:var(--muted)}
 
+/* ---- playlist downloader ---- */
+.dl-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px 16px;margin:16px 0}
+.dl-card h2{margin:0 0 10px}
+.dl-card.dl-nocookie{border-color:var(--accent)}
+.dl-reco{margin:0 0 10px;font-size:13.5px;line-height:1.5}
+.dl-card textarea,.dl-add input,.dl-range input{width:100%;padding:10px 12px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px}
+.dl-card textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;resize:vertical}
+.dl-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.dl-badge{font-size:12px;font-weight:700;text-transform:none;letter-spacing:0;margin-left:6px;color:var(--muted)}
+.dl-badge.bad{color:var(--accent)}
+.dl-how{margin-top:12px;font-size:13.5px;line-height:1.55}
+.dl-how summary{cursor:pointer;color:var(--accent);font-weight:700;padding:6px 0}
+.dl-how ol{padding-left:20px;margin:6px 0 12px}
+.dl-sources{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+.dl-src{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);
+  border-radius:10px;background:var(--bg);cursor:pointer}
+.dl-src.active{border-color:var(--accent);background:var(--accent-soft)}
+.dl-src .info{min-width:0;flex:1}
+.dl-src .n{font-weight:700;font-size:14px}
+.dl-src .u{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dl-src .x{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;padding:4px 8px}
+.dl-src .x:hover{color:var(--accent)}
+.dl-add{display:flex;gap:8px;flex-wrap:wrap}
+.dl-add input{flex:1 1 220px;width:auto}
+.dl-head{display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-top:22px}
+.dl-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+.dl-range{display:flex;gap:6px;align-items:center}
+.dl-range input{width:130px}
+.dl-list{display:flex;flex-direction:column;gap:6px}
+.dl-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);
+  border-radius:10px;background:var(--surface)}
+.dl-item.on{border-color:var(--accent)}
+.dl-item label{display:flex;align-items:center;gap:10px;flex:1;min-width:0;cursor:pointer}
+.dl-item input[type=checkbox]{width:22px;height:22px;flex-shrink:0;accent-color:var(--accent)}
+.dl-item .tn{width:96px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;background:var(--surface2);flex-shrink:0}
+.dl-item .tx{min-width:0}
+.dl-item .t{font-weight:600;font-size:13.5px;line-height:1.35;display:-webkit-box;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.dl-item .m{color:var(--muted);font-size:12px;margin-top:2px}
+.dl-item .act{flex-shrink:0;padding:6px 10px;font-size:12px}
+.dl-group{margin-top:14px}
+.dl-group>summary{cursor:pointer;color:var(--muted);font-weight:700;padding:8px 2px}
+.dl-prog{height:8px;background:var(--surface2);border-radius:5px;overflow:hidden;margin:8px 0}
+#dlJobBar{height:100%;width:0;background:var(--accent);transition:width .4s}
+.dl-jobtext{font-size:14px;font-weight:600;overflow-wrap:anywhere}
+#dlJobLog{margin:6px 0 0;max-height:240px;overflow:auto;font-size:11.5px;white-space:pre-wrap;
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px}
+.dl-err{color:var(--accent)}
+#dlActionBar{position:fixed;bottom:var(--bottom-nav-h);left:0;right:0;z-index:201;
+  background:var(--surface);border-top:2px solid var(--accent);padding:10px 18px;
+  display:none;align-items:center;gap:8px;box-shadow:0 -4px 20px #0008}
+#dlActionBar.active{display:flex}
+body.dl-bar-on main{padding-bottom:110px}
+@media (max-width:700px){.dl-item .tn{width:72px}}
+
 /* ---- bulk select bar ---- */
 #bulkBar{position:fixed;bottom:var(--bottom-nav-h);left:0;right:0;z-index:201;
   background:var(--surface);border-top:2px solid var(--accent);
@@ -740,6 +797,7 @@ html.player-locked{overflow:hidden}
         <button class="nav-item">↻ Rescan library</button></form>
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
       <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
+      <a href="{% url 'downloads' %}" class="nav-item spa-link">⬇ Download from playlist…</a>
       <hr>
       <div class="nav-item row-inline" style="cursor:default">
         <span>🖼 Default thumb %</span>
@@ -1057,6 +1115,11 @@ function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF_HDR
       return j;
     });
   });}
+// GET twin of post(): X-SPA makes owner_required answer a viewer with JSON 403
+// instead of the HTML "not allowed" page, and a lapsed session is redirected.
+function getJSON(u){return fetch(u,{headers:{'X-SPA':'1'}}).then(r=>{
+  if(r.redirected&&/\/login\/(\?|$)/.test(r.url)){location.href=r.url;return new Promise(()=>{});}
+  return r.json();});}
 function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // Grid thumbnails: TV browsers under load sometimes drop an image request
 // (see the /thumb/ Cache-Control fix -- this is the client-side half). One
@@ -1650,6 +1713,252 @@ const PAGE_INIT={
   /* ----- DUPLICATES: plain server-rendered groups, just needs select-mode ----- */
   duplicates(root){
     return wireSelectUI(root,{selectAll:true});
+  },
+
+  /* ----- DOWNLOADS: pull a playlist's undownloaded videos (owner only) ----- */
+  downloads(root){
+    const $=s=>root.querySelector(s);
+    const readJSON=id=>{try{return JSON.parse($(id).textContent);}catch{return null;}};
+    let sources=readJSON('#dlSourcesData')||[], tools=readJSON('#dlToolsData')||{}, job=readJSON('#dlJobData');
+    let cur=null, entries=[];
+    const sel=new Set();
+    let jobTimer=null, toolTimer=null;
+    const LS='hf_dl_source';
+    const SELECTABLE=['new','skipped','archived'];
+    const GROUPS=[['downloaded','Already downloaded'],['skipped','Marked as downloaded (skipped)'],
+                  ['archived','In Lasso archive (no file found)'],['unavailable','Unavailable (private / deleted)']];
+    const bar=$('#dlActionBar');
+    const say=(el,t,bad)=>{el.textContent=t||'';el.classList.toggle('dl-err',!!bad);};
+    const fail=(el,e)=>say(el,(e&&e.message)||'Something went wrong',true);
+    const dur=s=>{if(s==null)return'';const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+      return(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0');};
+    const running=()=>!!(job&&job.running);
+
+    function renderWarn(){
+      const w=[];
+      if(!tools.installed)w.push('yt-dlp is not installed on the server. Run <code>pip install -r requirements.txt</code> and restart HomeFlix.');
+      else if(!tools.runtime)w.push('No JavaScript runtime found. YouTube downloads need <b>Deno</b> (or Node.js) installed on the server — without it most formats are missing.');
+      $('#dlWarn').innerHTML=w.map(t=>`<div class="banner">${t}</div>`).join('');
+    }
+    function renderCookies(){
+      const c=tools.cookies||{}, badge=$('#dlCookieBadge');
+      $('#dlCookieCard').classList.toggle('dl-nocookie',!c.set);
+      if(!c.set){badge.textContent='not set — recommended';badge.className='dl-badge bad';}
+      else if(c.has_login===false){badge.textContent='saved ('+c.count+') — but no login cookie found';badge.className='dl-badge bad';}
+      else{badge.textContent='✓ set · '+c.count+' cookies · saved '+new Date(c.saved*1000).toLocaleDateString();badge.className='dl-badge';}
+      $('#dlCookieClear').hidden=!c.set;
+    }
+    function renderTools(){
+      $('#dlToolInfo').textContent='yt-dlp '+(tools.version||'not installed')+' · JS runtime: '+(tools.runtime||'none');
+      const u=tools.update||{};
+      const m=$('#dlUpdateMsg');
+      say(m,u.state==='running'?'Updating…':u.state==='ok'?'✓ '+(u.msg||'updated'):u.state==='error'?'Update failed: '+(u.msg||''):'',u.state==='error');
+      $('#dlUpdate').disabled=u.state==='running';
+    }
+    function renderSources(){
+      const box=$('#dlSources');
+      if(!sources.length){box.innerHTML='<p class="sub" style="margin:0">No playlists saved yet — add a link below.</p>';return;}
+      box.innerHTML=sources.map(s=>`<div class="dl-src nav-item${s.id===cur?' active':''}" data-id="${s.id}" tabindex="0" role="button">
+        <div class="info"><div class="n">${esc(s.name)}</div><div class="u">${esc(s.url)}${s.subdir?' → '+esc(s.subdir):''}</div></div>
+        <button type="button" class="x" data-del="${s.id}" title="Remove link">✕</button></div>`).join('');
+    }
+
+    function row(e){
+      const can=SELECTABLE.includes(e.status), on=sel.has(e.id);
+      const act=e.status==='new'||e.status==='archived'?`<button type="button" class="btn ghost act nav-item" data-skip="${e.id}">Mark downloaded</button>`
+        :e.status==='skipped'?`<button type="button" class="btn ghost act nav-item" data-unskip="${e.id}">Unskip</button>`:'';
+      const meta='#'+e.index+(e.duration!=null?' · '+dur(e.duration):'');
+      return `<div class="dl-item${on?' on':''}"><label>`+
+        (can?`<input type="checkbox" class="nav-item" data-id="${e.id}"${on?' checked':''}>`:'')+
+        `<img class="tn" loading="lazy" referrerpolicy="no-referrer" alt="" src="https://i.ytimg.com/vi/${e.id}/mqdefault.jpg" onerror="this.style.visibility='hidden'">`+
+        `<span class="tx"><span class="t">${esc(e.title)}</span><span class="m">${meta}</span></span></label>${act}</div>`;
+    }
+    function renderEntries(){
+      for(const id of [...sel]){const e=entries.find(x=>x.id===id);if(!e||!SELECTABLE.includes(e.status))sel.delete(id);}
+      const nw=entries.filter(e=>e.status==='new');
+      $('#dlNew').innerHTML=nw.length?nw.map(row).join(''):
+        `<div class="empty" style="padding:30px 10px"><p>${entries.length?'Nothing new — everything in this playlist is already downloaded.':'Press “Fetch list” to load this playlist.'}</p></div>`;
+      $('#dlGroups').innerHTML=GROUPS.map(([k,label])=>{
+        const L=entries.filter(e=>e.status===k);
+        return L.length?`<details class="dl-group"><summary class="nav-item" tabindex="0">${label} (${L.length})</summary><div class="dl-list" style="margin-top:6px">${L.map(row).join('')}</div></details>`:'';
+      }).join('');
+      updateBar();
+    }
+    function updateBar(){
+      const on=!!cur;
+      bar.classList.toggle('active',on);
+      document.body.classList.toggle('dl-bar-on',on);
+      $('#dlSelCount').textContent=sel.size+' selected';
+      $('#dlStart').disabled=!sel.size||running()||!tools.installed;
+    }
+    function applyState(j){
+      entries=j.entries||[];
+      const s=sources.find(x=>x.id===j.source.id);if(s)Object.assign(s,j.source);
+      renderSources();
+      const c=j.counts||{};
+      $('#dlTitle').textContent=j.source.name;
+      say($('#dlFetchInfo'),(j.source.fetched?'Fetched '+new Date(j.source.fetched).toLocaleString()+' · ':'Not fetched yet · ')+
+        (c.new||0)+' new, '+(c.downloaded||0)+' downloaded'+(c.skipped?', '+c.skipped+' skipped':'')+
+        (c.unavailable?', '+c.unavailable+' unavailable':''));
+    }
+    function openSource(id,fresh){
+      cur=id;sel.clear();entries=[];
+      try{localStorage.setItem(LS,String(id));}catch{}
+      $('#dlMain').hidden=false;renderSources();renderEntries();
+      const s=sources.find(x=>x.id===id);
+      $('#dlTitle').textContent=s?s.name:'';say($('#dlFetchInfo'),'Loading…');
+      getJSON('/downloads/sources/'+id+'/state/').then(j=>{
+        if(cur!==id||!j.ok)return;
+        applyState(j);
+        entries.filter(e=>e.status==='new').forEach(e=>sel.add(e.id));
+        renderEntries();
+        if(fresh||!entries.length)fetchList();
+      }).catch(e=>fail($('#dlFetchInfo'),e));
+    }
+    function fetchList(){
+      const id=cur;if(!id)return;
+      const b=$('#dlFetch');b.disabled=true;say($('#dlFetchInfo'),'Asking YouTube… (big playlists can take a minute)');
+      post('/downloads/sources/'+id+'/fetch/').then(j=>{
+        b.disabled=false;
+        if(cur!==id)return;
+        if(!j.ok){say($('#dlFetchInfo'),j.error||'Fetch failed',true);return;}
+        applyState(j);sel.clear();
+        entries.filter(e=>e.status==='new').forEach(e=>sel.add(e.id));
+        renderEntries();
+      }).catch(e=>{b.disabled=false;fail($('#dlFetchInfo'),e);});
+    }
+    function refreshState(){
+      const id=cur;if(!id)return;
+      return getJSON('/downloads/sources/'+id+'/state/').then(j=>{if(cur===id&&j.ok){applyState(j);renderEntries();}});
+    }
+    function markSkip(ids,undo){
+      post('/downloads/sources/'+cur+'/'+(undo?'unskip':'skip')+'/',ids.map(i=>['ids',i])).then(j=>{
+        if(!j.ok)return;ids.forEach(i=>sel.delete(i));applyState(j);renderEntries();
+      });
+    }
+
+    function renderJob(){
+      const card=$('#dlJobCard');
+      if(!job){card.hidden=true;return;}
+      card.hidden=false;
+      const t=$('#dlJobText'),bar=$('#dlJobBar'),cancel=$('#dlCancel');
+      cancel.hidden=!job.running;
+      if(job.running){
+        t.textContent='Downloading '+Math.min(job.done+1,job.total)+' of '+job.total+(job.title?' — '+job.title:' — starting…');
+        bar.style.width=job.pct+'%';say($('#dlJobSummary'),'');
+      }else{
+        t.textContent=job.status==='done'?'✓ Finished':job.status==='cancelled'?'Cancelled':'✗ Failed';
+        bar.style.width=job.status==='done'?'100%':'0';
+        say($('#dlJobSummary'),job.summary,job.status==='failed');
+      }
+      $('#dlJobLog').textContent=job.log||'';
+    }
+    function pollJob(){
+      clearTimeout(jobTimer);
+      getJSON('/downloads/job/status/').then(j=>{
+        const was=running();job=j.job;renderJob();updateBar();
+        if(running())jobTimer=setTimeout(pollJob,2000);
+        else if(was)refreshState();   // finished: files now exist, re-compare
+      }).catch(()=>{jobTimer=setTimeout(pollJob,5000);});
+    }
+    function pollTools(){
+      clearTimeout(toolTimer);
+      getJSON('/downloads/tools/').then(j=>{
+        tools=j;renderWarn();renderCookies();renderTools();updateBar();
+        if((tools.update||{}).state==='running')toolTimer=setTimeout(pollTools,3000);
+      }).catch(()=>{});
+    }
+
+    /* ---- events ---- */
+    $('#dlCookieSave').onclick=()=>{
+      const m=$('#dlCookieMsg'),text=$('#dlCookieText').value.trim();
+      if(!text){say(m,'Paste the cookies first',true);return;}
+      say(m,'Saving…');
+      post('/downloads/cookies/',{text}).then(j=>{
+        if(!j.ok){say(m,j.error||'Not saved',true);return;}
+        $('#dlCookieText').value='';tools.cookies=j.cookies;renderCookies();say(m,'Saved ✓');
+      }).catch(e=>fail(m,e));
+    };
+    $('#dlCookieClear').onclick=()=>{
+      if(!confirm('Remove the saved YouTube cookies from the server?'))return;
+      post('/downloads/cookies/',{action:'clear'}).then(j=>{tools.cookies=j.cookies;renderCookies();say($('#dlCookieMsg'),'Removed');});
+    };
+    $('#dlUpdate').onclick=()=>{
+      post('/downloads/update-ytdlp/').then(()=>{tools.update={state:'running'};renderTools();pollTools();});
+    };
+    $('#dlAddForm').onsubmit=ev=>{
+      ev.preventDefault();
+      const m=$('#dlAddMsg');say(m,'Saving…');
+      post('/downloads/sources/add/',{url:$('#dlAddUrl').value,subdir:$('#dlAddDir').value}).then(j=>{
+        if(!j.ok){say(m,j.error||'Not saved',true);return;}
+        say(m,'');
+        if(!sources.some(s=>s.id===j.source.id))sources.push(j.source);
+        else Object.assign(sources.find(s=>s.id===j.source.id),j.source);
+        $('#dlAddUrl').value='';$('#dlAddDir').value='';
+        openSource(j.source.id,true);
+      }).catch(e=>fail(m,e));
+    };
+    $('#dlSources').onclick=ev=>{
+      const del=ev.target.closest('[data-del]');
+      if(del){
+        ev.stopPropagation();
+        if(!confirm('Remove this saved playlist? (Downloaded files are not touched.)'))return;
+        const id=+del.dataset.del;
+        post('/downloads/sources/'+id+'/delete/').then(()=>{
+          sources=sources.filter(s=>s.id!==id);
+          if(cur===id){cur=null;entries=[];sel.clear();$('#dlMain').hidden=true;updateBar();}
+          renderSources();
+        });
+        return;
+      }
+      const el=ev.target.closest('.dl-src');if(el)openSource(+el.dataset.id);
+    };
+    $('#dlSources').onkeydown=ev=>{
+      if(ev.key==='Enter'&&ev.target.classList.contains('dl-src'))openSource(+ev.target.dataset.id);
+    };
+    $('#dlFetch').onclick=fetchList;
+    $('#dlSelAll').onclick=()=>{entries.filter(e=>e.status==='new').forEach(e=>sel.add(e.id));renderEntries();};
+    $('#dlSelNone').onclick=()=>{sel.clear();renderEntries();};
+    $('#dlRangeBtn').onclick=()=>{
+      const m=/^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/.exec($('#dlRange').value);
+      if(!m)return;
+      const a=+m[1],b=m[2]?+m[2]:a;
+      sel.clear();
+      entries.filter(e=>e.status==='new'&&e.index>=Math.min(a,b)&&e.index<=Math.max(a,b)).forEach(e=>sel.add(e.id));
+      renderEntries();
+    };
+    root.addEventListener('change',ev=>{
+      const cb=ev.target.closest('.dl-item input[type=checkbox]');if(!cb)return;
+      cb.checked?sel.add(cb.dataset.id):sel.delete(cb.dataset.id);
+      cb.closest('.dl-item').classList.toggle('on',cb.checked);updateBar();
+    });
+    root.addEventListener('click',ev=>{
+      const sk=ev.target.closest('[data-skip]'),un=ev.target.closest('[data-unskip]');
+      if(sk)markSkip([sk.dataset.skip],false);else if(un)markSkip([un.dataset.unskip],true);
+    });
+    $('#dlStart').onclick=()=>{
+      if(!sel.size||!cur)return;
+      const b=$('#dlStart');b.disabled=true;
+      post('/downloads/sources/'+cur+'/start/',[...sel].map(i=>['ids',i])).then(j=>{
+        if(!j.ok){alert(j.error||'Could not start');updateBar();return;}
+        job=j.job;renderJob();updateBar();pollJob();
+        $('#dlJobCard').scrollIntoView({behavior:'smooth',block:'center'});
+      }).catch(()=>updateBar());
+    };
+    $('#dlCancel').onclick=()=>{post('/downloads/job/cancel/').then(pollJob);};
+
+    /* ---- init ---- */
+    renderWarn();renderCookies();renderTools();renderSources();renderJob();updateBar();
+    if(running())pollJob();
+    if((tools.update||{}).state==='running')pollTools();
+    let last=null;try{last=+localStorage.getItem(LS)||null;}catch{}
+    const first=sources.find(s=>s.id===last)||(sources.length===1?sources[0]:null);
+    if(first)openSource(first.id);
+
+    return ()=>{
+      clearTimeout(jobTimer);clearTimeout(toolTimer);
+      document.body.classList.remove('dl-bar-on');
+    };
   },
 
   /* ----- PLAYLIST DETAIL: select-mode + reorder-mode + cover image tool ----- */

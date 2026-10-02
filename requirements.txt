@@ -1,2 +1,4 @@
 Django>=5.1
+yt-dlp[default]
+yt-dlp-ejs
 # ffmpeg + ffprobe must also be installed on the system (apt install ffmpeg)

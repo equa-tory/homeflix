@@ -231,6 +231,11 @@ os.makedirs(HLS_DIR, exist_ok=True)
 SUBTITLE_DIR = str(BASE_DIR / "subtitles")
 os.makedirs(SUBTITLE_DIR, exist_ok=True)
 
+# Playlist downloader (library/downloader.py): holds the pasted YouTube
+# cookies.txt and per-run marker files. Also kept OUT of LIBRARY_ROOT.
+YTDL_DIR = str(BASE_DIR / "ytdl")
+os.makedirs(YTDL_DIR, exist_ok=True)
+
 # Library page size for infinite scroll.
 PAGE_SIZE = 60
 

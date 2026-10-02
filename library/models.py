@@ -283,3 +283,58 @@ class SmartPlaylist(models.Model):
             except (ValueError, TypeError):
                 pass
         return qs.distinct().order_by("-date_added")
+
+
+class DownloadSource(models.Model):
+    """A saved YouTube playlist link the owner pulls undownloaded videos from
+    (see library/downloader.py). `entries_json` caches the last fetch so the
+    Downloads page can re-render without hitting YouTube every time."""
+    url = models.URLField(max_length=1024)
+    name = models.CharField(max_length=256, blank=True, default="")
+    # Relative to LIBRARY_ROOT; blank = the library root itself. Validated in
+    # downloader.resolve_target() so it can never escape the root.
+    target_subdir = models.CharField(max_length=512, blank=True, default="")
+    last_fetched = models.DateTimeField(null=True, blank=True)
+    entries_json = models.TextField(blank=True, default="[]")
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+
+    def __str__(self):
+        return self.name or self.url
+
+
+class SkippedEntry(models.Model):
+    """A playlist video the owner marked "already downloaded" -- it is never
+    offered for download again. DB-only on purpose: Lasso's archive file is
+    left alone, and Unskip just deletes the row."""
+    source = models.ForeignKey(DownloadSource, on_delete=models.CASCADE, related_name="skipped")
+    video_id = models.CharField(max_length=32)
+    title = models.CharField(max_length=512, blank=True, default="")
+
+    class Meta:
+        unique_together = ("source", "video_id")
+
+
+class DownloadJob(models.Model):
+    """One yt-dlp run over a hand-picked set of playlist items. State lives
+    here (plus the pid), not in process memory, so status polling and cancel
+    work from any gunicorn worker -- same reasoning as the HLS sessions."""
+    QUEUED, RUNNING, DONE, FAILED, CANCELLED = "queued", "running", "done", "failed", "cancelled"
+    source = models.ForeignKey(DownloadSource, on_delete=models.CASCADE, related_name="jobs")
+    ids = models.TextField(default="[]")              # JSON list of video ids
+    status = models.CharField(max_length=12, default=QUEUED)
+    pid = models.IntegerField(null=True, blank=True)
+    total = models.PositiveIntegerField(default=0)
+    done_count = models.PositiveIntegerField(default=0)
+    fail_count = models.PositiveIntegerField(default=0)
+    current_title = models.CharField(max_length=512, blank=True, default="")
+    current_pct = models.PositiveSmallIntegerField(default=0)
+    summary = models.CharField(max_length=256, blank=True, default="")
+    log_tail = models.TextField(blank=True, default="")
+    started = models.DateTimeField(auto_now_add=True)
+    finished = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-id"]

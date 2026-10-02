@@ -13,15 +13,16 @@ from django.http import (
 )
 from django.shortcuts import render, get_object_or_404, redirect
 from django.views.decorators.http import require_POST
+from django.utils import timezone
 from django.utils.http import http_date
 from django.views.static import was_modified_since
 
 from .auth import owner_required, public_when_enabled
 from .models import (
     Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
-    UserPref, VideoSubtitle,
+    UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob,
 )
-from . import services
+from . import services, downloader
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 CHUNK = 8192
@@ -1558,3 +1559,171 @@ def pwa_icon(request, size):
     resp = HttpResponse(png, content_type='image/png')
     resp['Cache-Control'] = 'public, max-age=86400'
     return resp
+
+
+# ---- Playlist downloader (owner only) ---------------------------------------
+# Everything here writes to the library folder or stores YouTube credentials,
+# so every endpoint -- reads included -- is @owner_required. JSON endpoints are
+# fetched with X-SPA by the page (see getJSON() in base.html) so a non-owner
+# gets the JSON 403 rather than the HTML "not allowed" page.
+
+def _dl_source_json(src):
+    return {"id": src.pk, "url": src.url, "name": src.name or src.url,
+            "subdir": src.target_subdir,
+            "fetched": src.last_fetched.isoformat() if src.last_fetched else ""}
+
+
+def _dl_job_json(job):
+    if not job:
+        return None
+    return {"id": job.pk, "source": job.source_id, "status": job.status,
+            "pct": job.current_pct, "title": job.current_title, "total": job.total,
+            "done": job.done_count, "fail": job.fail_count, "summary": job.summary,
+            "log": job.log_tail,
+            "running": job.status in (DownloadJob.QUEUED, DownloadJob.RUNNING)}
+
+
+def _dl_tools_json():
+    runtime, _ = downloader.js_runtime()
+    return {"installed": downloader.ytdlp_available(), "version": downloader.ytdlp_version(),
+            "runtime": runtime, "cookies": downloader.cookie_status(),
+            "update": downloader.update_status()}
+
+
+def _dl_state_json(src):
+    entries = downloader.source_state(src)
+    counts = {}
+    for e in entries:
+        counts[e["status"]] = counts.get(e["status"], 0) + 1
+    return {"ok": True, "source": _dl_source_json(src), "entries": entries, "counts": counts}
+
+
+def _dl_ids(request, src):
+    """Posted ids that are real video ids belonging to this source's last fetch
+    -- never arbitrary client-supplied strings."""
+    known = {e["id"] for e in json.loads(src.entries_json or "[]")}
+    return [i for i in dict.fromkeys(request.POST.getlist("ids"))
+            if downloader.VIDEO_ID_RE.match(i) and i in known]
+
+
+@owner_required
+def downloads(request):
+    downloader.reap_stale()
+    return render(request, "library/downloads.html", base_ctx(
+        request, page_id="downloads", spa_title="Download — HomeFlix",
+        sources=[_dl_source_json(s) for s in DownloadSource.objects.all()],
+        tools=_dl_tools_json(),
+        job=_dl_job_json(DownloadJob.objects.select_related("source").first()),
+    ))
+
+
+@owner_required
+def dl_tools(request):
+    return JsonResponse({"ok": True, **_dl_tools_json()})
+
+
+@require_POST
+@owner_required
+def dl_cookies(request):
+    if request.POST.get("action") == "clear":
+        downloader.clear_cookies()
+        return JsonResponse({"ok": True, "cookies": downloader.cookie_status()})
+    try:
+        downloader.save_cookies(request.POST.get("text", ""))
+    except ValueError as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=400)
+    return JsonResponse({"ok": True, "cookies": downloader.cookie_status()})
+
+
+@require_POST
+@owner_required
+def dl_update_ytdlp(request):
+    return JsonResponse({"ok": True, "started": downloader.start_update()})
+
+
+@require_POST
+@owner_required
+def dl_source_add(request):
+    try:
+        url = downloader.normalize_url(request.POST.get("url", ""))
+        subdir = request.POST.get("subdir", "").strip()
+        downloader.resolve_target(subdir)
+    except ValueError as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=400)
+    src, _created = DownloadSource.objects.get_or_create(
+        url=url, defaults={"target_subdir": subdir})
+    if src.target_subdir != subdir:
+        src.target_subdir = subdir
+        src.save(update_fields=["target_subdir"])
+    return JsonResponse({"ok": True, "source": _dl_source_json(src)})
+
+
+@require_POST
+@owner_required
+def dl_source_delete(request, pk):
+    get_object_or_404(DownloadSource, pk=pk).delete()
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+@owner_required
+def dl_source_fetch(request, pk):
+    src = get_object_or_404(DownloadSource, pk=pk)
+    name, entries, err = downloader.fetch_playlist(src.url)
+    if err:
+        return JsonResponse({"ok": False, "error": err}, status=502)
+    src.name = name or src.name
+    src.entries_json = json.dumps(entries)
+    src.last_fetched = timezone.now()
+    src.save(update_fields=["name", "entries_json", "last_fetched"])
+    return JsonResponse(_dl_state_json(src))
+
+
+@owner_required
+def dl_source_state(request, pk):
+    return JsonResponse(_dl_state_json(get_object_or_404(DownloadSource, pk=pk)))
+
+
+@require_POST
+@owner_required
+def dl_source_skip(request, pk):
+    src = get_object_or_404(DownloadSource, pk=pk)
+    titles = {e["id"]: e.get("title", "") for e in json.loads(src.entries_json or "[]")}
+    for vid in _dl_ids(request, src):
+        SkippedEntry.objects.get_or_create(source=src, video_id=vid,
+                                           defaults={"title": titles.get(vid, "")[:500]})
+    return JsonResponse(_dl_state_json(src))
+
+
+@require_POST
+@owner_required
+def dl_source_unskip(request, pk):
+    src = get_object_or_404(DownloadSource, pk=pk)
+    SkippedEntry.objects.filter(source=src, video_id__in=_dl_ids(request, src)).delete()
+    return JsonResponse(_dl_state_json(src))
+
+
+@require_POST
+@owner_required
+def dl_source_start(request, pk):
+    src = get_object_or_404(DownloadSource, pk=pk)
+    ids = _dl_ids(request, src)
+    if not ids:
+        return JsonResponse({"ok": False, "error": "Nothing selected"}, status=400)
+    job, err = downloader.start_job(src, ids)
+    if err:
+        return JsonResponse({"ok": False, "error": err}, status=409)
+    return JsonResponse({"ok": True, "job": _dl_job_json(job)})
+
+
+@owner_required
+def dl_job_status(request):
+    downloader.reap_stale()
+    job = DownloadJob.objects.select_related("source").first()
+    return JsonResponse({"ok": True, "job": _dl_job_json(job)})
+
+
+@require_POST
+@owner_required
+def dl_job_cancel(request):
+    return JsonResponse({"ok": downloader.cancel_job()})

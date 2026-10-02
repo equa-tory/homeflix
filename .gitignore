@@ -10,3 +10,5 @@ cache/
 staticfiles/
 /venv
 /.venv
+ytdl/
+Lasso/

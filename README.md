@@ -60,9 +60,33 @@ catalog still requires an account — an anonymous visitor gets sent to
 `/login/` the moment they try. Off by default; needs a process restart
 (like every other `HOMEFLIX_*` variable) to take effect.
 
+## Downloading from a YouTube playlist (owner only)
+
+**Manage (⋯) → ⬇ Download from playlist…** — works from a phone, everything runs on the server.
+
+1. Save a playlist link (optionally into a subfolder of the library). Several links can be saved.
+2. **Fetch list.** The playlist is compared **by name** against the target folder (all
+   subfolders, so Organize-by-date doesn't confuse it). Videos you don't have are listed and
+   pre-ticked; untick the ones you don't want, or use the range box (`3-10`).
+3. **Mark downloaded** on a row if you already have it under another name — it's remembered
+   and never offered again (**Unskip** undoes it).
+4. **Download**. Progress shows live; finished files appear in the library right away.
+
+**Paste your YouTube cookies** (the box at the top of the page) for full quality and to avoid
+"Sign in to confirm you're not a bot". They're stored on the server (mode 0600, never shown
+again) and used for every download, so you only do it once — the page has the step-by-step
+(use a private window and close it without signing out, so YouTube doesn't rotate them).
+Cookies expire eventually; paste fresh ones if downloads start failing with a sign-in error.
+
+It shares its `_yt_archive_*.txt` file with the Lasso downloader in the same folder,
+so the two tools never re-download each other's videos. YouTube breaks yt-dlp regularly — use
+the **Update yt-dlp** button on the page when everything suddenly fails.
+
 ## Requirements
-- Python 3.10+, `pip install -r requirements.txt` (Django only)
+- Python 3.10+, `pip install -r requirements.txt` (Django + yt-dlp)
 - ffmpeg + ffprobe on PATH (`sudo apt install ffmpeg`)
+- For the playlist downloader: [Deno](https://deno.com) (or Node.js) on PATH — yt-dlp needs a
+  JS runtime to solve YouTube's challenge, otherwise most formats are missing
 
 ## Quick start (development)
 ```bash

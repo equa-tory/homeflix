@@ -43,6 +43,21 @@ urlpatterns = [
     path("purge-missing/", views.purge_missing, name="purge_missing"),
     path("reset-library/", views.reset_library, name="reset_library"),
 
+    # playlist downloader (owner only)
+    path("downloads/", views.downloads, name="downloads"),
+    path("downloads/tools/", views.dl_tools, name="dl_tools"),
+    path("downloads/cookies/", views.dl_cookies, name="dl_cookies"),
+    path("downloads/update-ytdlp/", views.dl_update_ytdlp, name="dl_update_ytdlp"),
+    path("downloads/sources/add/", views.dl_source_add, name="dl_source_add"),
+    path("downloads/sources/<int:pk>/delete/", views.dl_source_delete, name="dl_source_delete"),
+    path("downloads/sources/<int:pk>/fetch/", views.dl_source_fetch, name="dl_source_fetch"),
+    path("downloads/sources/<int:pk>/state/", views.dl_source_state, name="dl_source_state"),
+    path("downloads/sources/<int:pk>/skip/", views.dl_source_skip, name="dl_source_skip"),
+    path("downloads/sources/<int:pk>/unskip/", views.dl_source_unskip, name="dl_source_unskip"),
+    path("downloads/sources/<int:pk>/start/", views.dl_source_start, name="dl_source_start"),
+    path("downloads/job/status/", views.dl_job_status, name="dl_job_status"),
+    path("downloads/job/cancel/", views.dl_job_cancel, name="dl_job_cancel"),
+
     # actions
     path("scan/", views.scan, name="scan"),
     path("video/<int:pk>/thumb/regen/", views.regen_thumb, name="regen_thumb"),
