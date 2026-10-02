@@ -29,6 +29,8 @@
 </div>
 <p class="sub">{{ videos|length }} video{{ videos|length|pluralize }} match current rules</p>
 
+<details class="pl-settings">
+  <summary class="nav-item" tabindex="0">⚙ Playlist settings <span class="sub">cover image · conditions (match {{ sp.match_mode }} rules)</span></summary>
 <div class="thumb-tool" id="plThumbTool" data-pl="{{ sp.pk }}" data-generate-url="{% url 'smart_playlist_thumb_generate' sp.pk %}"
      data-remove-url="{% url 'smart_playlist_thumb_remove' sp.pk %}" data-upload-url="{% url 'smart_playlist_thumb_upload' sp.pk %}">
   <div class="row-inline">
@@ -51,6 +53,13 @@
   <input type="hidden" name="rules" id="rulesInput" value="{{ sp.rules }}">
 
   <div class="rules-box">
+    <label class="match-row">Show videos that match
+      <select name="match" class="nav-item">
+        <option value="all" {% if sp.match_mode != 'any' %}selected{% endif %}>ALL</option>
+        <option value="any" {% if sp.match_mode == 'any' %}selected{% endif %}>ANY (or)</option>
+      </select>
+      of these rules
+    </label>
     <div class="rule-field-labels">
       <span>Field</span><span>Condition</span><span>Value</span>
     </div>
@@ -62,6 +71,8 @@
   <button class="btn nav-item" type="submit">Save &amp; refresh</button>
   <a href="{% url 'playlists' %}" class="btn ghost nav-item" data-spa>Back</a>
 </form>
+
+</details>
 
 {% if videos %}
 <h2 style="margin-top:28px">Matching videos</h2>

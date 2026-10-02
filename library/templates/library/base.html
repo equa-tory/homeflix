@@ -260,6 +260,31 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
   font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
+/* ---- collapsed settings blocks (playlist settings, player tools) ---- */
+.pl-settings,.ph-utils{margin:14px 0;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.pl-settings>summary,.ph-utils>summary{cursor:pointer;padding:10px 14px;font-weight:700;font-size:14px}
+.ph-utils>summary{font-size:13px;padding:9px 12px}
+.pl-settings>summary .sub,.ph-utils>summary .sub{font-weight:400;margin-left:6px}
+.pl-settings[open]>summary,.ph-utils[open]>summary{border-bottom:1px solid var(--border)}
+.pl-settings>:not(summary){margin:12px 14px}
+.ph-utils>:not(summary){margin:10px 12px}
+.match-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:14px}
+.match-row select{padding:6px 10px;border-radius:7px;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);font-weight:700}
+
+/* ---- channels ---- */
+.chan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:var(--gap)}
+.chan-card{display:block;border-radius:var(--radius)}
+.chan-cover{aspect-ratio:16/9;border-radius:var(--radius);overflow:hidden;background:var(--surface2);
+  border:1px solid var(--border);display:grid;gap:2px}
+.chan-n0,.chan-n1{grid-template:1fr/1fr}
+.chan-n2{grid-template:1fr/1fr 1fr}
+.chan-n3,.chan-n4{grid-template:1fr 1fr/1fr 1fr}
+.chan-n3 .chan-th:first-child{grid-row:span 2}
+.chan-th{background-size:cover;background-position:center;background-color:var(--surface2)}
+.chan-cover .placeholder{display:grid;place-items:center;color:var(--muted);font-size:28px}
+.chan-card:hover .chan-cover,.chan-card:focus .chan-cover{outline:2px solid var(--accent)}
+
 /* ---- backups page ---- */
 .bk-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:14px}
 .bk-row input[type=number]{width:96px}
@@ -788,9 +813,9 @@ html.player-locked{overflow:hidden}
     display:flex; background:var(--bg);
     border-top:1px solid var(--border); padding:0 0 env(safe-area-inset-bottom,0px);
   }
-  .bottom-nav a{flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
-    padding:10px 6px 8px; color:var(--muted); font-size:10px; font-weight:600;
-    text-transform:uppercase; letter-spacing:.04em;}
+  .bottom-nav a{flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:10px 2px 8px; color:var(--muted); font-size:9px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.02em; white-space:nowrap;}
   .bottom-nav a .icon{font-size:22px; line-height:1}
   .bottom-nav a.active,.bottom-nav a:hover{color:var(--accent)}
   .focused{ outline:none !important }
@@ -809,6 +834,7 @@ html.player-locked{overflow:hidden}
   <nav class="topnav">
     <a href="{% url 'home' %}"      class="nav-item spa-link" data-nav="home">Home</a>
     <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library">Library</a>
+    <a href="{% url 'channels' %}"  class="nav-item spa-link" data-nav="channels">Channels</a>
     <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists">Playlists</a>
     <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history">History</a>
     <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts">Shorts</a>
@@ -872,6 +898,7 @@ html.player-locked{overflow:hidden}
 <nav class="bottom-nav">
   <a href="{% url 'home' %}"      class="nav-item spa-link" data-nav="home"><span class="icon">⌂</span>Home</a>
   <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library"><span class="icon">▤</span>Library</a>
+  <a href="{% url 'channels' %}"  class="nav-item spa-link" data-nav="channels"><span class="icon">◉</span>Channels</a>
   <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists"><span class="icon">☰</span>Playlists</a>
   <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history"><span class="icon">◷</span>History</a>
   <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts"><span class="icon">▯</span>Shorts</a>
@@ -1163,7 +1190,7 @@ function openRandom(qs){
    you're looking at. Library-wide on pages with neither. */
 function randomScope(){
   const p=new URLSearchParams(location.search), out=new URLSearchParams();
-  ['q','tag','fav','shorts'].forEach(k=>{if(p.get(k))out.set(k,p.get(k));});
+  ['q','tag','fav','shorts','channel'].forEach(k=>{if(p.get(k))out.set(k,p.get(k));});
   let m=location.pathname.match(/^\/playlists\/(\d+)\//);if(m)out.set('pl',m[1]);
   m=location.pathname.match(/^\/smart-playlists\/(\d+)\//);if(m)out.set('sp',m[1]);
   return out.toString();
@@ -1767,6 +1794,17 @@ const PAGE_INIT={
   /* ----- DUPLICATES: plain server-rendered groups, just needs select-mode ----- */
   duplicates(root){
     return wireSelectUI(root,{selectAll:true});
+  },
+
+  /* ----- CHANNELS: sort + "random channel" ----- */
+  channels(root){
+    wireSortUI(root);
+    const btn=root.querySelector('#randChannel');
+    if(btn)btn.onclick=()=>{
+      const cards=root.querySelectorAll('.chan-card');
+      if(cards.length)ROUTER.go(cards[Math.floor(Math.random()*cards.length)].getAttribute('href'));
+    };
+    return null;
   },
 
   /* ----- BACKUPS: schedule + backup now (owner only) ----- */
@@ -2870,9 +2908,10 @@ const PLAYER=(function(){
         `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
           `<span id="phConvText" class="sub"></span>`+
           `<button class="btn ghost" id="phConvCancel" style="margin-left:8px">✕ Cancel</button></div></div>`:'')+
-      `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
+      `<details class="ph-utils"><summary class="nav-item" tabindex="0">🛠 Tools <span class="sub">file path${data.is_owner?' · thumbnail · rename':''}</span></summary>`+
+      `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       (data.is_owner?`<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
@@ -2886,6 +2925,7 @@ const PLAYER=(function(){
           `<button class="btn ghost" id="phRenameBtn">Save</button>`+
         `</div>`+
         `<div class="sub" id="phRenameStatus" style="margin-top:6px;min-height:14px"></div></div>`:'')+
+      `</details>`+
       (data.description?`<div class="desc">${esc(data.description)}</div>`:'')+
       `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
         `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+

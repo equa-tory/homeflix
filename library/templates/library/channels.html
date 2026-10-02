@@ -1,0 +1,44 @@
+{% extends base_template %}
+{% block content %}
+<h1>Channels <span style="color:var(--muted);font-size:14px;font-weight:400">· {{ channels|length }}</span></h1>
+<div class="toolbar">
+  <label>Sort&nbsp;
+    <select class="nav-item" data-filter-sort>
+      <option value="count"  {% if sort == 'count'  %}selected{% endif %}>Most videos</option>
+      <option value="name"   {% if sort == 'name'   %}selected{% endif %}>Name</option>
+      <option value="recent" {% if sort == 'recent' %}selected{% endif %}>Recently added</option>
+    </select>
+  </label>
+  {% if channels %}
+    <button type="button" class="btn ghost nav-item" id="randChannel" style="font-size:13px;padding:7px 10px">🎲 Random channel</button>
+    <a class="btn ghost nav-item" data-random href="{% url 'random_video' %}" style="font-size:13px;padding:7px 10px"
+       title="Play a random video from the whole library">🎲 Random video</a>
+  {% endif %}
+</div>
+
+{% if channels %}
+  <div class="chan-grid">
+    {% for c in channels %}
+      <a class="chan-card nav-item" tabindex="0" href="{% url 'library' %}?channel={{ c.name|urlencode }}">
+        <div class="chan-cover chan-n{{ c.covers|length }}">
+          {% for vid in c.covers %}<div class="chan-th" style="background-image:url({% url 'thumb' vid %})"></div>{% empty %}<div class="placeholder">◉</div>{% endfor %}
+        </div>
+        <div class="meta">
+          <div class="t">{{ c.name }}</div>
+          <div class="s">{{ c.count }} video{{ c.count|pluralize }}</div>
+        </div>
+      </a>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">
+    <div class="big">◉</div>
+    <p>No channels yet.</p>
+    <p class="sub">Videos get a channel when they're downloaded with metadata, or from
+      <b>Manage ⋯ → Download from playlist → Update library from YouTube</b>.</p>
+  </div>
+{% endif %}
+{% if no_channel and channels %}
+  <p class="sub" style="margin-top:22px">{{ no_channel }} video{{ no_channel|pluralize }} {{ no_channel|pluralize:"has,have" }} no channel and {{ no_channel|pluralize:"isn't,aren't" }} listed here.</p>
+{% endif %}
+{% endblock %}

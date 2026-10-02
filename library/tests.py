@@ -20,6 +20,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.db import connection
+from datetime import timedelta
+
+from django.utils import timezone
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
@@ -27,7 +30,7 @@ from . import backup, downloader, refresh, services, views
 from .auth import LOGIN_ATTEMPT_LIMIT, public_when_enabled
 from .models import (
     DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
-    Setting, UserPref, Video, WatchEvent,
+    Setting, SmartPlaylist, Tag, UserPref, Video, WatchEvent,
 )
 
 User = get_user_model()
@@ -1417,3 +1420,204 @@ class RefreshViewTests(RefreshCase):
     def test_downloads_page_has_the_card(self):
         self.client.force_login(self.owner)
         self.assertContains(self.client.get(reverse("downloads")), "Update library from YouTube")
+
+
+# ---- Smart playlists: ALL (and) / ANY (or) ----------------------------------------
+
+class SmartMatchModeTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.a = _make_video(title="Alpha one", rating=0)
+        self.b = _make_video(title="Beta two", favorite=True)
+        self.c = _make_video(title="Alpha fav", favorite=True)
+        self.d = _make_video(title="Gamma")
+        self.sp = SmartPlaylist.objects.create(name="s")
+
+    def titles(self):
+        return sorted(v.title for v in self.sp.get_videos() if v.pk != self.video.pk)
+
+    def rules(self, mode, *rules):
+        self.sp.match_mode = mode
+        self.sp.rules = json.dumps(list(rules))
+        self.sp.save()
+
+    TITLE = {"field": "title", "op": "contains", "value": "alpha"}
+    FAV = {"field": "favorite", "op": "is", "value": ""}
+
+    def test_all_requires_every_rule_any_requires_one(self):
+        self.rules("all", self.TITLE, self.FAV)
+        self.assertEqual(self.titles(), ["Alpha fav"])
+        self.rules("any", self.TITLE, self.FAV)
+        self.assertEqual(self.titles(), ["Alpha fav", "Alpha one", "Beta two"])
+
+    def test_default_mode_is_all(self):
+        self.assertEqual(SmartPlaylist.objects.create(name="n").match_mode, "all")
+
+    def test_incomplete_rules_are_ignored_not_match_everything(self):
+        empty = {"field": "title", "op": "contains", "value": "  "}
+        unknown = {"field": "nonsense", "op": "is", "value": "x"}
+        bad_number = {"field": "rating", "op": "gte", "value": "abc"}
+        self.rules("any", self.TITLE, empty, unknown, bad_number)
+        self.assertEqual(self.titles(), ["Alpha fav", "Alpha one"])    # not the whole library
+        self.rules("all", empty)                                       # nothing valid -> everything, as before
+        self.assertEqual(len(self.titles()), 4)
+
+    def test_any_with_not_contains_and_number_rules(self):
+        self.a.rating = 5
+        self.a.save()
+        self.rules("any", {"field": "rating", "op": "gte", "value": "5"},
+                   {"field": "title", "op": "contains", "value": "gamma"})
+        self.assertEqual(self.titles(), ["Alpha one", "Gamma"])
+        self.rules("all", {"field": "title", "op": "not_contains", "value": "alpha"})
+        self.assertEqual(self.titles(), ["Beta two", "Gamma"])
+
+    def test_two_tag_rules_all_means_both_tags_any_means_either(self):
+        t1, t2 = Tag.objects.create(name="t1"), Tag.objects.create(name="t2")
+        self.a.tags.add(t1, t2)
+        self.b.tags.add(t1)
+        self.c.tags.add(t2)
+        r1, r2 = ({"field": "tags", "op": "is", "value": n} for n in ("t1", "t2"))
+        self.rules("all", r1, r2)
+        self.assertEqual(self.titles(), ["Alpha one"])
+        self.rules("any", r1, r2)
+        self.assertEqual(self.titles(), ["Alpha fav", "Alpha one", "Beta two"])    # no duplicates
+
+    def test_save_rules_view_stores_match_mode(self):
+        self.client.force_login(self.owner)
+        url = reverse("save_smart_rules", args=[self.sp.pk])
+        self.client.post(url, {"name": "s", "rules": json.dumps([self.TITLE]), "match": "any"})
+        self.sp.refresh_from_db()
+        self.assertEqual(self.sp.match_mode, "any")
+        self.client.post(url, {"name": "s", "rules": "[]", "match": "bogus"})
+        self.sp.refresh_from_db()
+        self.assertEqual(self.sp.match_mode, "any")                  # junk value ignored
+        page = self.client.get(reverse("smart_playlist_detail", args=[self.sp.pk])).content.decode()
+        self.assertIn('<option value="any" selected>', page)
+
+
+# ---- Playlist pages: collapsed settings, remembered sort --------------------------------
+
+class PlaylistPageTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.pl = Playlist.objects.create(name="P")
+        self.sp = SmartPlaylist.objects.create(name="S")
+        self.other = Playlist.objects.create(name="Other")
+
+    def ctx(self, name, pk, user, **params):
+        self.client.force_login(user)
+        resp = self.client.get(reverse(name, args=[pk]), params)
+        return resp.context["sort"], resp.context["rev"]
+
+    def test_settings_are_collapsed_by_default(self):
+        self.client.force_login(self.owner)
+        for name, pk in (("playlist_detail", self.pl.pk), ("smart_playlist_detail", self.sp.pk)):
+            html = self.client.get(reverse(name, args=[pk])).content.decode()
+            self.assertIn('<details class="pl-settings">', html, name)
+            self.assertNotIn('<details class="pl-settings" open', html)
+            self.assertIn("plThumbTool", html)                      # cover tool is inside it
+        self.assertIn("rulesForm", self.client.get(reverse("smart_playlist_detail", args=[self.sp.pk])).content.decode())
+
+    def test_sort_is_remembered_per_playlist_and_per_account(self):
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner), ("manual", False))
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner, sort="duration", rev="1"), ("duration", True))
+        # reopened with no query: remembered
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner), ("duration", True))
+        # another playlist, another account: unaffected
+        self.assertEqual(self.ctx("playlist_detail", self.other.pk, self.owner), ("manual", False))
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.viewer), ("manual", False))
+        # an explicit choice replaces it
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner, sort="rating"), ("rating", False))
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner), ("rating", False))
+
+    def test_unknown_sort_is_not_remembered(self):
+        self.ctx("playlist_detail", self.pl.pk, self.owner, sort="duration")
+        self.ctx("playlist_detail", self.pl.pk, self.owner, sort="../../etc")
+        self.assertEqual(self.ctx("playlist_detail", self.pl.pk, self.owner), ("duration", False))
+
+    def test_smart_playlist_sort_is_remembered_too(self):
+        self.assertEqual(self.ctx("smart_playlist_detail", self.sp.pk, self.owner), ("added", False))
+        self.ctx("smart_playlist_detail", self.sp.pk, self.owner, sort="duration", rev="1")
+        self.assertEqual(self.ctx("smart_playlist_detail", self.sp.pk, self.owner), ("duration", True))
+        self.assertEqual(self.ctx("smart_playlist_detail", self.sp.pk, self.viewer), ("added", False))
+        self.assertEqual(UserPref.get(self.owner, f"spsort_{self.sp.pk}"), "duration:1")
+
+
+# ---- Channels tab -------------------------------------------------------------------------------
+
+class ChannelsTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.vids = {}
+        spec = [("a1", "Chan A"), ("a2", "Chan A"), ("a3", "Chan A"), ("a4", "Chan A"), ("a5", "Chan A"),
+                ("b1", "Beta Ch"), ("z1", "zeta ch"), ("n1", "")]
+        for i, (t, ch) in enumerate(spec):
+            self.vids[t] = _make_video(title=t, channel=ch, thumbnail_path=f"/t/{t}.jpg")
+            Video.objects.filter(pk=self.vids[t].pk).update(
+                date_added=timezone.now() - timedelta(hours=len(spec) - i))   # later in list = newer
+        _make_video(title="hidden", channel="Chan A", hidden=True, thumbnail_path="/t/h.jpg")
+        _make_video(title="gone", channel="Chan A", missing=True, thumbnail_path="/t/g.jpg")
+        _make_video(title="nothumb", channel="Beta Ch")
+        self.client.force_login(self.owner)
+
+    def page(self, **params):
+        return self.client.get(reverse("channels"), params)
+
+    def by_name(self, resp):
+        return {c["name"]: c for c in resp.context["channels"]}
+
+    def test_counts_exclude_hidden_missing_and_unnamed(self):
+        ch = self.by_name(self.page())
+        self.assertEqual({n: c["count"] for n, c in ch.items()}, {"Chan A": 5, "Beta Ch": 2, "zeta ch": 1})
+        self.assertEqual(self.page().context["no_channel"], 2)            # n1 + the AuthTestCase default video
+
+    def test_cover_is_up_to_four_newest_thumbnails(self):
+        covers = self.by_name(self.page())["Chan A"]["covers"]
+        self.assertEqual(len(covers), 4)
+        self.assertEqual(covers, [self.vids[t].pk for t in ("a5", "a4", "a3", "a2")])   # newest first
+        self.assertEqual(self.by_name(self.page())["Beta Ch"]["covers"], [self.vids["b1"].pk])   # no-thumb video skipped
+
+    def test_sorting(self):
+        order = lambda **p: [c["name"] for c in self.page(**p).context["channels"]]
+        self.assertEqual(order(), ["Chan A", "Beta Ch", "zeta ch"])                      # most videos
+        self.assertEqual(order(sort="name"), ["Beta Ch", "Chan A", "zeta ch"])           # case-insensitive
+        # newest video per channel: Beta Ch ("nothumb" was added last), zeta ch, then Chan A
+        self.assertEqual(order(sort="recent"), ["Beta Ch", "zeta ch", "Chan A"])
+        self.assertEqual(order(sort="bogus"), order())                                   # falls back
+
+    def test_cards_link_to_the_filtered_library_and_random_buttons_exist(self):
+        html = self.page().content.decode()
+        self.assertIn("/library/?channel=Chan%20A", html)
+        self.assertIn('id="randChannel"', html)
+        self.assertIn("5 videos", html)
+        self.assertIn("1 video<", html.replace("</div>", "<"))
+
+    def test_login_required_and_nav_entry(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("channels")).status_code, 302)
+        self.client.force_login(self.viewer)
+        shell = self.client.get(reverse("library")).content.decode()
+        self.assertEqual(shell.count('data-nav="channels"'), 2)             # top nav + bottom tab bar
+
+    def test_library_filter_api_and_random_respect_channel(self):
+        api = self.client.get(reverse("api_videos"), {"channel": "Beta Ch"}).json()
+        self.assertEqual(api["total"], 2)
+        self.assertEqual(self.client.get(reverse("api_videos"), {"channel": "nobody"}).json()["total"], 0)
+        for _ in range(5):
+            r = self.client.get(reverse("random_video"), {"channel": "zeta ch", "json": "1"}).json()
+            self.assertEqual(r["id"], self.vids["z1"].pk)
+        lib = self.client.get(reverse("library"), {"channel": "Chan A", "tag": "x"}).content.decode()
+        self.assertIn("Channel: Chan A", lib)
+        self.assertIn("channel=Chan%20A", lib)                              # kept by sort/fav/random/tag links
+        self.assertIn("channel=", self.client.get(reverse("library"), {"channel": "Chan A"}).content.decode().split("data-random")[1])
+
+
+class PlayerToolsTests(AuthTestCase):
+    def test_file_path_thumbnail_and_rename_live_in_a_collapsed_block(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("library")).content.decode()
+        self.assertIn('<details class="ph-utils">', html)
+        block = html.split('<details class="ph-utils">')[1].split("</details>")[0]
+        for needle in ("phRemotePath", "phThumbBtn", "phRenameBtn"):
+            self.assertIn(needle, block)
+        self.assertNotIn(" open", html.split('<details class="ph-utils">')[1][:5])

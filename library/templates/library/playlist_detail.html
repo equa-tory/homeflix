@@ -32,6 +32,8 @@
     <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete playlist</button>
   </form>
 </div>
+<details class="pl-settings">
+  <summary class="nav-item" tabindex="0">⚙ Playlist settings <span class="sub">cover image</span></summary>
 <div class="thumb-tool" id="plThumbTool" data-pl="{{ playlist.pk }}" data-generate-url="{% url 'playlist_thumb_generate' playlist.pk %}"
      data-remove-url="{% url 'playlist_thumb_remove' playlist.pk %}" data-upload-url="{% url 'playlist_thumb_upload' playlist.pk %}">
   <div class="row-inline">
@@ -46,6 +48,7 @@
     </label>
   </div>
 </div>
+</details>
 {% if items %}
   <div class="grid" id="plGrid" style="margin-top:18px">
     {% for item in items %}

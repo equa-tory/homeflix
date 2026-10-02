@@ -98,6 +98,12 @@ It shares its `_yt_archive_*.txt` file with the Lasso downloader in the same fol
 so the two tools never re-download each other's videos. YouTube breaks yt-dlp regularly — use
 the **Update yt-dlp** button on the page when everything suddenly fails.
 
+## Channels, playlists and the player
+- **Channels** tab: every channel with a collage of its newest videos' thumbnails, its name and how many videos it has; click one to see its videos (with sort, select, 🎲 random scoped to that channel). 🎲 *Random channel* opens a random one. Videos only get a channel when downloaded with metadata or after **Download from playlist → Update library from YouTube**.
+- **Smart playlists** can match **ALL** rules (and) or **ANY** rule (or) — pick it at the top of the rules.
+- On a playlist page the **cover image** and (smart playlists) **conditions** live under a collapsed **⚙ Playlist settings**. The sort you choose is remembered per playlist (and per account).
+- In the player the file path, thumbnail regeneration and rename are tucked under a collapsed **🛠 Tools**.
+
 ## Backups (owner only)
 
 **Manage (⋯) → 💾 Backups…** — automatic backups of HomeFlix's own data. Defaults: every

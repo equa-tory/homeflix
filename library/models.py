@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 
 
 # Videos shorter than this (and vertical "shorts") always start from the
@@ -255,10 +256,13 @@ class VideoNote(models.Model):
 
 class SmartPlaylist(models.Model):
     """Auto-populating playlist defined by filter rules (stored as JSON)."""
+    MATCH_ALL, MATCH_ANY = "all", "any"
     name = models.CharField(max_length=256)
     created = models.DateTimeField(auto_now_add=True)
     # JSON list of {"field","op","value"} dicts
     rules = models.TextField(default="[]")
+    # "all": a video must satisfy every rule (AND); "any": at least one (OR).
+    match_mode = models.CharField(max_length=3, default="all")
 
     # Generated (2x2 collage of its videos' thumbnails) or user-uploaded cover image.
     thumbnail_path = models.CharField(max_length=1024, blank=True, default="")
@@ -269,33 +273,51 @@ class SmartPlaylist(models.Model):
     def __str__(self):
         return f"Smart: {self.name}"
 
+    @staticmethod
+    def rule_q(rule):
+        """The Q for one rule, or None if it is unknown, malformed or has no
+        value yet (an empty text rule would otherwise match *everything* in
+        "any" mode, or exclude everything for "does not contain")."""
+        f, op, val = rule.get("field", ""), rule.get("op", ""), rule.get("value", "")
+        if f != "favorite" and not str(val).strip():
+            return None
+        try:
+            if   f == "title"            and op == "contains":     return Q(title__icontains=val)
+            elif f == "title"            and op == "not_contains": return ~Q(title__icontains=val)
+            elif f == "filename"         and op == "contains":     return Q(filename__icontains=val)
+            elif f == "channel"          and op == "contains":     return Q(channel__icontains=val)
+            elif f == "tags"             and op == "is":           return Q(tags__name__iexact=val)
+            elif f == "ext"              and op == "is":           return Q(ext=val.lower().lstrip("."))
+            elif f == "favorite"         and op == "is":           return Q(favorite=True)
+            elif f == "rating"           and op == "gte":          return Q(rating__gte=int(val))
+            elif f == "rating"           and op == "lte":          return Q(rating__lte=int(val))
+            elif f == "duration_seconds" and op == "gte":          return Q(duration_seconds__gte=float(val))
+            elif f == "duration_seconds" and op == "lte":          return Q(duration_seconds__lte=float(val))
+            elif f == "height"           and op == "gte":          return Q(height__gte=int(val))
+            elif f == "height"           and op == "is":
+                h = int(val)
+                return Q(height__gte=h, height__lt=h * 2)         # e.g. "1080" matches 1080p
+        except (ValueError, TypeError):
+            pass
+        return None
+
     def get_videos(self):
         import json
+        from functools import reduce
+        from operator import or_
         qs = Video.objects.filter(missing=False)
         try:
             rules = json.loads(self.rules)
         except Exception:
             return qs.none()
-        for r in rules:
-            f, op, val = r.get("field", ""), r.get("op", ""), r.get("value", "")
-            try:
-                if   f=="title"            and op=="contains":     qs=qs.filter(title__icontains=val)
-                elif f=="title"            and op=="not_contains":  qs=qs.exclude(title__icontains=val)
-                elif f=="filename"         and op=="contains":     qs=qs.filter(filename__icontains=val)
-                elif f=="channel"          and op=="contains":     qs=qs.filter(channel__icontains=val)
-                elif f=="tags"             and op=="is":           qs=qs.filter(tags__name__iexact=val)
-                elif f=="ext"              and op=="is":           qs=qs.filter(ext=val.lower().lstrip("."))
-                elif f=="favorite"         and op=="is":           qs=qs.filter(favorite=True)
-                elif f=="rating"           and op=="gte":          qs=qs.filter(rating__gte=int(val))
-                elif f=="rating"           and op=="lte":          qs=qs.filter(rating__lte=int(val))
-                elif f=="duration_seconds" and op=="gte":          qs=qs.filter(duration_seconds__gte=float(val))
-                elif f=="duration_seconds" and op=="lte":          qs=qs.filter(duration_seconds__lte=float(val))
-                elif f=="height"           and op=="gte":          qs=qs.filter(height__gte=int(val))
-                elif f=="height"           and op=="is":
-                    h=int(val)
-                    qs=qs.filter(height__gte=h, height__lt=h*2)   # e.g. "1080" matches 1080p
-            except (ValueError, TypeError):
-                pass
+        qs_list = [q for q in (self.rule_q(r) for r in rules if isinstance(r, dict)) if q is not None]
+        if self.match_mode == self.MATCH_ANY and qs_list:
+            qs = qs.filter(reduce(or_, qs_list))
+        else:
+            # One .filter() per rule, not one combined Q: two "tag is" rules
+            # must be satisfied by two *different* tag rows (video has A and B).
+            for q in qs_list:
+                qs = qs.filter(q)
         return qs.distinct().order_by("-date_added")
 
 

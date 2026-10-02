@@ -6,7 +6,7 @@ import mimetypes
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
-from django.db.models import Q, Sum, F
+from django.db.models import Count, F, Max, Q, Sum
 from django.http import (
     StreamingHttpResponse, HttpResponse, JsonResponse, Http404, FileResponse,
     HttpResponseNotModified,
@@ -225,6 +225,9 @@ def _filtered_videos(request):
         qs = qs.filter(favorite=True)
     if request.GET.get("shorts") == "1":
         qs = qs.filter(PORTRAIT_Q)
+    channel = request.GET.get("channel", "").strip()
+    if channel:
+        qs = qs.filter(channel=channel)
     sort = request.GET.get("sort", "added")
     rev  = request.GET.get("rev") == "1"
     if sort == "rating":
@@ -299,9 +302,43 @@ def library(request):
         page_size=settings.PAGE_SIZE,
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
         active_tag=request.GET.get("tag", ""),
+        channel=request.GET.get("channel", "").strip(),
         total_videos=Video.objects.filter(missing=False, hidden=False).count(),
         total_duration=total_duration,
     ))
+
+
+CHANNEL_SORTS = ("count", "name", "recent")
+
+
+@public_when_enabled
+def channels(request):
+    """One card per channel (author): a collage of its newest videos'
+    thumbnails, the name, and how many videos it has. Clicking opens the
+    Library filtered to that channel. Videos with no channel are only
+    counted (the owner can fill authors in from the Downloads page)."""
+    sort = request.GET.get("sort", "count")
+    if sort not in CHANNEL_SORTS:
+        sort = "count"
+    base = Video.objects.filter(missing=False, hidden=False)
+    named = base.exclude(channel="")
+    rows = list(named.values("channel").annotate(n=Count("id"), latest=Max("date_added")))
+    if sort == "name":
+        rows.sort(key=lambda r: r["channel"].casefold())
+    elif sort == "recent":
+        rows.sort(key=lambda r: r["latest"], reverse=True)
+    else:
+        rows.sort(key=lambda r: (-r["n"], r["channel"].casefold()))
+    covers = {}
+    for name, vid in (named.exclude(thumbnail_path="").order_by("-date_added")
+                      .values_list("channel", "id").iterator()):
+        if len(covers.setdefault(name, [])) < 4:
+            covers[name].append(vid)
+    items = [{"name": r["channel"], "count": r["n"], "covers": covers.get(r["channel"], [])}
+             for r in rows]
+    return render(request, "library/channels.html", base_ctx(
+        request, active_nav="channels", page_id="channels", spa_title="Channels — HomeFlix",
+        channels=items, sort=sort, no_channel=base.filter(channel="").count()))
 
 
 @owner_required
@@ -332,11 +369,26 @@ def playlists(request):
         total_hidden=Video.objects.filter(missing=False, hidden=True).count()))
 
 
+def _remembered_sort(request, key, allowed, default):
+    """(sort, rev) for a playlist page, remembered per account and playlist.
+    An explicit ?sort= wins and is saved; with none, the saved choice (or
+    `default`) is used. Anonymous visitors (HOMEFLIX_PUBLIC) just get the
+    default -- UserPref ignores them. Unknown sort names are never saved."""
+    if "sort" in request.GET:
+        sort, rev = request.GET.get("sort", ""), request.GET.get("rev") == "1"
+        if sort in allowed:
+            value = f"{sort}:{int(rev)}"
+            if UserPref.get(request.user, key, "") != value:
+                UserPref.set(request.user, key, value)
+        return sort, rev
+    sort, _, r = UserPref.get(request.user, key, "").partition(":")
+    return (sort, r == "1") if sort in allowed else (default, False)
+
+
 @public_when_enabled
 def playlist_detail(request, pk):
     pl = get_object_or_404(Playlist, pk=pk)
-    sort = request.GET.get("sort", "manual")
-    rev = request.GET.get("rev") == "1"
+    sort, rev = _remembered_sort(request, f"plsort_{pk}", {*PLAYLIST_SORTS, "rating"}, "manual")
     if sort == "rating":
         order = PLAYLIST_RATING_ORDER_REV if rev else PLAYLIST_RATING_ORDER
     else:
@@ -1244,7 +1296,7 @@ def random_video(request):
     import random as _rnd
     pl_id = request.GET.get("pl")
     sp_id = request.GET.get("sp")
-    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts"))
+    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts", "channel"))
     if pl_id:
         ids = list(PlaylistItem.objects.filter(playlist_id=pl_id).values_list("video_id", flat=True))
         if not ids:
@@ -1340,8 +1392,7 @@ from .models import SmartPlaylist
 @public_when_enabled
 def smart_playlist_detail(request, pk):
     sp = get_object_or_404(SmartPlaylist, pk=pk)
-    sort = request.GET.get("sort", "added")
-    rev = request.GET.get("rev") == "1"
+    sort, rev = _remembered_sort(request, f"spsort_{pk}", {*SORTS, "rating"}, "added")
     if sort == "rating":
         order = RATING_ORDER_REV if rev else RATING_ORDER
     else:
@@ -1379,6 +1430,8 @@ def save_smart_rules(request, pk):
         rules = []
     sp.rules = json.dumps(rules)
     sp.name  = request.POST.get("name", sp.name).strip() or sp.name
+    match = request.POST.get("match", sp.match_mode)
+    sp.match_mode = match if match in (SmartPlaylist.MATCH_ALL, SmartPlaylist.MATCH_ANY) else sp.match_mode
     sp.save()
     return redirect("smart_playlist_detail", pk=sp.pk)
 
