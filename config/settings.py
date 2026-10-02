@@ -103,6 +103,10 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        # gunicorn runs several threads per worker (see deploy/homeflix.service.in),
+        # background jobs write too; wait longer for the lock than the 5 s
+        # default instead of failing with "database is locked".
+        'OPTIONS': {'timeout': 20},
     }
 }
 

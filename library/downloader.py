@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 from django.conf import settings
 from django.db import connection
+from django.db.models import Count, Sum
 from django.utils import timezone
 
 from . import services
@@ -40,6 +41,7 @@ _NO_WINDOW = services._NO_WINDOW
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _URL_ID_RE = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
+URL_ID_RE = _URL_ID_RE
 _YT_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com",
              "music.youtube.com", "youtu.be"}
 _UNAVAILABLE_TITLES = {"[private video]", "[deleted video]", "[unavailable video]"}
@@ -197,6 +199,49 @@ def source_state(source):
     return classify(entries, local_index(source), skipped)
 
 
+# ---- Disk space ------------------------------------------------------------
+# Rough size estimate = playlist duration x a bytes-per-second rate. The rate
+# is calibrated on the user's own library (what their downloads actually
+# weigh), with a default for an empty one. It's only a guide: the real size
+# depends on the formats YouTube serves.
+DEFAULT_RATE = 600_000                 # ~4.8 Mbit/s: typical 1080p H.264 + AAC
+_RATE_BOUNDS = (150_000, 4_000_000)
+MIN_FREE_BYTES = 1024 ** 3             # refuse to start below this
+
+
+def estimate_rate():
+    """(bytes_per_second, "library"|"default")."""
+    agg = Video.objects.filter(missing=False, duration_seconds__gt=0, size_bytes__gt=0).aggregate(
+        n=Count("id"), size=Sum("size_bytes"), dur=Sum("duration_seconds"))
+    if (agg["n"] or 0) >= 3 and agg["dur"]:
+        rate = agg["size"] / agg["dur"]
+        return int(min(max(rate, _RATE_BOUNDS[0]), _RATE_BOUNDS[1])), "library"
+    return DEFAULT_RATE, "default"
+
+
+def free_space(path):
+    """(free_bytes, total_bytes) of the disk `path` will live on -- the target
+    folder may not exist yet, so ask its nearest existing parent. (None, None)
+    if it can't be determined."""
+    p = path
+    while p and not os.path.exists(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    try:
+        u = shutil.disk_usage(p)
+        return u.free, u.total
+    except OSError:
+        return None, None
+
+
+def disk_info(source):
+    free, total = free_space(resolve_target(source.target_subdir))
+    rate, src = estimate_rate()
+    return {"free": free, "total": total, "rate": rate, "rate_source": src}
+
+
 # ---- Cookies ---------------------------------------------------------------
 # The pasted cookies carry the owner's YouTube login, so they are stored
 # 0600 outside LIBRARY_ROOT and never sent back to the browser -- the UI only
@@ -303,36 +348,80 @@ def ytdlp_version():
         return ""
 
 
+# Oldest runtime versions yt-dlp's challenge solver accepts -- mirrors
+# MIN_SUPPORTED_VERSION in yt_dlp/utils/_jsruntime.py (and install.sh). A
+# runtime below these is silently rejected by yt-dlp: the n-challenge isn't
+# solved, formats go missing and every download dies with "The page needs to
+# be reloaded" -- exactly what an old distro Node 18 does.
+_MIN_RUNTIME = {"deno": (2, 3, 0), "bun": (1, 2, 11), "node": (22, 0, 0)}
+_VERSION_CACHE = {}
+
+
+def _exe_version(path):
+    """(major, minor, patch) from `<path> --version`, or None. Cached per
+    (path, mtime) since the tools endpoint and every job ask for it."""
+    try:
+        key = (path, os.path.getmtime(path))
+    except OSError:
+        return None
+    if key in _VERSION_CACHE:
+        return _VERSION_CACHE[key]
+    try:
+        r = subprocess.run([path, "--version"], capture_output=True, timeout=15,
+                           creationflags=_NO_WINDOW, **_TEXT)
+        m = re.search(r"(\d+)\.(\d+)\.(\d+)", r.stdout or "")
+        ver = tuple(int(x) for x in m.groups()) if m else None
+    except (OSError, subprocess.SubprocessError):
+        ver = None
+    _VERSION_CACHE[key] = ver
+    return ver
+
+
+def local_deno_path():
+    """Deno installed by install.sh into the project, so the service needs no
+    PATH entry for it."""
+    exe = "deno.exe" if os.name == "nt" else "deno"
+    return os.path.join(str(settings.BASE_DIR), ".deno", "bin", exe)
+
+
 def js_runtime():
-    """(name, args) like Lasso's check_runtime_silent(): deno is picked up by
-    yt-dlp with no flag, node needs an explicit --js-runtimes. yt-dlp needs
-    one of them to solve YouTube's n-challenge (without it every real format
-    is missing)."""
-    if shutil.which("deno"):
-        return "deno", []
-    node = shutil.which("node")
-    if node:
-        return "node", ["--js-runtimes", f"node:{node}"]
-    return "", []
+    """Best JS runtime for yt-dlp as {name, path, version, supported, args};
+    `args` is the explicit --js-runtimes flag (empty unless supported).
+    Prefers Deno, then Bun, then Node, and takes the first one that is new
+    enough. If only too-old ones exist, the best of those is returned with
+    supported=False so the UI can say *which* version is the problem."""
+    cands = []
+    for name in ("deno", "bun", "node"):
+        found = shutil.which(name)
+        if found:
+            cands.append((name, found))
+        if name == "deno" and os.path.isfile(local_deno_path()):
+            cands.append(("deno", local_deno_path()))
+    fallback = None
+    for name, path in cands:
+        ver = _exe_version(path)
+        if ver is None:
+            continue
+        ok = ver >= _MIN_RUNTIME[name]
+        info = {"name": name, "path": path, "version": ".".join(map(str, ver)),
+                "supported": ok, "args": ["--js-runtimes", f"{name}:{path}"] if ok else []}
+        if ok:
+            return info
+        fallback = fallback or info
+    return fallback or {"name": "", "path": "", "version": "", "supported": False, "args": []}
 
 
-def _common_args(cookie_file):
-    _name, rt_args = js_runtime()
-    cmd = [sys.executable, "-m", "yt_dlp", *rt_args]
-    if cookie_file:
-        cmd += ["--cookies", cookie_file]
-        # With cookies attached YouTube forces the default clients into SABR
-        # streaming (muxed HLS only, ~1080p max). web_embedded keeps the full
-        # DASH ladder; `default` is the fallback for videos with embedding
-        # disabled. See Lasso/CLAUDE.md and yt-dlp issue #12482.
-        player_client = "web_embedded,default"
-    else:
-        player_client = "default,-android_sdkless"
-    cmd += ["--extractor-args", f"youtube:player_client={player_client}",
-            # Fetches yt-dlp's n-challenge solver script; the JS runtime alone
-            # isn't enough.
-            "--remote-components", "ejs:github"]
-    return cmd
+def runtime_problem(rt=None):
+    """Human sentence for why downloads can't run, or "" if the runtime is fine."""
+    rt = rt or js_runtime()
+    if rt["supported"]:
+        return ""
+    if rt["name"]:
+        need = ".".join(map(str, _MIN_RUNTIME[rt["name"]]))
+        return (f"{rt['name'].capitalize()} {rt['version']} is too old for yt-dlp (needs {rt['name']} {need}+). "
+                "Install Deno 2.3+ (run ./install.sh, or https://deno.com) and restart HomeFlix.")
+    return ("No JavaScript runtime found. yt-dlp needs Deno 2.3+ (or Node 22+) to solve YouTube's "
+            "challenge. Run ./install.sh, or install Deno from https://deno.com, and restart HomeFlix.")
 
 
 def _env():
@@ -341,7 +430,9 @@ def _env():
 
 def build_cmd(ids, out_dir, archive, cookie_file):
     """Port of Lasso's build_cmd() for a hand-picked list of ids. Returns
-    (cmd, before_file, after_file, batch_file).
+    (cmd, before_file, after_file, batch_file). Downloads always run with the
+    pasted cookies (start_job refuses without them), so this always uses the
+    web_embedded client.
 
     before/after are --print-to-file markers (one id per line attempted / fully
     finished) -- yt-dlp's exit code is not a reliable success signal with
@@ -356,7 +447,16 @@ def build_cmd(ids, out_dir, archive, cookie_file):
     with open(batch, "w", encoding="utf-8") as f:
         f.write("\n".join(f"https://www.youtube.com/watch?v={i}" for i in ids) + "\n")
 
-    cmd = _common_args(cookie_file)
+    cmd = [sys.executable, "-m", "yt_dlp", *js_runtime()["args"],
+           "--cookies", cookie_file,
+           # With cookies attached YouTube forces the default clients into SABR
+           # streaming (muxed HLS only, ~1080p max). web_embedded keeps the full
+           # DASH ladder; `default` is the fallback for videos with embedding
+           # disabled. See Lasso/CLAUDE.md and yt-dlp issue #12482.
+           "--extractor-args", "youtube:player_client=web_embedded,default",
+           # Fetches yt-dlp's n-challenge solver script; the JS runtime alone
+           # isn't enough.
+           "--remote-components", "ejs:github"]
     cmd += ["-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]"
                   "/bestvideo[ext=mp4]+bestaudio"
                   "/bestvideo+bestaudio/best",
@@ -407,8 +507,10 @@ def hint_for(text):
         return "YouTube wants a sign-in. Paste fresh cookies above."
     if "private" in t or "members-only" in t or "join this channel" in t:
         return "Private or members-only. Cookies from an account that can see it are needed."
-    if "requested format is not available" in t or "challenge" in t:
-        return "yt-dlp can't solve YouTube's challenge. Update yt-dlp and check Deno/Node is installed."
+    if ("challenge" in t or "page needs to be reloaded" in t
+            or "requested format is not available" in t):
+        return (runtime_problem()
+                or "yt-dlp couldn't solve YouTube's challenge. Try Update yt-dlp, then retry.")
     return ""
 
 
@@ -428,7 +530,10 @@ def _flatten(node, out, seen):
         dur = e.get("duration")
         out.append({"id": vid, "title": e.get("title") or vid,
                     "duration": int(dur) if isinstance(dur, (int, float)) else None,
-                    "index": len(out) + 1})
+                    "index": len(out) + 1,
+                    # author, for refresh.py (flat listings carry it, no per-video request needed)
+                    "channel": e.get("channel") or e.get("uploader") or "",
+                    "channel_id": e.get("channel_id") or ""})
 
 
 # Fetch runs inside a web request, and the documented gunicorn unit uses
@@ -531,12 +636,19 @@ def start_job(source, ids):
     (job, error). One download at a time."""
     if not ytdlp_available():
         return None, "yt-dlp isn't installed on the server (pip install yt-dlp)."
-    if active_job():
-        return None, "A download is already running."
+    if not os.path.isfile(cookie_path()):
+        return None, "YouTube cookies are required for downloads. Paste them in the box at the top first."
+    problem = runtime_problem()
+    if problem:   # would fail every video at the challenge step -- say so up front
+        return None, problem
     try:
-        resolve_target(source.target_subdir)
+        free, _total = free_space(resolve_target(source.target_subdir))
     except ValueError as e:
         return None, str(e)
+    if free is not None and free < MIN_FREE_BYTES:
+        return None, f"Only {free / 1024 ** 2:.0f} MB free on the target disk."
+    if active_job():
+        return None, "A download is already running."
     job = DownloadJob.objects.create(source=source, ids=json.dumps(ids), total=len(ids),
                                      status=DownloadJob.QUEUED)
     threading.Thread(target=_run_job, args=(job.pk, True), daemon=True).start()
@@ -582,8 +694,12 @@ def _run_job_inner(job_id):
     archive = archive_path(source)
     forget_in_archive(archive, set(ids))
 
-    cookie = cookie_path() if os.path.isfile(cookie_path()) else None
-    cmd, before, after, batch = build_cmd(ids, out_dir, archive, cookie)
+    if not os.path.isfile(cookie_path()):    # removed between click and start
+        DownloadJob.objects.filter(pk=job_id).update(
+            status=DownloadJob.FAILED, finished=timezone.now(),
+            summary="YouTube cookies are required. Paste them first.")
+        return
+    cmd, before, after, batch = build_cmd(ids, out_dir, archive, cookie_path())
 
     log, last_flush = [], 0.0
     cur_title, cur_pct = "", 0

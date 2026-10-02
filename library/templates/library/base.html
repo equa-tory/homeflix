@@ -215,7 +215,7 @@ main{overflow-x:hidden}
 .dl-group{margin-top:14px}
 .dl-group>summary{cursor:pointer;color:var(--muted);font-weight:700;padding:8px 2px}
 .dl-prog{height:8px;background:var(--surface2);border-radius:5px;overflow:hidden;margin:8px 0}
-#dlJobBar{height:100%;width:0;background:var(--accent);transition:width .4s}
+#dlJobBar,#rfBar{height:100%;width:0;background:var(--accent);transition:width .4s}
 .dl-jobtext{font-size:14px;font-weight:600;overflow-wrap:anywhere}
 #dlJobLog{margin:6px 0 0;max-height:240px;overflow:auto;font-size:11.5px;white-space:pre-wrap;
   background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px}
@@ -224,6 +224,9 @@ main{overflow-x:hidden}
   background:var(--surface);border-top:2px solid var(--accent);padding:10px 18px;
   display:none;align-items:center;gap:8px;box-shadow:0 -4px 20px #0008}
 #dlActionBar.active{display:flex}
+.dl-selbox{min-width:0}
+.dl-selinfo{font-size:12px;color:var(--muted);margin-top:2px}
+.dl-selinfo.bad{color:var(--accent);font-weight:700}
 body.dl-bar-on main{padding-bottom:110px}
 @media (max-width:700px){.dl-item .tn{width:72px}}
 
@@ -257,6 +260,25 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
   font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
 
+/* ---- backups page ---- */
+.bk-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:14px}
+.bk-row input[type=number]{width:96px}
+.bk-row input[type=text]{flex:1;min-width:0}
+.bk-row input[type=number],.bk-row input[type=text]{padding:9px 12px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px}
+.bk-row input[type=checkbox]{width:20px;height:20px;accent-color:var(--accent)}
+.bk-file{display:flex;gap:12px;justify-content:space-between;padding:8px 0;
+  border-bottom:1px solid var(--border);font-size:13.5px}
+.bk-file:last-child{border-bottom:0}
+
+/* ---- player: playback-interrupted notice (see recoverPlayback) ---- */
+#phPlayMsg{position:absolute;left:50%;bottom:76px;transform:translateX(-50%);z-index:20;
+  background:#000d;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;
+  display:none;gap:10px;align-items:center;white-space:nowrap}
+#phPlayMsg.on{display:flex}
+#phPlayMsg button{background:var(--accent);color:#fff;border:0;border-radius:7px;
+  padding:5px 10px;font-weight:700;cursor:pointer}
+
 /* ---- select FAB ---- */
 #selFab{position:fixed;left:10px;top:50%;transform:translateY(-50%);z-index:150;
   background:var(--surface);border:1px solid var(--border);border-radius:8px;
@@ -265,6 +287,14 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 #selFab.active{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
 #selFab:hover{border-color:var(--accent)}
 @media(max-width:700px){#selFab{left:7px;width:32px;height:32px;font-size:15px}}
+/* Random-video dice: same chrome as the select button, stacked just below it. */
+#diceFab{position:fixed;left:10px;top:calc(50% + 44px);transform:translateY(-50%);z-index:150;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  width:36px;height:36px;font-size:18px;cursor:pointer;
+  display:none;box-shadow:0 2px 12px #0005;align-items:center;justify-content:center;padding:0}
+#diceFab:hover{border-color:var(--accent)}
+#diceFab:active{transform:translateY(-50%) rotate(20deg)}
+@media(max-width:700px){#diceFab{left:7px;top:calc(50% + 40px);width:32px;height:32px;font-size:16px}}
 
 /* ---- playlist reorder ---- */
 #reorderModeBtn.active{color:var(--accent);border-color:var(--accent)}
@@ -798,6 +828,7 @@ html.player-locked{overflow:hidden}
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
       <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
       <a href="{% url 'downloads' %}" class="nav-item spa-link">⬇ Download from playlist…</a>
+      <a href="{% url 'backups' %}" class="nav-item spa-link">💾 Backups…</a>
       <hr>
       <div class="nav-item row-inline" style="cursor:default">
         <span>🖼 Default thumb %</span>
@@ -930,6 +961,7 @@ html.player-locked{overflow:hidden}
 
 <!-- select FAB (visible only on library page) -->
 <button id="selFab">☑ Select</button>
+<button id="diceFab" title="Random video" aria-label="Random video">🎲</button>
 
 <!-- ====== PLAYER (single persistent video) ====== -->
 <div id="player" class="ph-hidden" aria-hidden="true">
@@ -1120,6 +1152,22 @@ function post(u,d){return fetch(u,{method:'POST',headers:{'X-CSRFToken':CSRF_HDR
 function getJSON(u){return fetch(u,{headers:{'X-SPA':'1'}}).then(r=>{
   if(r.redirected&&/\/login\/(\?|$)/.test(r.url)){location.href=r.url;return new Promise(()=>{});}
   return r.json();});}
+/* Opens a random video (the /random/ endpoint honours the same q/tag/fav/shorts/
+   pl/sp filters as the page it's called from, and queues prev/next from them).
+   Shared by the "Surprise me" link and the dice button. */
+function openRandom(qs){
+  return fetch('/random/?'+(qs?qs+'&':'')+'json=1',{headers:{'X-SPA':'1'}}).then(r=>r.json())
+    .then(d=>{if(d.id){const qp=d.watch_url&&d.watch_url.includes('?')?d.watch_url.split('?')[1]:'';PLAYER.open(d.id,{qp});}});
+}
+/* The random scope of the page you're on: its search/filters, or the playlist
+   you're looking at. Library-wide on pages with neither. */
+function randomScope(){
+  const p=new URLSearchParams(location.search), out=new URLSearchParams();
+  ['q','tag','fav','shorts'].forEach(k=>{if(p.get(k))out.set(k,p.get(k));});
+  let m=location.pathname.match(/^\/playlists\/(\d+)\//);if(m)out.set('pl',m[1]);
+  m=location.pathname.match(/^\/smart-playlists\/(\d+)\//);if(m)out.set('sp',m[1]);
+  return out.toString();
+}
 function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // Grid thumbnails: TV browsers under load sometimes drop an image request
 // (see the /thumb/ Cache-Control fix -- this is the client-side half). One
@@ -1475,6 +1523,11 @@ function wireSelectUI(root,opts){
     selFab.classList.toggle('active',SELECT_MODE.isActive());
     selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
   }
+  const diceFab=document.getElementById('diceFab');
+  if(diceFab){
+    diceFab.style.display='flex';
+    diceFab.onclick=()=>{openRandom(randomScope()).catch(()=>{});};
+  }
   if(selBtn)selBtn.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
   function selectAllVisible(){
     document.querySelectorAll('.card').forEach(card=>{
@@ -1496,6 +1549,7 @@ function wireSelectUI(root,opts){
     document.removeEventListener('keydown',onSelKey);
     SELECT_MODE.deactivate();
     const sf=document.getElementById('selFab');if(sf)sf.style.display='none';
+    const df=document.getElementById('diceFab');if(df)df.style.display='none';
   };
 }
 
@@ -1715,12 +1769,63 @@ const PAGE_INIT={
     return wireSelectUI(root,{selectAll:true});
   },
 
+  /* ----- BACKUPS: schedule + backup now (owner only) ----- */
+  backups(root){
+    const $=s=>root.querySelector(s);
+    let st={};try{st=JSON.parse($('#bkData').textContent);}catch{}
+    let timer=null;
+    const say=(el,t,bad)=>{el.textContent=t||'';el.classList.toggle('dl-err',!!bad);};
+    const fmtB=n=>{const u=['B','KB','MB','GB'];let i=0;while(n>=1024&&i<3){n/=1024;i++;}return(i>=2?n.toFixed(1):Math.round(n))+' '+u[i];};
+    const fmtD=t=>t?new Date(t*1000).toLocaleString():'—';
+    function fillForm(){
+      $('#bkEnabled').checked=!!st.enabled;$('#bkHours').value=st.hours;
+      $('#bkPath').value=st.path;$('#bkKeep').value=st.keep;
+    }
+    function render(){
+      const s=$('#bkStatus');
+      const parts=[];
+      if(st.running)parts.push('Backing up…');
+      parts.push('Last: '+(st.last_msg||'no backup yet')+(st.last_ok?' ('+fmtD(st.last_ok)+')':''));
+      if(st.enabled&&!st.running)parts.push('next automatic backup: '+(st.next_due&&st.next_due*1000>Date.now()?fmtD(st.next_due):'within 10 minutes'));
+      if(!st.enabled)parts.push('automatic backups are off');
+      say(s,parts.join(' · '),/^Failed/.test(st.last_msg||'')&&!st.running);
+      $('#bkRun').disabled=!!st.running;
+      const f=$('#bkFiles');
+      f.innerHTML=(st.files&&st.files.length)?st.files.map(x=>
+        `<div class="bk-file"><span>${esc(x.name)}</span><span class="sub">${fmtB(x.size)} · ${fmtD(x.mtime)}</span></div>`).join('')
+        :'<p class="sub" style="margin:0">Nothing here yet.</p>';
+    }
+    function poll(){
+      clearTimeout(timer);
+      getJSON('/backups/status/').then(j=>{st=j;render();if(st.running)timer=setTimeout(poll,2000);}).catch(()=>{});
+    }
+    $('#bkForm').onsubmit=ev=>{
+      ev.preventDefault();
+      const m=$('#bkMsg');say(m,'Saving…');
+      post('/backups/save/',{enabled:$('#bkEnabled').checked?'1':'0',hours:$('#bkHours').value,
+        path:$('#bkPath').value,keep:$('#bkKeep').value}).then(j=>{
+        if(!j.ok){say(m,j.error||'Not saved',true);return;}
+        st=j;fillForm();render();say(m,'Saved ✓');
+      }).catch(()=>say(m,'Something went wrong',true));
+    };
+    $('#bkRun').onclick=()=>{
+      const m=$('#bkMsg');say(m,'');
+      post('/backups/run/').then(j=>{
+        if(!j.ok){say(m,j.error||'Could not start',true);return;}
+        st=j;render();poll();
+      }).catch(()=>say(m,'Something went wrong',true));
+    };
+    fillForm();render();
+    if(st.running)poll();
+    return()=>clearTimeout(timer);
+  },
+
   /* ----- DOWNLOADS: pull a playlist's undownloaded videos (owner only) ----- */
   downloads(root){
     const $=s=>root.querySelector(s);
     const readJSON=id=>{try{return JSON.parse($(id).textContent);}catch{return null;}};
     let sources=readJSON('#dlSourcesData')||[], tools=readJSON('#dlToolsData')||{}, job=readJSON('#dlJobData');
-    let cur=null, entries=[];
+    let cur=null, entries=[], disk={};
     const sel=new Set();
     let jobTimer=null, toolTimer=null;
     const LS='hf_dl_source';
@@ -1737,7 +1842,7 @@ const PAGE_INIT={
     function renderWarn(){
       const w=[];
       if(!tools.installed)w.push('yt-dlp is not installed on the server. Run <code>pip install -r requirements.txt</code> and restart HomeFlix.');
-      else if(!tools.runtime)w.push('No JavaScript runtime found. YouTube downloads need <b>Deno</b> (or Node.js) installed on the server — without it most formats are missing.');
+      else if(!(tools.runtime&&tools.runtime.supported))w.push(esc((tools.runtime&&tools.runtime.problem)||'No JavaScript runtime found.'));
       $('#dlWarn').innerHTML=w.map(t=>`<div class="banner">${t}</div>`).join('');
     }
     function renderCookies(){
@@ -1749,7 +1854,9 @@ const PAGE_INIT={
       $('#dlCookieClear').hidden=!c.set;
     }
     function renderTools(){
-      $('#dlToolInfo').textContent='yt-dlp '+(tools.version||'not installed')+' · JS runtime: '+(tools.runtime||'none');
+      const rt=tools.runtime||{};
+      $('#dlToolInfo').textContent='yt-dlp '+(tools.version||'not installed')+' · JS runtime: '+
+        (rt.name?rt.name+' '+rt.version+(rt.supported?'':' (too old)'):'none');
       const u=tools.update||{};
       const m=$('#dlUpdateMsg');
       say(m,u.state==='running'?'Updating…':u.state==='ok'?'✓ '+(u.msg||'updated'):u.state==='error'?'Update failed: '+(u.msg||''):'',u.state==='error');
@@ -1784,22 +1891,46 @@ const PAGE_INIT={
       }).join('');
       updateBar();
     }
+    const fmtB=n=>{if(n==null)return'?';const u=['B','KB','MB','GB','TB'];let i=0;
+      while(n>=1024&&i<4){n/=1024;i++;}return(i>=3?n.toFixed(1):Math.round(n))+' '+u[i];};
+    /* Rough only: summed duration of the ticked videos x the library's average
+       bytes/second (server-calibrated, see downloader.estimate_rate). */
+    function estimate(){
+      let secs=0,unknown=0;
+      for(const e of entries){if(!sel.has(e.id))continue;if(e.duration==null)unknown++;else secs+=e.duration;}
+      return{bytes:secs*(disk.rate||0),unknown};
+    }
     function updateBar(){
-      const on=!!cur;
+      const on=!!cur, hasCookies=!!(tools.cookies&&tools.cookies.set), rtOk=!!(tools.runtime&&tools.runtime.supported);
       bar.classList.toggle('active',on);
       document.body.classList.toggle('dl-bar-on',on);
       $('#dlSelCount').textContent=sel.size+' selected';
-      $('#dlStart').disabled=!sel.size||running()||!tools.installed;
+      $('#dlStart').disabled=!sel.size||running()||!tools.installed||!hasCookies||!rtOk;
+      const info=$('#dlSelInfo');let bad=false,t='';
+      if(!hasCookies){t='Paste your YouTube cookies above to enable downloading';bad=true;}
+      else if(!rtOk){t='Install Deno first (see the warning at the top)';bad=true;}
+      else{
+        const parts=[];
+        if(sel.size){const est=estimate();
+          parts.push('≈ '+fmtB(est.bytes)+(est.unknown?' + '+est.unknown+' of unknown length':''));
+          if(disk.free!=null&&est.bytes>disk.free*0.95){bad=true;parts.push('may not fit');}}
+        if(disk.free!=null)parts.push(fmtB(disk.free)+' free');
+        t=parts.join(' · ');
+      }
+      info.textContent=t;info.classList.toggle('bad',bad);
+      info.title=disk.rate_source==='library'?'Estimate uses the average size per minute of the videos already in your library.'
+        :'Estimate assumes ~1080p; it gets more accurate once your library has a few videos.';
     }
     function applyState(j){
-      entries=j.entries||[];
+      entries=j.entries||[];disk=j.disk||{};
       const s=sources.find(x=>x.id===j.source.id);if(s)Object.assign(s,j.source);
       renderSources();
       const c=j.counts||{};
       $('#dlTitle').textContent=j.source.name;
       say($('#dlFetchInfo'),(j.source.fetched?'Fetched '+new Date(j.source.fetched).toLocaleString()+' · ':'Not fetched yet · ')+
         (c.new||0)+' new, '+(c.downloaded||0)+' downloaded'+(c.skipped?', '+c.skipped+' skipped':'')+
-        (c.unavailable?', '+c.unavailable+' unavailable':''));
+        (c.unavailable?', '+c.unavailable+' unavailable':'')+
+        (disk.free!=null?' · '+fmtB(disk.free)+' free of '+fmtB(disk.total):''));
     }
     function openSource(id,fresh){
       cur=id;sel.clear();entries=[];
@@ -1876,12 +2007,12 @@ const PAGE_INIT={
       say(m,'Saving…');
       post('/downloads/cookies/',{text}).then(j=>{
         if(!j.ok){say(m,j.error||'Not saved',true);return;}
-        $('#dlCookieText').value='';tools.cookies=j.cookies;renderCookies();say(m,'Saved ✓');
+        $('#dlCookieText').value='';tools.cookies=j.cookies;renderCookies();updateBar();say(m,'Saved ✓');
       }).catch(e=>fail(m,e));
     };
     $('#dlCookieClear').onclick=()=>{
       if(!confirm('Remove the saved YouTube cookies from the server?'))return;
-      post('/downloads/cookies/',{action:'clear'}).then(j=>{tools.cookies=j.cookies;renderCookies();say($('#dlCookieMsg'),'Removed');});
+      post('/downloads/cookies/',{action:'clear'}).then(j=>{tools.cookies=j.cookies;renderCookies();updateBar();say($('#dlCookieMsg'),'Removed');});
     };
     $('#dlUpdate').onclick=()=>{
       post('/downloads/update-ytdlp/').then(()=>{tools.update={state:'running'};renderTools();pollTools();});
@@ -1938,6 +2069,9 @@ const PAGE_INIT={
     });
     $('#dlStart').onclick=()=>{
       if(!sel.size||!cur)return;
+      const est=estimate();
+      if(disk.free!=null&&est.bytes>disk.free*0.95&&
+         !confirm('Estimated '+fmtB(est.bytes)+' but only '+fmtB(disk.free)+' is free on that disk. Start anyway?'))return;
       const b=$('#dlStart');b.disabled=true;
       post('/downloads/sources/'+cur+'/start/',[...sel].map(i=>['ids',i])).then(j=>{
         if(!j.ok){alert(j.error||'Could not start');updateBar();return;}
@@ -1947,8 +2081,39 @@ const PAGE_INIT={
     };
     $('#dlCancel').onclick=()=>{post('/downloads/job/cancel/').then(pollJob);};
 
+    /* ---- refresh library data from YouTube ---- */
+    let rf=readJSON('#dlRefreshData')||{state:'idle'}, rfTimer=null;
+    function renderRefresh(){
+      const run=rf.state==='running', m=$('#rfMsg'), prog=$('#rfProg');
+      $('#rfStart').disabled=run;
+      prog.hidden=!(run||rf.state==='done');
+      const pct=rf.total?Math.round(rf.done/rf.total*100):(rf.state==='done'?100:3);
+      $('#rfBar').style.width=(run&&!rf.total?5:pct)+'%';
+      if(run)say(m,(rf.phase||'Working…')+(rf.total?` · ${rf.matched||0} matched`:''));
+      else if(rf.state==='done')say(m,'✓ '+(rf.msg||'Done'));
+      else if(rf.state==='error')say(m,rf.msg||'Failed',true);
+      else say(m,'');
+    }
+    function pollRefresh(){
+      clearTimeout(rfTimer);
+      getJSON('/downloads/refresh/status/').then(j=>{
+        rf=j.refresh||{state:'idle'};renderRefresh();
+        if(rf.state==='running')rfTimer=setTimeout(pollRefresh,1500);
+        else if(rf.state==='done')refreshState();   // titles/files may have changed
+      }).catch(()=>{rfTimer=setTimeout(pollRefresh,4000);});
+    }
+    $('#rfStart').onclick=()=>{
+      const m=$('#rfMsg');say(m,'Starting…');
+      post('/downloads/refresh/',{thumbs:$('#rfThumbs').checked?'1':'0',channel:$('#rfChannel').checked?'1':'0',
+        title:$('#rfTitle').checked?'1':'0'}).then(j=>{
+        if(!j.ok){say(m,j.error||'Could not start',true);return;}
+        rf=j.refresh;renderRefresh();pollRefresh();
+      }).catch(e=>fail(m,e));
+    };
+
     /* ---- init ---- */
-    renderWarn();renderCookies();renderTools();renderSources();renderJob();updateBar();
+    renderWarn();renderCookies();renderTools();renderSources();renderJob();updateBar();renderRefresh();
+    if(rf.state==='running')pollRefresh();
     if(running())pollJob();
     if((tools.update||{}).state==='running')pollTools();
     let last=null;try{last=+localStorage.getItem(LS)||null;}catch{}
@@ -1956,7 +2121,7 @@ const PAGE_INIT={
     if(first)openSource(first.id);
 
     return ()=>{
-      clearTimeout(jobTimer);clearTimeout(toolTimer);
+      clearTimeout(jobTimer);clearTimeout(toolTimer);clearTimeout(rfTimer);
       document.body.classList.remove('dl-bar-on');
     };
   },
@@ -2230,7 +2395,7 @@ const PLAYER=(function(){
     if(!d)return;
     try{sessionStorage.setItem(SKEY,JSON.stringify({
       id:d.id,title:d.title,stream_url:d.stream_url,watch_url:d.watch_url,
-      position:curTime(), state:state()}));}catch{}
+      position:d.remember_position===false?0:curTime(), state:state()}));}catch{}
   }
   function clearPersist(){try{sessionStorage.removeItem(SKEY);}catch{}}
 
@@ -2559,7 +2724,7 @@ const PLAYER=(function(){
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     if(d)prevVideoId=d.id; // track where we came from for shuffle prev
-    d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0;
+    d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0; recoverLog=[];
     repeat=data.repeat||'off'; shuffle=!!data.shuffle;
     // Server value (per-account, via UserPref) wins over whatever this
     // browser had cached in localStorage -- that's what makes the seek step
@@ -2592,7 +2757,9 @@ const PLAYER=(function(){
     // Always attempt playback — some browsers can actually decode mkv/hevc even
     // though the scanner flagged them as non-browser-playable by default; the
     // convert button (rendered below, in the info panel) stays available either way.
-    const startPos=parseFloat(data.position)||0;
+    // Shorts / < 3 min videos never resume (server also sends position 0; this
+    // covers fetchApply()'s explicit startPos from queue navigation).
+    const startPos=data.remember_position===false?0:(parseFloat(data.position)||0);
     // repeat 'one' = native single-video loop (no 'ended' event fires, so the
     // queue-advance logic below never even sees it); repeat 'all'/'off' rely
     // on nextId()/prevId() wrapping (or not) at the ends of the queue.
@@ -3081,7 +3248,49 @@ const PLAYER=(function(){
   V.addEventListener('ended',()=>{savePos();const nx=nextId();if(autoplay&&nx)setTimeout(()=>navigate(nx,true),800);});
   // Diagnostic only. MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE,
   // 4=SRC_NOT_SUPPORTED.
-  V.addEventListener('error',()=>{if(V.error)console.error('[player] video error',V.error.code,V.error.message);});
+  V.addEventListener('error',()=>{
+    if(!V.error)return;
+    console.error('[player] video error',V.error.code,V.error.message);
+    // A connection dropped mid-stream surfaces as NETWORK (2); once the file has
+    // started playing a SRC_NOT_SUPPORTED (4) is the same thing for some browsers.
+    if(curTime()>0.5&&(V.error.code===2||V.error.code===4))setTimeout(()=>recoverPlayback('error'),500);
+  });
+
+  /* ---- playback recovery ----
+     A dropped /stream/ connection (server restart, a recycled gunicorn worker,
+     flaky wifi) used to leave the player frozen until the page was reloaded --
+     the element's 'error' was only logged. Re-attach the source at the current
+     position instead, at most 3 times a minute, then say so instead of freezing
+     silently. (hls.js has its own recovery, see loadHlsSource.) */
+  let recoverLog=[], stallT=null, playMsgEl=null;
+  function playMsg(text,retry){
+    if(!playMsgEl){
+      playMsgEl=document.createElement('div');playMsgEl.id='phPlayMsg';
+      STAGE.appendChild(playMsgEl);
+    }
+    playMsgEl.innerHTML='';
+    if(!text){playMsgEl.classList.remove('on');return;}
+    playMsgEl.append(document.createTextNode(text));
+    if(retry){const b=document.createElement('button');b.textContent='Retry';
+      b.onclick=e=>{e.stopPropagation();playMsgEl.classList.remove('on');retry();};playMsgEl.append(b);}
+    playMsgEl.classList.add('on');
+  }
+  function recoverPlayback(why){
+    if(!d||d.hls||state()==='hidden')return;
+    const now=Date.now();
+    recoverLog=recoverLog.filter(t=>now-t<60000);
+    if(recoverLog.length>=3){playMsg('Playback interrupted',()=>{recoverLog=[];recoverPlayback('retry');});return;}
+    recoverLog.push(now);
+    const t=curTime();
+    console.warn('[player] recovering ('+why+') at '+t.toFixed(1)+'s');
+    loadSource(d.stream_url,t,true);
+  }
+  const clearStall=()=>{clearTimeout(stallT);stallT=null;};
+  // 'waiting' is normal while buffering or after a seek; 10 s with no progress is not.
+  V.addEventListener('waiting',()=>{clearStall();
+    stallT=setTimeout(()=>{if(!V.paused&&V.readyState<3)recoverPlayback('stalled');},10000);});
+  ['playing','timeupdate','seeked','pause','emptied'].forEach(ev=>V.addEventListener(ev,clearStall));
+  V.addEventListener('playing',()=>{if(playMsgEl)playMsgEl.classList.remove('on');});
 
   /* seek bar */
   function frac(e){const r=BAR.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX;
@@ -3250,7 +3459,7 @@ const PLAYER=(function(){
   },{passive:false});
 
   /* save progress */
-  function savePos(){if(!d)return;const t=curTime();if(Math.abs(t-lastSave)<2)return;
+  function savePos(){if(!d||d.remember_position===false)return;const t=curTime();if(Math.abs(t-lastSave)<2)return;
     lastSave=t;post(d.save_url,{position:t.toFixed(1)});}
   window.addEventListener('pagehide',()=>{
     if(!d)return;
@@ -3261,6 +3470,7 @@ const PLAYER=(function(){
     // loadHlsSource()/applyData()) still stops it right away; an abandoned
     // session here just ages out server-side (services.HLS_TTL).
     if(curTime()<1)return;persist();
+    if(d.remember_position===false)return;
     navigator.sendBeacon&&navigator.sendBeacon(d.save_url,
       new URLSearchParams({position:curTime().toFixed(1),csrfmiddlewaretoken:CSRF_HDR()}));});
 
@@ -3487,10 +3697,7 @@ const PLAYER=(function(){
     // picks — and then queues prev/next — from the filtered result set)
     if(/\/random\/?$/.test(href.split('?')[0])){
       e.preventDefault();
-      const rqs=href.includes('?')?href.split('?')[1]+'&json=1':'json=1';
-      fetch('/random/?'+rqs,{headers:{'X-SPA':'1'}}).then(r=>r.json())
-        .then(d=>{if(d.id){const qp=d.watch_url&&d.watch_url.includes('?')?d.watch_url.split('?')[1]:'';PLAYER.open(d.id,{qp});}})
-        .catch(()=>{location.href=href;});
+      openRandom(href.includes('?')?href.split('?')[1]:'').catch(()=>{location.href=href;});
       return;
     }
     // generic watch link (non-card) -> open player

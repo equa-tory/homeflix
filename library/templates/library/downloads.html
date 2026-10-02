@@ -6,12 +6,13 @@
 {{ sources|json_script:"dlSourcesData" }}
 {{ tools|json_script:"dlToolsData" }}
 {{ job|json_script:"dlJobData" }}
+{{ refresh|json_script:"dlRefreshData" }}
 
 <div id="dlWarn"></div>
 
 <section class="dl-card" id="dlCookieCard">
   <h2>YouTube cookies <span class="dl-badge" id="dlCookieBadge"></span></h2>
-  <p class="dl-reco"><b>Strongly recommended.</b> Without cookies YouTube usually caps quality at 1080p, often blocks downloads with <i>"Sign in to confirm you're not a bot"</i>, and private/unlisted playlists can't be read at all. Paste them once — they're stored on the server (not shown again) and used for every download, including ones you start from your phone.</p>
+  <p class="dl-reco"><b>Required for downloads.</b> Without cookies YouTube caps quality, often blocks downloads with <i>"Sign in to confirm you're not a bot"</i>, and private/unlisted playlists can't be read at all, so downloading is switched off until they're saved. Paste them once — they're stored on the server (not shown again) and used for every download, including ones you start from your phone.</p>
   <textarea id="dlCookieText" rows="3" class="nav-item" spellcheck="false" autocomplete="off" autocapitalize="off"
             placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>
   <div class="dl-row">
@@ -86,6 +87,19 @@
   <details class="dl-how"><summary class="nav-item" tabindex="0">Log</summary><pre id="dlJobLog"></pre></details>
 </section>
 
+<section class="dl-card" id="rfCard">
+  <h2>Update library from YouTube</h2>
+  <p class="sub">Refreshes the videos you already have: each one is matched <b>by name</b> against your saved playlists above, and its data is updated from YouTube. Videos that aren't in any saved playlist are left alone. Fetching the playlists can take a minute or two.</p>
+  <label class="bk-row"><input type="checkbox" id="rfThumbs" class="nav-item" checked> Thumbnails <span class="sub">(shorts keep their own frame)</span></label>
+  <label class="bk-row"><input type="checkbox" id="rfChannel" class="nav-item" checked> Author / channel</label>
+  <label class="bk-row"><input type="checkbox" id="rfTitle" class="nav-item"> Title <span class="sub">(use YouTube's title instead of the file name)</span></label>
+  <div class="dl-row">
+    <button type="button" class="btn nav-item" id="rfStart">Update library data</button>
+    <span class="sub" id="rfMsg"></span>
+  </div>
+  <div class="dl-prog" id="rfProg" hidden><div id="rfBar"></div></div>
+</section>
+
 <section class="dl-card">
   <h2>yt-dlp</h2>
   <p class="sub" id="dlToolInfo"></p>
@@ -97,7 +111,10 @@
 </section>
 
 <div id="dlActionBar" role="toolbar" aria-label="Download selection">
-  <span class="bulk-count" id="dlSelCount">0 selected</span>
+  <div class="dl-selbox">
+    <span class="bulk-count" id="dlSelCount">0 selected</span>
+    <div class="dl-selinfo" id="dlSelInfo"></div>
+  </div>
   <span style="flex:1"></span>
   <button type="button" class="btn nav-item" id="dlStart" disabled>⬇ Download</button>
 </div>

@@ -48,6 +48,8 @@ urlpatterns = [
     path("downloads/tools/", views.dl_tools, name="dl_tools"),
     path("downloads/cookies/", views.dl_cookies, name="dl_cookies"),
     path("downloads/update-ytdlp/", views.dl_update_ytdlp, name="dl_update_ytdlp"),
+    path("downloads/refresh/", views.dl_refresh, name="dl_refresh"),
+    path("downloads/refresh/status/", views.dl_refresh_status, name="dl_refresh_status"),
     path("downloads/sources/add/", views.dl_source_add, name="dl_source_add"),
     path("downloads/sources/<int:pk>/delete/", views.dl_source_delete, name="dl_source_delete"),
     path("downloads/sources/<int:pk>/fetch/", views.dl_source_fetch, name="dl_source_fetch"),
@@ -57,6 +59,12 @@ urlpatterns = [
     path("downloads/sources/<int:pk>/start/", views.dl_source_start, name="dl_source_start"),
     path("downloads/job/status/", views.dl_job_status, name="dl_job_status"),
     path("downloads/job/cancel/", views.dl_job_cancel, name="dl_job_cancel"),
+
+    # backups (owner only)
+    path("backups/", views.backups, name="backups"),
+    path("backups/status/", views.backups_status, name="backups_status"),
+    path("backups/save/", views.backups_save, name="backups_save"),
+    path("backups/run/", views.backups_run, name="backups_run"),
 
     # actions
     path("scan/", views.scan, name="scan"),

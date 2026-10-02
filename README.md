@@ -72,21 +72,81 @@ catalog still requires an account — an anonymous visitor gets sent to
    and never offered again (**Unskip** undoes it).
 4. **Download**. Progress shows live; finished files appear in the library right away.
 
-**Paste your YouTube cookies** (the box at the top of the page) for full quality and to avoid
-"Sign in to confirm you're not a bot". They're stored on the server (mode 0600, never shown
-again) and used for every download, so you only do it once — the page has the step-by-step
-(use a private window and close it without signing out, so YouTube doesn't rotate them).
-Cookies expire eventually; paste fresh ones if downloads start failing with a sign-in error.
+The bar at the bottom shows a rough size for what you've ticked (based on the average size
+per minute of the videos already in your library) next to the free space on the target disk,
+and warns before you start something that won't fit. It's an estimate, not an exact figure.
+
+**You must paste your YouTube cookies first** (the box at the top of the page) — downloading
+is switched off without them, since YouTube otherwise caps quality and blocks with "Sign in to
+confirm you're not a bot". They're stored on the server (mode 0600, never shown again) and
+used for every download, so you only do it once — the page has the step-by-step (use a
+private window and close it without signing out, so YouTube doesn't rotate them). Cookies
+expire eventually; paste fresh ones if downloads start failing with a sign-in error.
+
+**Needs Deno 2.3+ (or Node 22+, or Bun 1.2.11+) on the server.** yt-dlp silently ignores older
+runtimes (e.g. the Node 18 many distros ship), after which *every* download fails with "n
+challenge solving failed / The page needs to be reloaded". The page checks the version and
+tells you; `./install.sh` (below) installs Deno into the project folder for you, no root needed.
+
+**Update library from YouTube** (card further down the same page): refreshes the videos you
+already have. Each library video is matched **by name** against your saved playlists and gets
+its author/channel and thumbnail (and, optionally, YouTube's title) updated — one playlist
+fetch covers every video in it, no request per video. Shorts keep their own frame as
+thumbnail; videos that aren't in any saved playlist are left alone.
 
 It shares its `_yt_archive_*.txt` file with the Lasso downloader in the same folder,
 so the two tools never re-download each other's videos. YouTube breaks yt-dlp regularly — use
 the **Update yt-dlp** button on the page when everything suddenly fails.
 
+## Backups (owner only)
+
+**Manage (⋯) → 💾 Backups…** — automatic backups of HomeFlix's own data. Defaults: every
+**48 hours** into **`/mnt/ssd/backups/homeflix`**, keeping **1** backup (a new one replaces the
+old only after it succeeded). One archive `homeflix-YYYYMMDD-HHMMSS.tar.gz` holds a consistent
+snapshot of the database (favorites, ratings, playlists, notes, history, accounts, saved download
+playlists), `thumbnails/` (incl. uploaded playlist covers) and `subtitles/`. **Not** included: your
+videos, `converted/`, and secrets (`homeflix.env`, saved YouTube cookies). Only files named
+`homeflix-YYYYMMDD-HHMMSS.tar.gz` are ever created or deleted in that folder.
+
+Restore: stop the service, `tar -xzf homeflix-….tar.gz -C /tmp/hf-restore`, copy `db.sqlite3`,
+`thumbnails/` and `subtitles/` back into the HomeFlix folder, start the service.
+
+## Playback notes
+- Shorts (vertical videos) and anything under 3 minutes always start from the beginning: no
+  resume point, no progress bar, not in "Continue watching".
+- The 🎲 button under ☑ Select (left edge of Library/Playlists) opens a random video from what
+  you're looking at (current search/filter or playlist).
+
 ## Requirements
 - Python 3.10+, `pip install -r requirements.txt` (Django + yt-dlp)
 - ffmpeg + ffprobe on PATH (`sudo apt install ffmpeg`)
-- For the playlist downloader: [Deno](https://deno.com) (or Node.js) on PATH — yt-dlp needs a
-  JS runtime to solve YouTube's challenge, otherwise most formats are missing
+- For the playlist downloader: [Deno](https://deno.com) 2.3+ (or Node 22+) — yt-dlp needs a
+  *recent* JS runtime to solve YouTube's challenge (`./install.sh` sets Deno up for you)
+
+## Easy install on Linux (systemd service)
+
+```bash
+./install.sh
+```
+Run it as your normal user (it uses `sudo` only where needed). It asks for your video folder,
+then: installs missing system packages (ffmpeg, …) via apt, creates the virtualenv and installs
+the dependencies, installs **Deno** into `./.deno` if there's no JS runtime new enough for
+yt-dlp, writes `homeflix.env` (settings + a generated secret key, mode 600), migrates the
+database, creates your owner login, and installs + starts a `homeflix` **systemd service** that
+comes back after a reboot. At the end it prints the URLs to open on your phone / TV.
+
+- Non-interactive: `./install.sh --yes --library /mnt/videos` (also `--port`, `--bind`, `--user`).
+- `--bind 127.0.0.1` keeps it off the network, for use behind nginx (next section).
+- Settings live in `homeflix.env` — edit, then `sudo systemctl restart homeflix`. Logs:
+  `journalctl -u homeflix -f`.
+- Safe to re-run after a `git pull` (keeps your settings and database, then restarts).
+- Already have a hand-written `homeflix.service` from the section below? The installer offers to
+  import its `HOMEFLIX_*` settings, and never replaces a service it didn't create without asking
+  (it saves a `.bak` copy first). If it had no `HOMEFLIX_SECRET_KEY`, one is generated.
+- `./install.sh --no-service` does everything except systemd; `./install.sh --uninstall` removes
+  the service (your videos, database and settings are left alone). The unit template is
+  `deploy/homeflix.service.in`.
+- Windows: use `run-homeflix.bat` instead.
 
 ## Quick start (development)
 ```bash
@@ -133,7 +193,7 @@ debug pages and its built-in static file serving for `/admin` — leave it unset
    Environment="HOMEFLIX_HOSTS=192.168.1.50"
    Environment="HOMEFLIX_HTTPS=1"
    Environment="HOMEFLIX_SECRET_KEY=paste-the-generated-key-here"
-   ExecStart=/path/to/venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8002 --workers 3 --timeout 120
+   ExecStart=/path/to/venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8002 --workers 3 --worker-class gthread --threads 8 --timeout 120
    Restart=on-failure
 
    [Install]
@@ -142,6 +202,11 @@ debug pages and its built-in static file serving for `/admin` — leave it unset
    ```bash
    sudo systemctl daemon-reload && sudo systemctl enable --now homeflix
    ```
+   - **`--worker-class gthread --threads 8`, not the default sync workers.** A video
+     stream keeps its connection open for as long as you watch; with sync workers each
+     stream pins a whole worker (three viewers freeze the site) and gunicorn kills a worker
+     that serves a single response for longer than `--timeout` — which showed up as videos
+     randomly stopping mid-play (`WORKER TIMEOUT … GET /stream/…` in `journalctl`).
    - **`--bind 127.0.0.1:8002`, not `0.0.0.0:8002`.** Binding to `0.0.0.0` makes
      gunicorn directly reachable from the network, bypassing nginx (and its TLS,
      and — once collectstatic/the nginx static block below are set up — its

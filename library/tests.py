@@ -9,21 +9,25 @@ tests instead of just manual verification.
 import json
 import os
 import shutil
+import sqlite3
 import sys
+import tarfile
 import tempfile
+import time
 from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
-from django.test import RequestFactory, TestCase, override_settings
+from django.db import connection
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
-from . import downloader, views
+from . import backup, downloader, refresh, services, views
 from .auth import LOGIN_ATTEMPT_LIMIT, public_when_enabled
 from .models import (
     DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
-    UserPref, Video, WatchEvent,
+    Setting, UserPref, Video, WatchEvent,
 )
 
 User = get_user_model()
@@ -197,9 +201,10 @@ class PerUserStateTests(AuthTestCase):
         self.assertEqual(viewer_state.position_seconds, 99.0)
 
     def test_finished_video_excluded_only_for_the_user_who_finished_it(self):
-        long_video = _make_video(duration_seconds=100.0, title="Long")
+        # Must be >= 3 min: shorter videos never keep a resume point (see NoResumeTests).
+        long_video = _make_video(duration_seconds=600.0, title="Long")
         self.client.force_login(self.owner)
-        self.client.post(reverse("save_progress", args=[long_video.pk]), {"position": "95"})
+        self.client.post(reverse("save_progress", args=[long_video.pk]), {"position": "570"})
         self.assertTrue(PlaybackState.objects.get(video=long_video, user=self.owner).finished)
 
         # A different user hasn't watched it -- it must still be eligible
@@ -584,7 +589,7 @@ class DownloaderViewTests(DownloaderCase):
         resp = self.client.get(reverse("downloads"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "How do I get the cookies?")
-        self.assertContains(resp, "Strongly recommended")
+        self.assertContains(resp, "Required for downloads")
 
     def test_add_source_validates_link_and_folder(self):
         self.client.force_login(self.owner)
@@ -686,6 +691,7 @@ class DownloaderJobTests(DownloaderCase):
     )
 
     def run_job(self, ids, succeed=True):
+        downloader.save_cookies("SID=x; HSID=y")     # jobs refuse to run without cookies
         job = DownloadJob.objects.create(source=self.src, ids=json.dumps(ids), total=len(ids))
 
         def fake_build(ids_, out_dir, archive, cookie):
@@ -724,12 +730,50 @@ class DownloaderJobTests(DownloaderCase):
         self.assertIn("Paste fresh cookies", job.summary)
         scan.assert_not_called()
 
+    def save_cookies(self):
+        downloader.save_cookies("SID=x; HSID=y")
+
+    GOOD_RT = {"name": "deno", "path": "/x/deno", "version": "2.9.7", "supported": True,
+               "args": ["--js-runtimes", "deno:/x/deno"]}
+
     def test_start_job_is_single_flight(self):
+        self.save_cookies()
         DownloadJob.objects.create(source=self.src, status=DownloadJob.RUNNING, pid=os.getpid())
-        with mock.patch.object(downloader, "ytdlp_available", return_value=True):
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(downloader, "js_runtime", return_value=self.GOOD_RT):
             job, err = downloader.start_job(self.src, ["aaaaaaaaaaa"])
         self.assertIsNone(job)
         self.assertIn("already running", err)
+
+    def test_start_job_refuses_without_cookies(self):
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(downloader, "js_runtime", return_value=self.GOOD_RT):
+            job, err = downloader.start_job(self.src, ["aaaaaaaaaaa"])
+        self.assertIsNone(job)
+        self.assertIn("cookies are required", err)
+        self.assertEqual(DownloadJob.objects.count(), 0)
+
+    def test_start_job_refuses_when_js_runtime_too_old(self):
+        # The real-world failure: distro Node 18 is silently rejected by yt-dlp,
+        # every video then dies at the challenge step. Say so up front instead.
+        self.save_cookies()
+        old = {"name": "node", "path": "/usr/bin/node", "version": "18.19.1",
+               "supported": False, "args": []}
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(downloader, "js_runtime", return_value=old):
+            job, err = downloader.start_job(self.src, ["aaaaaaaaaaa"])
+        self.assertIsNone(job)
+        self.assertIn("Node 18.19.1 is too old", err)
+        self.assertEqual(DownloadJob.objects.count(), 0)
+
+    def test_start_job_refuses_when_disk_nearly_full(self):
+        self.save_cookies()
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(downloader, "js_runtime", return_value=self.GOOD_RT), \
+             mock.patch.object(downloader, "free_space", return_value=(200 * 1024 ** 2, 10 * 1024 ** 3)):
+            job, err = downloader.start_job(self.src, ["aaaaaaaaaaa"])
+        self.assertIsNone(job)
+        self.assertIn("200 MB free", err)
 
     def test_dead_pid_job_is_reaped(self):
         j = DownloadJob.objects.create(source=self.src, status=DownloadJob.RUNNING, pid=2_000_000_000)
@@ -745,17 +789,631 @@ class DownloaderJobTests(DownloaderCase):
         self.assertFalse(downloader.cancel_job())
 
     def test_build_cmd_uses_pasted_cookies_and_shared_archive(self):
-        cmd, before, after, batch = downloader.build_cmd(
-            ["aaaaaaaaaaa"], self.lib, "/x/_yt_archive_ab.txt", "/x/cookies.txt")
+        with mock.patch.object(downloader, "js_runtime", return_value=self.GOOD_RT):
+            cmd, before, after, batch = downloader.build_cmd(
+                ["aaaaaaaaaaa"], self.lib, "/x/_yt_archive_ab.txt", "/x/cookies.txt")
         self.assertEqual(cmd[cmd.index("--cookies") + 1], "/x/cookies.txt")
         self.assertNotIn("--cookies-from-browser", cmd)
         self.assertIn("youtube:player_client=web_embedded,default", cmd)
+        # the runtime is passed explicitly, so the service needs no PATH entry for it
+        self.assertEqual(cmd[cmd.index("--js-runtimes") + 1], "deno:/x/deno")
         self.assertEqual(cmd[cmd.index("--download-archive") + 1], "/x/_yt_archive_ab.txt")
         self.assertNotIn("--playlist-items", cmd)
         self.assertIn("watch?v=aaaaaaaaaaa", open(batch).read())
         # marker/batch files live in YTDL_DIR, not in the library
         for p in (before, after, batch):
             self.assertEqual(os.path.dirname(p), self.ytdl)
-        cmd2, *_ = downloader.build_cmd(["aaaaaaaaaaa"], self.lib, "/x/a.txt", None)
-        self.assertIn("youtube:player_client=default,-android_sdkless", cmd2)
-        self.assertNotIn("--cookies", cmd2)
+
+
+class JsRuntimeTests(DownloaderCase):
+    """js_runtime() picks a runtime new enough for yt-dlp (it silently ignores
+    older ones -- e.g. Node 18 -- and then every download fails)."""
+
+    def pick(self, which, versions, local=None):
+        local = local or os.path.join(self.ytdl, "no-such-deno")
+        with mock.patch.object(downloader.shutil, "which", side_effect=lambda n: which.get(n)), \
+             mock.patch.object(downloader, "local_deno_path", return_value=local), \
+             mock.patch.object(downloader, "_exe_version", side_effect=lambda p: versions.get(p)):
+            rt = downloader.js_runtime()
+            return rt, downloader.runtime_problem(rt)
+
+    def test_old_node_only_is_reported_not_used(self):
+        rt, problem = self.pick({"node": "/usr/bin/node"}, {"/usr/bin/node": (18, 19, 1)})
+        self.assertFalse(rt["supported"])
+        self.assertEqual((rt["name"], rt["version"], rt["args"]), ("node", "18.19.1", []))
+        self.assertIn("Node 18.19.1 is too old", problem)
+        self.assertIn("install.sh", problem)
+
+    def test_project_local_deno_beats_old_node(self):
+        local = os.path.join(self.ytdl, "deno")
+        open(local, "w").close()
+        rt, problem = self.pick({"node": "/usr/bin/node"},
+                                {"/usr/bin/node": (18, 19, 1), local: (2, 9, 7)}, local=local)
+        self.assertTrue(rt["supported"])
+        self.assertEqual(rt["args"], ["--js-runtimes", f"deno:{local}"])
+        self.assertEqual(problem, "")
+
+    def test_skips_too_old_deno_for_new_enough_node(self):
+        rt, _ = self.pick({"deno": "/d/deno", "node": "/n/node"},
+                          {"/d/deno": (2, 2, 9), "/n/node": (22, 1, 0)})
+        self.assertEqual((rt["name"], rt["supported"]), ("node", True))
+
+    def test_nothing_installed(self):
+        rt, problem = self.pick({}, {})
+        self.assertFalse(rt["supported"])
+        self.assertEqual(rt["name"], "")
+        self.assertIn("No JavaScript runtime found", problem)
+
+    def test_challenge_failure_hint_names_the_real_problem(self):
+        with mock.patch.object(downloader, "js_runtime", return_value={
+                "name": "node", "path": "/n", "version": "18.19.1", "supported": False, "args": []}):
+            hint = downloader.hint_for("WARNING: n challenge solving failed\nERROR: The page needs to be reloaded.")
+        self.assertIn("Node 18.19.1 is too old", hint)
+
+
+class DiskSpaceTests(DownloaderCase):
+    def test_free_space_of_a_folder_that_does_not_exist_yet(self):
+        free, total = downloader.free_space(os.path.join(self.lib, "not", "created", "yet"))
+        self.assertGreater(total, 0)
+        self.assertGreater(free, 0)
+
+    def test_rate_defaults_until_the_library_has_a_few_videos(self):
+        self.assertEqual(downloader.estimate_rate(), (downloader.DEFAULT_RATE, "default"))
+        Video.objects.all().delete()
+        for i in range(3):
+            Video.objects.create(
+                file_path=os.path.join(self.lib, f"v{i}.mp4"), rel_path=f"v{i}.mp4",
+                filename=f"v{i}.mp4", ext="mp4", title=f"v{i}",
+                duration_seconds=100, size_bytes=50_000_000)   # 500 KB/s each
+        self.assertEqual(downloader.estimate_rate(), (500_000, "library"))
+
+    def test_rate_is_clamped_to_sane_bounds(self):
+        Video.objects.all().delete()
+        for i in range(3):
+            Video.objects.create(
+                file_path=os.path.join(self.lib, f"v{i}.mp4"), rel_path=f"v{i}.mp4",
+                filename=f"v{i}.mp4", ext="mp4", title=f"v{i}",
+                duration_seconds=1, size_bytes=900_000_000)    # absurd 900 MB/s (bad probe data)
+        self.assertEqual(downloader.estimate_rate()[0], 4_000_000)
+
+    def test_state_payload_carries_disk_info_and_tools_carry_runtime(self):
+        self.client.force_login(self.owner)
+        st = self.client.get(reverse("dl_source_state", args=[self.src.pk]), HTTP_X_SPA="1").json()
+        self.assertEqual(set(st["disk"]), {"free", "total", "rate", "rate_source"})
+        tools = self.client.get(reverse("dl_tools"), HTTP_X_SPA="1").json()
+        self.assertEqual(set(tools["runtime"]), {"name", "version", "supported", "problem"})
+
+
+# ---- Streaming: bounded ranges (the "video randomly stops" fix) --------------
+
+class StreamRangeTests(AuthTestCase):
+    """An open-ended `Range: bytes=N-` used to be answered with the whole rest
+    of the file in ONE response, which pinned a gunicorn worker until the
+    player had consumed it -- and gunicorn SIGKILLs a sync worker past
+    --timeout, cutting playback off mid-video. Open-ended ranges are now
+    capped; explicit ones are honoured."""
+
+    SIZE = 10_000
+
+    def setUp(self):
+        super().setUp()
+        self.data = bytes(i % 251 for i in range(self.SIZE))
+        with open(self.video.file_path, "wb") as f:
+            f.write(self.data)
+        self.client.force_login(self.owner)
+        cap = mock.patch.object(views, "MAX_RANGE_BYTES", 1000)
+        cap.start()
+        self.addCleanup(cap.stop)
+
+    def get(self, rng):
+        resp = self.client.get(reverse("stream", args=[self.video.pk]), HTTP_RANGE=rng)
+        body = b"".join(resp.streaming_content) if resp.streaming else resp.content
+        return resp, body
+
+    def test_open_ended_range_is_capped(self):
+        resp, body = self.get("bytes=0-")
+        self.assertEqual(resp.status_code, 206)
+        self.assertEqual(resp["Content-Range"], f"bytes 0-999/{self.SIZE}")
+        self.assertEqual(resp["Content-Length"], "1000")
+        self.assertEqual(body, self.data[:1000])
+
+    def test_open_ended_range_mid_file(self):
+        resp, body = self.get("bytes=500-")
+        self.assertEqual(resp["Content-Range"], f"bytes 500-1499/{self.SIZE}")
+        self.assertEqual(body, self.data[500:1500])
+
+    def test_open_ended_range_near_the_end_is_not_overrun(self):
+        resp, body = self.get(f"bytes={self.SIZE - 10}-")
+        self.assertEqual(resp["Content-Range"], f"bytes {self.SIZE - 10}-{self.SIZE - 1}/{self.SIZE}")
+        self.assertEqual(body, self.data[-10:])
+
+    def test_explicit_end_is_honoured_even_above_the_cap(self):
+        resp, body = self.get("bytes=0-1999")
+        self.assertEqual(resp["Content-Length"], "2000")
+        self.assertEqual(body, self.data[:2000])
+
+    def test_range_past_the_end_is_416(self):
+        resp, _ = self.get(f"bytes={self.SIZE}-")
+        self.assertEqual(resp.status_code, 416)
+        self.assertEqual(resp["Content-Range"], f"bytes */{self.SIZE}")
+
+    def test_no_range_header_still_serves_the_whole_file(self):
+        resp = self.client.get(reverse("stream", args=[self.video.pk]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(b"".join(resp.streaming_content), self.data)
+        self.assertEqual(resp["Accept-Ranges"], "bytes")
+
+
+# ---- Shorts and < 3 min videos never resume -----------------------------------
+
+class NoResumeTests(AuthTestCase):
+    def mk(self, name, w, h, dur):
+        return _make_video(title=name, width=w, height=h, duration_seconds=dur)
+
+    def setUp(self):
+        super().setUp()
+        self.long = self.mk("long", 1920, 1080, 600)
+        self.short = self.mk("short", 1920, 1080, 120)        # < 3 min
+        self.portrait = self.mk("portrait", 720, 1280, 600)   # a "short"
+        self.square = self.mk("square", 1080, 1080, 600)      # counts as vertical
+        self.unknown = self.mk("unknown", 1920, 1080, None)   # unknown length: normal
+        self.edge = self.mk("edge", 1920, 1080, 180)          # exactly 3:00 is NOT shorter
+        self.client.force_login(self.owner)
+
+    def state(self, video, pos):
+        return PlaybackState.objects.create(video=video, user=self.owner, position_seconds=pos)
+
+    def test_remembers_position_rules(self):
+        got = {v.title: v.remembers_position for v in
+               (self.long, self.short, self.portrait, self.square, self.unknown, self.edge)}
+        self.assertEqual(got, {"long": True, "short": False, "portrait": False,
+                               "square": False, "unknown": True, "edge": True})
+
+    def test_save_progress_ignored_for_short_videos(self):
+        for v in (self.short, self.portrait):
+            r = self.client.post(reverse("save_progress", args=[v.pk]), {"position": "50"})
+            self.assertEqual(r.status_code, 200)
+            self.assertFalse(PlaybackState.objects.filter(video=v).exists(), v.title)
+        self.client.post(reverse("save_progress", args=[self.long.pk]), {"position": "50"})
+        self.assertEqual(PlaybackState.objects.get(video=self.long).position_seconds, 50)
+
+    def test_watch_data_starts_short_videos_from_zero_even_with_an_old_position(self):
+        self.state(self.short, 90)
+        self.state(self.portrait, 300)
+        self.state(self.long, 300)
+        for v, pos, remember in ((self.short, 0, False), (self.portrait, 0, False), (self.long, 300, True)):
+            with self.subTest(video=v.title):
+                d = self.client.get(reverse("watch_api", args=[v.pk])).json()
+                self.assertEqual((d["position"], d["remember_position"]), (pos, remember))
+
+    def test_continue_watching_excludes_them(self):
+        for v in (self.long, self.short, self.portrait, self.square, self.unknown):
+            self.state(v, 100)
+        resp = self.client.get(reverse("home"))
+        titles = {v.title for v in resp.context["continue_watching"]}
+        self.assertEqual(titles, {"long", "unknown"})
+
+    def test_no_progress_bar_for_them(self):
+        from .templatetags.library_extras import pct
+        long_state, short_state = self.state(self.long, 300), self.state(self.short, 60)
+        self.assertEqual(pct(long_state, self.long), 50)
+        self.assertEqual(pct(short_state, self.short), 0)
+        self.short.my_playback, self.long.my_playback = [short_state], [long_state]
+        self.assertEqual(views._serialize(self.short)["progress"], 0)
+        self.assertEqual(views._serialize(self.long)["progress"], 50)
+
+
+# ---- Dice button -----------------------------------------------------------------
+
+class DiceButtonTests(AuthTestCase):
+    def test_dice_and_shared_random_helper_are_in_the_shell(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("library")).content.decode()
+        self.assertIn('id="diceFab"', html)
+        self.assertIn("function openRandom(", html)
+        self.assertIn("function randomScope(", html)
+
+
+# ---- Scanner: yt-dlp temp files and races ----------------------------------------------
+
+class ScannerHardeningTests(AuthTestCase):
+    def test_ytdlp_intermediates_are_recognised(self):
+        for name in ("Song.f401.mp4", "Song.f251-9.webm", "Song.temp.mp4"):
+            self.assertTrue(services.is_ytdlp_temp(name), name)
+        for name in ("Normal Title.mp4", "A.F1.fan.mp4", "Show.2024.mp4", "x.format.mp4"):
+            self.assertFalse(services.is_ytdlp_temp(name), name)
+
+    def test_scan_skips_downloads_in_progress(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for n in ("Real.mp4", "Real.f401.mp4", "Real.temp.mp4"):
+            open(os.path.join(root, n), "w").close()
+        services.scan_library(root=root, make_thumbs=False)
+        self.assertEqual(sorted(Video.objects.filter(file_path__startswith=root).values_list("filename", flat=True)),
+                         ["Real.mp4"])
+
+    def test_scan_survives_a_vanished_file_and_a_concurrent_insert(self):
+        from django.db import IntegrityError
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for n in ("a.mp4", "b.mp4", "c.mp4"):
+            open(os.path.join(root, n), "w").close()
+        real = services._scan_file
+
+        def flaky(root_, full, name, ext, make_thumbs):
+            if name == "a.mp4":
+                raise FileNotFoundError(full)
+            if name == "b.mp4":
+                raise IntegrityError("UNIQUE constraint failed: library_video.file_path")
+            return real(root_, full, name, ext, make_thumbs)
+
+        with mock.patch.object(services, "_scan_file", side_effect=flaky):
+            summary = services.scan_library(root=root, make_thumbs=False)
+        self.assertEqual(summary["added"], 1)           # only c.mp4 got through; no exception
+
+
+# ---- Backups -------------------------------------------------------------------------------
+
+class BackupDirs:
+    """Scratch backup/thumbnail/subtitle folders (mixin for the test cases)."""
+
+    def make_dirs(self):
+        self.bk = tempfile.mkdtemp()
+        self.thumbs = tempfile.mkdtemp()
+        self.subs = tempfile.mkdtemp()
+        for d in (self.bk, self.thumbs, self.subs):
+            self.addCleanup(shutil.rmtree, d, True)
+        ov = override_settings(THUMBNAIL_DIR=self.thumbs, SUBTITLE_DIR=self.subs)
+        ov.enable()
+        self.addCleanup(ov.disable)
+        open(os.path.join(self.thumbs, "video_1.jpg"), "wb").write(b"jpg")
+        os.makedirs(os.path.join(self.thumbs, "frames"))
+        open(os.path.join(self.thumbs, "frames", "f.jpg"), "wb").write(b"regenerable")
+        open(os.path.join(self.subs, "x.vtt"), "w").write("WEBVTT")
+        Setting.set("backup_path", self.bk)
+
+
+class BackupCase(BackupDirs, AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.make_dirs()
+
+
+class BackupRunTests(BackupDirs, TransactionTestCase):
+    """TransactionTestCase on purpose: SQLite's online-backup API can't read a
+    database through a connection that is inside an open transaction (what a
+    plain TestCase wraps every test in) -- it just waits for a lock that never
+    clears. The app runs it from a thread in autocommit mode, like this."""
+
+    def setUp(self):
+        User.objects.create_user("owner", password="pw-owner-1234", is_staff=True)
+        User.objects.create_user("viewer", password="pw-viewer-1234")
+        self.make_dirs()
+
+    def test_archive_contents_and_database_snapshot(self):
+        res = backup.run_backup()
+        self.assertTrue(res["ok"], res)
+        files = backup.list_backups(self.bk)
+        self.assertEqual(len(files), 1)
+        out = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, out, True)
+        with tarfile.open(os.path.join(self.bk, files[0]["name"])) as tar:
+            names = tar.getnames()
+            tar.extractall(out)
+        self.assertIn("db.sqlite3", names)
+        self.assertIn("thumbnails/video_1.jpg", names)
+        self.assertIn("subtitles/x.vtt", names)
+        self.assertIn("MANIFEST.json", names)
+        self.assertNotIn("thumbnails/frames/f.jpg", names)       # regenerable: left out
+        con = sqlite3.connect(os.path.join(out, "db.sqlite3"))
+        try:
+            users = {r[0] for r in con.execute("select username from auth_user")}
+        finally:
+            con.close()
+        self.assertTrue({"owner", "viewer"} <= users)            # a real, readable snapshot
+        self.assertEqual([f for f in os.listdir(self.bk) if f.startswith(".")], [])   # temp files cleaned
+        self.assertTrue(Setting.get("backup_last_ok"))
+        self.assertEqual(Setting.get("backup_running"), "")
+
+    def test_lock_watch_gives_up_only_after_continuous_blocking(self):
+        clock = [1000.0]
+        with mock.patch.object(backup.time, "time", side_effect=lambda: clock[0]):
+            watch = backup.lock_watch(10)
+            watch(5, 0, 0)                      # busy: starts the clock
+            clock[0] += 9
+            watch(6, 0, 0)                      # locked, 9 s in: still waiting
+            clock[0] += 5
+            watch(0, 4, 8)                      # progress made: the clock resets
+            clock[0] += 9
+            watch(5, 4, 8)
+            clock[0] += 9
+            watch(5, 4, 8)                      # 9 s into a new block: fine
+            clock[0] += 2
+            with self.assertRaises(TimeoutError):
+                watch(5, 4, 8)                  # 11 s continuously blocked
+
+    def test_retention_only_touches_our_own_files(self):
+        Setting.set("backup_keep", 2)
+        for stamp in ("20260101-000000", "20260102-000000", "20260103-000000", "20260104-000000"):
+            open(os.path.join(self.bk, f"homeflix-{stamp}.tar.gz"), "wb").write(b"old")
+        for other in ("notes.txt", "homeflix-backup.tar.gz", "homeflix-20260101.tar.gz", "photos.tar.gz"):
+            open(os.path.join(self.bk, other), "w").write("mine")
+        self.assertTrue(backup.run_backup()["ok"])
+        ours = [f["name"] for f in backup.list_backups(self.bk)]
+        self.assertEqual(len(ours), 2)
+        self.assertIn("homeflix-20260104-000000.tar.gz", ours)    # newest old one kept
+        self.assertNotIn("homeflix-20260101-000000.tar.gz", ours)
+        for other in ("notes.txt", "homeflix-backup.tar.gz", "homeflix-20260101.tar.gz", "photos.tar.gz"):
+            self.assertTrue(os.path.exists(os.path.join(self.bk, other)), other)
+
+    def test_failed_backup_deletes_nothing(self):
+        Setting.set("backup_keep", 1)
+        old = os.path.join(self.bk, "homeflix-20260101-000000.tar.gz")
+        open(old, "wb").write(b"precious")
+        with mock.patch.object(backup, "_free", return_value=1):    # pretend the disk is full
+            res = backup.run_backup()
+        self.assertFalse(res["ok"])
+        self.assertIn("Not enough free space", res["msg"])
+        self.assertTrue(os.path.exists(old))
+        self.assertEqual(os.listdir(self.bk), ["homeflix-20260101-000000.tar.gz"])
+        self.assertEqual(Setting.get("backup_running"), "")
+
+
+class BackupConfigTests(BackupCase):
+    def test_path_validation(self):
+        for bad in ("", "relative/dir", "/", os.path.join(self.thumbs, "sub"), self.subs):
+            with self.subTest(path=bad):
+                with self.assertRaises(ValueError):
+                    backup.validate_path(bad)
+        self.assertEqual(backup.validate_path(self.bk + "/"), os.path.normpath(self.bk))
+
+    def test_save_config_bounds_and_unwritable_path(self):
+        for kwargs in (dict(hours="0"), dict(hours="abc"), dict(keep="0"), dict(keep="999"),
+                       dict(path="/proc/definitely/not/writable")):
+            args = dict(enabled=True, hours="48", path=self.bk, keep="1")
+            args.update(kwargs)
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    backup.save_config(**args)
+        backup.save_config(True, "12", self.bk, "3")
+        self.assertEqual(backup.get_config(), {"enabled": True, "hours": 12, "path": self.bk, "keep": 3})
+
+    def test_defaults_are_the_requested_ones(self):
+        Setting.objects.filter(key__startswith="backup_").delete()
+        self.assertEqual(backup.get_config(), {"enabled": True, "hours": 48,
+                                               "path": "/mnt/ssd/backups/homeflix", "keep": 1})
+
+
+class BackupSchedulingTests(BackupCase):
+    def test_claim_lets_exactly_one_caller_win_per_interval(self):
+        self.assertTrue(backup.claim("t", 100))
+        self.assertFalse(backup.claim("t", 100))                  # the other "workers"
+        self.assertFalse(backup.claim("t", 100))
+        Setting.set("claim_t", repr(time.time() - 101))
+        self.assertTrue(backup.claim("t", 100))                   # interval elapsed
+
+    def test_claim_is_a_compare_and_swap(self):
+        # Simulate the loser of a race: it read the old value, someone else
+        # swapped it first -> its conditional update must match nothing.
+        backup.claim("race", 0)
+        stale = Setting.get("claim_race")
+        Setting.set("claim_race", repr(time.time() + 5))
+        self.assertEqual(Setting.objects.filter(key="claim_race", value=stale).update(value="x"), 0)
+
+    def test_maybe_run_respects_enabled_and_due(self):
+        with mock.patch.object(backup, "run_backup", return_value={"ok": True}) as run:
+            Setting.set("backup_enabled", "0")
+            self.assertIsNone(backup.maybe_run())
+            Setting.set("backup_enabled", "1")
+            Setting.set("backup_last_ok", repr(time.time() - 3600))          # 1 h ago, interval 48 h
+            self.assertIsNone(backup.maybe_run())
+            Setting.set("backup_last_ok", repr(time.time() - 49 * 3600))     # overdue
+            self.assertEqual(backup.maybe_run(), {"ok": True})
+            self.assertIsNone(backup.maybe_run())                            # claim blocks a second worker
+            self.assertEqual(run.call_count, 1)
+
+    def test_status_reports_next_due(self):
+        Setting.set("backup_last_ok", repr(1_000_000.0))
+        Setting.set("backup_hours", 10)
+        self.assertEqual(backup.status()["next_due"], 1_000_000.0 + 36000)
+
+
+class BackupViewTests(BackupCase):
+    def test_viewer_blocked(self):
+        self.client.force_login(self.viewer)
+        for name in ("backups", "backups_status"):
+            self.assertEqual(self.client.get(reverse(name), HTTP_X_SPA="1").status_code, 403, name)
+        for name in ("backups_save", "backups_run"):
+            self.assertEqual(self.client.post(reverse(name), {}, HTTP_X_SPA="1").status_code, 403, name)
+
+    def test_owner_page_save_and_run(self):
+        self.client.force_login(self.owner)
+        self.assertContains(self.client.get(reverse("backups")), "Back up now")
+        r = self.client.post(reverse("backups_save"), {"enabled": "1", "hours": "24", "path": self.bk, "keep": "2"},
+                             HTTP_X_SPA="1")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.json()["hours"], r.json()["keep"]), (24, 2))
+        r = self.client.post(reverse("backups_save"), {"enabled": "1", "hours": "24", "path": "relative", "keep": "2"},
+                             HTTP_X_SPA="1")
+        self.assertEqual(r.status_code, 400)
+        with mock.patch.object(backup.threading, "Thread") as th:        # don't actually spawn
+            r = self.client.post(reverse("backups_run"), {}, HTTP_X_SPA="1")
+        self.assertEqual(r.status_code, 200)
+        th.assert_called_once()
+        self.assertTrue(r.json()["running"])
+        r = self.client.post(reverse("backups_run"), {}, HTTP_X_SPA="1")  # already "running"
+        self.assertEqual(r.status_code, 409)
+
+
+# ---- Refresh library data from YouTube ---------------------------------------------------------
+
+class RefreshCase(DownloaderCase):
+    def entry(self, i, title, channel="Chan"):
+        return {"id": f"vid{i:08d}", "title": title, "duration": 100, "index": i, "channel": channel}
+
+    def mkvideo(self, title, **kw):
+        defaults = dict(file_path=os.path.join(self.lib, f"{title}.mp4"), rel_path=f"{title}.mp4",
+                        filename=f"{title}.mp4", ext="mp4", title=title, width=1920, height=1080,
+                        duration_seconds=100)
+        defaults.update(kw)
+        return Video.objects.create(**defaults)
+
+
+class RefreshMatchTests(RefreshCase):
+    def test_matching_by_id_title_and_filename_and_ambiguity(self):
+        entries = refresh.merge_entries([[self.entry(1, "Alpha: Song?"), self.entry(2, "Dup"), self.entry(3, "Dup")],
+                                         [self.entry(4, "Beta", channel="")]])
+        by_id, by_name = refresh.build_index(entries)
+        v_title = self.mkvideo("Alpha - Song")                                   # sanitised title
+        v_file = self.mkvideo("zzz", filename="Beta.mp4")                        # only the file name matches
+        v_id = self.mkvideo("Totally different",
+                          source_url="https://www.youtube.com/watch?v=vid00000004")
+        v_dup = self.mkvideo("Dup")
+        v_none = self.mkvideo("Not in any playlist")
+        self.assertEqual(refresh.match_video(v_title, by_id, by_name)["id"], "vid00000001")
+        self.assertEqual(refresh.match_video(v_file, by_id, by_name)["id"], "vid00000004")
+        self.assertEqual(refresh.match_video(v_id, by_id, by_name)["id"], "vid00000004")
+        self.assertIsNone(refresh.match_video(v_dup, by_id, by_name))          # ambiguous: never guessed
+        self.assertIsNone(refresh.match_video(v_none, by_id, by_name))
+
+    def test_merge_prefers_the_entry_that_has_a_channel(self):
+        merged = refresh.merge_entries([[self.entry(1, "A", channel="")], [self.entry(1, "A", channel="Real")]])
+        self.assertEqual(merged[0]["channel"], "Real")
+
+
+class RefreshApplyTests(RefreshCase):
+    def test_fields_are_opt_in_and_portrait_keeps_its_thumbnail(self):
+        e = self.entry(1, "YouTube Title", channel="The Channel")
+        v = self.mkvideo("file name", channel="old")
+        with mock.patch.object(refresh, "fetch_thumbnail", return_value=True) as ft:
+            changed = refresh.apply_entry(v, e, {"channel": True})              # only the author
+        ft.assert_not_called()
+        v.refresh_from_db()
+        self.assertEqual((v.channel, v.title), ("The Channel", "file name"))
+        self.assertEqual(v.source_url, "https://www.youtube.com/watch?v=vid00000001")
+        self.assertEqual(changed, {"channel", "url"})
+
+        with mock.patch.object(refresh, "fetch_thumbnail", return_value=True):
+            changed = refresh.apply_entry(v, e, {"title": True, "thumbs": True})
+        v.refresh_from_db()
+        self.assertEqual(v.title, "YouTube Title")
+        self.assertEqual(v.thumbnail_path, os.path.join(self.thumbs_dir(), f"video_{v.pk}.jpg"))
+        self.assertEqual(changed, {"title", "thumb"})
+
+        shorts = self.mkvideo("vertical", width=720, height=1280)
+        with mock.patch.object(refresh, "fetch_thumbnail", return_value=True) as ft:
+            refresh.apply_entry(shorts, e, {"thumbs": True})
+        ft.assert_not_called()
+
+    def thumbs_dir(self):
+        from django.conf import settings
+        return settings.THUMBNAIL_DIR
+
+    def test_failed_thumbnail_download_is_not_an_error(self):
+        v = self.mkvideo("x")
+        with mock.patch.object(refresh, "fetch_thumbnail", return_value=False):
+            changed = refresh.apply_entry(v, self.entry(1, "x"), {"thumbs": True})
+        self.assertNotIn("thumb", changed)
+        self.assertEqual(v.thumbnail_path, "")
+
+    def test_thumbnail_tries_candidates_best_first_and_leaves_dest_alone_on_failure(self):
+        dest = os.path.join(self.lib, "t.jpg")
+        urls = []
+
+        def fake_get(url):
+            urls.append(url.rsplit("/", 1)[1])
+            return None if "maxres" in url else b"x" * 5000
+
+        def fake_ffmpeg(src, out):
+            open(out, "wb").write(b"scaled")
+            return 0, b"", b""
+
+        with mock.patch.object(refresh, "_http_get", side_effect=fake_get), \
+             mock.patch.object(refresh, "_run_ffmpeg", side_effect=fake_ffmpeg):
+            self.assertTrue(refresh.fetch_thumbnail("vid00000001", dest))
+        self.assertEqual(urls, ["maxresdefault.jpg", "hq720.jpg"])
+        self.assertEqual(open(dest, "rb").read(), b"scaled")
+        with mock.patch.object(refresh, "_http_get", return_value=None):
+            self.assertFalse(refresh.fetch_thumbnail("vid00000002", dest))
+        self.assertEqual(open(dest, "rb").read(), b"scaled")                    # untouched
+
+
+class RefreshJobTests(RefreshCase):
+    def test_full_run_updates_matches_and_reports(self):
+        self.src.name = "mine"
+        self.src.save()
+        v1 = self.mkvideo("Alpha")
+        v2 = self.mkvideo("Beta", channel="keep?")
+        v3 = self.mkvideo("Unlisted")
+        es = [self.entry(1, "Alpha", "Chan A"), self.entry(2, "Beta", "Chan B")]
+        with mock.patch.object(downloader, "fetch_playlist", return_value=("Fresh Name", es, "")), \
+             mock.patch.object(refresh, "fetch_thumbnail", return_value=True):
+            refresh._run({"thumbs": True, "channel": True, "title": False})
+        st = refresh.status()
+        self.assertEqual(st["state"], "done", st)
+        self.assertEqual((st["total"], st["matched"], st["changed"], st["thumbs"]), (Video.objects.filter(missing=False).count(), 2, 2, 2))
+        self.assertIn("Matched 2 of", st["msg"])
+        for v, ch in ((v1, "Chan A"), (v2, "Chan B"), (v3, "")):
+            v.refresh_from_db()
+            self.assertEqual(v.channel, ch)
+        self.src.refresh_from_db()
+        self.assertEqual(self.src.name, "Fresh Name")
+        self.assertEqual(json.loads(self.src.entries_json)[0]["channel"], "Chan A")   # cache now carries authors
+
+    def test_falls_back_to_the_saved_list_when_youtube_is_unreachable(self):
+        self.cache([self.entry(1, "Alpha", "Cached Chan")])
+        v = self.mkvideo("Alpha")
+        with mock.patch.object(downloader, "fetch_playlist", return_value=("", [], "no network")):
+            refresh._run({"channel": True})
+        v.refresh_from_db()
+        self.assertEqual(v.channel, "Cached Chan")
+        self.assertIn("used the saved list", refresh.status()["msg"])
+
+    def test_no_saved_playlists(self):
+        DownloadSource.objects.all().delete()
+        refresh._run({"channel": True})
+        self.assertEqual(refresh.status()["state"], "error")
+
+    def test_one_bad_video_does_not_stop_the_run(self):
+        self.mkvideo("Alpha"); self.mkvideo("Beta")
+        es = [self.entry(1, "Alpha"), self.entry(2, "Beta")]
+        calls = []
+
+        def flaky(video, entry, fields):
+            calls.append(video.title)
+            if video.title == "Alpha":
+                raise RuntimeError("boom")
+            return {"channel"}
+
+        with mock.patch.object(downloader, "fetch_playlist", return_value=("n", es, "")), \
+             mock.patch.object(refresh, "apply_entry", side_effect=flaky):
+            refresh._run({"channel": True})
+        st = refresh.status()
+        self.assertEqual((st["state"], st["failed"], st["changed"]), ("done", 1, 1))
+
+    def test_stale_running_status_reads_as_interrupted(self):
+        refresh._write(state="running", phase="x")
+        with mock.patch.object(refresh.time, "time", return_value=time.time() + 500):
+            self.assertEqual(refresh.status()["state"], "error")
+
+
+class RefreshViewTests(RefreshCase):
+    def test_viewer_blocked_and_owner_validation(self):
+        self.client.force_login(self.viewer)
+        self.assertEqual(self.client.post(reverse("dl_refresh"), {"thumbs": "1"}, HTTP_X_SPA="1").status_code, 403)
+        self.assertEqual(self.client.get(reverse("dl_refresh_status"), HTTP_X_SPA="1").status_code, 403)
+        self.client.force_login(self.owner)
+        self.assertEqual(self.client.post(reverse("dl_refresh"), {}, HTTP_X_SPA="1").status_code, 400)
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(refresh, "start_refresh", return_value=True) as sr:
+            r = self.client.post(reverse("dl_refresh"), {"thumbs": "1", "channel": "1"}, HTTP_X_SPA="1")
+        self.assertEqual(r.status_code, 200)
+        sr.assert_called_once_with({"thumbs": True, "channel": True, "title": False})
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(refresh, "start_refresh", return_value=False):
+            r = self.client.post(reverse("dl_refresh"), {"thumbs": "1"}, HTTP_X_SPA="1")
+        self.assertEqual(r.status_code, 409)
+
+    def test_downloads_page_has_the_card(self):
+        self.client.force_login(self.owner)
+        self.assertContains(self.client.get(reverse("downloads")), "Update library from YouTube")

@@ -1,0 +1,40 @@
+{% extends base_template %}
+{% block content %}
+<h1>Backups</h1>
+<p class="sub">Automatic backup of HomeFlix's own data: favorites, ratings, playlists, notes, watch history, accounts, saved download playlists, thumbnails and uploaded subtitles. Your videos are not included (they're just files in your library folder).</p>
+
+{{ status|json_script:"bkData" }}
+
+<section class="dl-card">
+  <h2>Schedule</h2>
+  <form id="bkForm">
+    <label class="bk-row"><input type="checkbox" id="bkEnabled" class="nav-item"> Back up automatically</label>
+    <label class="bk-row">Every <input type="number" id="bkHours" min="1" max="2160" class="nav-item"> hours</label>
+    <label class="bk-row">Folder <input type="text" id="bkPath" class="nav-item" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="/mnt/ssd/backups/homeflix"></label>
+    <label class="bk-row">Keep at most <input type="number" id="bkKeep" min="1" max="50" class="nav-item"> backup(s) in that folder</label>
+    <div class="dl-row">
+      <button class="btn nav-item" id="bkSave">Save</button>
+      <button type="button" class="btn ghost nav-item" id="bkRun">Back up now</button>
+      <span class="sub" id="bkMsg"></span>
+    </div>
+  </form>
+  <p class="sub" id="bkStatus" style="margin-bottom:0"></p>
+</section>
+
+<section class="dl-card">
+  <h2>Backups in that folder</h2>
+  <div id="bkFiles"></div>
+  <p class="sub">When a new backup succeeds, the oldest ones beyond the limit are deleted. Only files named <code>homeflix-YYYYMMDD-HHMMSS.tar.gz</code> are ever touched.</p>
+</section>
+
+<details class="dl-card dl-how">
+  <summary class="nav-item" tabindex="0">How do I restore a backup?</summary>
+  <ol>
+    <li>Stop HomeFlix (<code>sudo systemctl stop homeflix</code>).</li>
+    <li>Unpack the archive somewhere: <code>mkdir /tmp/hf-restore &amp;&amp; tar -xzf homeflix-….tar.gz -C /tmp/hf-restore</code>.</li>
+    <li>Copy <code>db.sqlite3</code>, <code>thumbnails/</code> and <code>subtitles/</code> from there back into the HomeFlix folder (replacing the current ones).</li>
+    <li>Start it again (<code>sudo systemctl start homeflix</code>).</li>
+  </ol>
+  <p class="sub">Not included on purpose: <code>homeflix.env</code> (your secret key) and the saved YouTube cookies, since a backup folder is often on a shared drive.</p>
+</details>
+{% endblock %}

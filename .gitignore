@@ -12,3 +12,7 @@ staticfiles/
 /.venv
 ytdl/
 Lasso/
+
+.deno/
+homeflix.env
+homeflix.service

@@ -10,6 +10,7 @@ from datetime import datetime, date
 logger = logging.getLogger(__name__)
 
 from django.conf import settings
+from django.db import IntegrityError
 from django.utils import timezone
 
 from .models import Video, VideoSubtitle, Setting
@@ -202,6 +203,66 @@ def read_sidecar(path):
     return {}
 
 
+# yt-dlp's intermediate files while a download is running: the separate video /
+# audio streams (`Title.f401.mp4`, `Title.f251-9.webm`) and the merge temp
+# (`Title.temp.mp4`). They are deleted seconds later, so indexing one creates a
+# bogus library row and then crashes on the vanished file.
+_YTDLP_TEMP_RE = re.compile(r"(?:\.f\d+(?:-\w+)?|\.temp)\.[A-Za-z0-9]{2,4}$")
+
+
+def is_ytdlp_temp(name):
+    return bool(_YTDLP_TEMP_RE.search(name))
+
+
+def _scan_file(root, full, name, ext, make_thumbs):
+    """Index one file. Returns "added" / "updated"."""
+    rel = os.path.relpath(full, root)
+    mtime = timezone.make_aware(datetime.fromtimestamp(os.path.getmtime(full)))
+
+    video = Video.objects.filter(file_path=full).first()
+    if video:
+        # Re-probe only if file changed size/mtime
+        changed = (video.file_mtime != mtime)
+        video.rel_path = rel
+        video.filename = name
+        video.ext = ext.lstrip(".")
+        video.file_mtime = mtime
+        video.missing = False
+        if changed:
+            info = probe(full)
+            for k, v in info.items():
+                setattr(video, k, v)
+            video.browser_playable = is_browser_playable(ext, video.video_codec)
+        video.save()
+        return "updated"
+
+    # New video
+    info = probe(full)
+    sidecar = read_sidecar(full)
+    video = Video.objects.create(
+        file_path=full,
+        rel_path=rel,
+        filename=name,
+        ext=ext.lstrip("."),
+        title=sidecar.get("title") or os.path.splitext(name)[0],
+        description=sidecar.get("description", ""),
+        channel=sidecar.get("channel", ""),
+        source_url=sidecar.get("source_url", ""),
+        upload_date=sidecar.get("upload_date"),
+        file_mtime=mtime,
+        browser_playable=is_browser_playable(ext, info.get("video_codec", "")),
+        **info,
+    )
+    if make_thumbs:
+        try:
+            default_pct = float(Setting.get("default_thumb_percent", "0"))
+        except (TypeError, ValueError):
+            default_pct = 0.0
+        default_pct = max(0.0, min(100.0, default_pct))
+        generate_thumbnail(video, percent=default_pct)
+    return "added"
+
+
 def scan_library(root=None, make_thumbs=True):
     """Walk the library, add new videos, update existing, flag deletions.
     Returns a summary dict. Non-video files are completely ignored.
@@ -218,56 +279,18 @@ def scan_library(root=None, make_thumbs=True):
             ext = os.path.splitext(name)[1].lower()
             if ext not in settings.VIDEO_EXTENSIONS:
                 continue  # leave txt/png/jpeg and other files untouched
+            if is_ytdlp_temp(name):
+                continue  # a download in progress -- picked up once it's merged
             full = os.path.join(dirpath, name)
-            seen_paths.add(full)
-            rel = os.path.relpath(full, root)
-            mtime = timezone.make_aware(
-                datetime.fromtimestamp(os.path.getmtime(full))
-            )
-
-            video = Video.objects.filter(file_path=full).first()
-            if video:
-                # Re-probe only if file changed size/mtime
-                changed = (video.file_mtime != mtime)
-                video.rel_path = rel
-                video.filename = name
-                video.ext = ext.lstrip(".")
-                video.file_mtime = mtime
-                video.missing = False
-                if changed:
-                    info = probe(full)
-                    for k, v in info.items():
-                        setattr(video, k, v)
-                    video.browser_playable = is_browser_playable(ext, video.video_codec)
-                video.save()
-                summary["updated"] += 1
-                continue
-
-            # New video
-            info = probe(full)
-            sidecar = read_sidecar(full)
-            video = Video.objects.create(
-                file_path=full,
-                rel_path=rel,
-                filename=name,
-                ext=ext.lstrip("."),
-                title=sidecar.get("title") or os.path.splitext(name)[0],
-                description=sidecar.get("description", ""),
-                channel=sidecar.get("channel", ""),
-                source_url=sidecar.get("source_url", ""),
-                upload_date=sidecar.get("upload_date"),
-                file_mtime=mtime,
-                browser_playable=is_browser_playable(ext, info.get("video_codec", "")),
-                **info,
-            )
-            if make_thumbs:
-                try:
-                    default_pct = float(Setting.get("default_thumb_percent", "0"))
-                except (TypeError, ValueError):
-                    default_pct = 0.0
-                default_pct = max(0.0, min(100.0, default_pct))
-                generate_thumbnail(video, percent=default_pct)
-            summary["added"] += 1
+            try:
+                summary[_scan_file(root, full, name, ext, make_thumbs)] += 1
+                seen_paths.add(full)
+            except FileNotFoundError:
+                continue  # vanished mid-scan (moved/deleted/merged)
+            except IntegrityError:
+                # Another scan (each gunicorn worker runs its own, and the
+                # downloader scans after a job) inserted the same file first.
+                seen_paths.add(full)
 
     # Flag any DB rows whose files vanished
     gone = Video.objects.exclude(file_path__in=seen_paths).filter(missing=False)

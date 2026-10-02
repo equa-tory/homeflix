@@ -2,6 +2,11 @@ from django.conf import settings
 from django.db import models
 
 
+# Videos shorter than this (and vertical "shorts") always start from the
+# beginning: a position in a 40-second clip is noise, not a place to resume.
+RESUME_MIN_SECONDS = 180
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=80, unique=True)
 
@@ -100,6 +105,15 @@ class Video(models.Model):
                 return "720p"
             return f"{self.height}p"
         return ""
+
+    @property
+    def remembers_position(self):
+        """False for shorts (vertical video) and anything under 3 minutes:
+        those never resume, never show a progress bar, and aren't "continue
+        watching". A video of unknown length is treated as a normal one."""
+        if self.is_portrait:
+            return False
+        return not (self.duration_seconds is not None and self.duration_seconds < RESUME_MIN_SECONDS)
 
     @property
     def is_portrait(self):

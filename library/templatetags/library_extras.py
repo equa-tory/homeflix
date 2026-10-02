@@ -33,7 +33,7 @@ def filesize(num_bytes):
 def pct(state, video):
     """Resume progress as a percentage for the thumbnail bar."""
     try:
-        if state and video.duration_seconds:
+        if state and video.duration_seconds and video.remembers_position:
             return min(100, (state.position_seconds / video.duration_seconds) * 100)
     except (ZeroDivisionError, AttributeError):
         pass

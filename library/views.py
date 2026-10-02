@@ -20,12 +20,13 @@ from django.views.static import was_modified_since
 from .auth import owner_required, public_when_enabled
 from .models import (
     Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
-    UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob,
+    UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob, RESUME_MIN_SECONDS,
 )
-from . import services, downloader
+from . import services, downloader, backup, refresh
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 CHUNK = 8192
+MAX_RANGE_BYTES = 32 * 1024 * 1024   # cap for an open-ended Range request, see stream()
 
 # Python's mimetypes module has no entry for these containers, so guess_type()
 # falls back to application/octet-stream — iOS Safari's download-attribute
@@ -246,6 +247,8 @@ def home(request):
         Video.objects.filter(missing=False, hidden=False,
                              playback_states__user=u, playback_states__finished=False,
                              playback_states__position_seconds__gt=5)
+        # shorts and < 3 min videos never resume (Video.remembers_position)
+        .exclude(PORTRAIT_Q).exclude(duration_seconds__lt=RESUME_MIN_SECONDS)
         .order_by("-playback_states__updated_at")[:12]
     )
 
@@ -461,7 +464,7 @@ def _build_watch_data(request, pk):
     def rec_dict(v):
         st = rec_states.get(v.pk)
         progress = 0
-        if st and v.duration_seconds:
+        if st and v.duration_seconds and v.remembers_position:
             progress = min(100, st.position_seconds / v.duration_seconds * 100)
         return {
             "id": v.pk, "title": v.title,
@@ -502,6 +505,8 @@ def _build_watch_data(request, pk):
     resume_pos = state.position_seconds if state else 0.0
     if video.duration_seconds and resume_pos >= 0.8 * video.duration_seconds:
         resume_pos = 0.0
+    if not video.remembers_position:   # shorts / < 3 min: always from the start
+        resume_pos = 0.0
 
     subs = _serialize_subs(pk, video)
 
@@ -512,6 +517,7 @@ def _build_watch_data(request, pk):
         "download_url": f"/stream/{pk}/?download=1",
         "save_url": f"/video/{pk}/progress/",
         "position": resume_pos,
+        "remember_position": video.remembers_position,
         "duration_label": fmt_dur(video.duration_seconds),
         "playable": video.playable_now,
         "hls": use_hls,
@@ -667,8 +673,20 @@ def stream(request, pk):
 
     if match:
         start = int(match.group(1))
+        if start >= size:
+            resp = HttpResponse(status=416)
+            resp["Content-Range"] = f"bytes */{size}"
+            return resp
         end = int(match.group(2)) if match.group(2) else size - 1
         end = min(end, size - 1)
+        if not match.group(2):
+            # Open-ended "bytes=N-": answer with a bounded chunk, not the whole
+            # rest of the file. The browser asks for the next range when it
+            # needs it. Streaming the entire remainder in one response keeps a
+            # gunicorn worker busy for as long as the player takes to consume
+            # it (minutes), and gunicorn SIGKILLs a sync worker after --timeout
+            # seconds -- which cut playback off mid-video with no recovery.
+            end = min(end, start + MAX_RANGE_BYTES - 1)
         length = end - start + 1
 
         def chunks():
@@ -837,6 +855,8 @@ def save_progress(request, pk):
         # time, which is correct for a visitor with no account.
         return JsonResponse({"ok": True})
     video = get_object_or_404(Video, pk=pk)
+    if not video.remembers_position:
+        return JsonResponse({"ok": True})   # shorts / < 3 min: no resume point is kept
     try:
         pos = float(request.POST.get("position", 0))
     except ValueError:
@@ -1004,7 +1024,7 @@ def _thumb_v(path):
 def _serialize(video, qs_suffix=""):
     state = next(iter(getattr(video, "my_playback", ())), None)
     progress = 0
-    if state and video.duration_seconds:
+    if state and video.duration_seconds and video.remembers_position:
         progress = min(100, (state.position_seconds / video.duration_seconds) * 100)
     from .templatetags.library_extras import duration as fmt_dur
     return {
@@ -1584,9 +1604,11 @@ def _dl_job_json(job):
 
 
 def _dl_tools_json():
-    runtime, _ = downloader.js_runtime()
+    rt = downloader.js_runtime()
     return {"installed": downloader.ytdlp_available(), "version": downloader.ytdlp_version(),
-            "runtime": runtime, "cookies": downloader.cookie_status(),
+            "runtime": {"name": rt["name"], "version": rt["version"], "supported": rt["supported"],
+                        "problem": downloader.runtime_problem(rt)},
+            "cookies": downloader.cookie_status(),
             "update": downloader.update_status()}
 
 
@@ -1595,7 +1617,8 @@ def _dl_state_json(src):
     counts = {}
     for e in entries:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
-    return {"ok": True, "source": _dl_source_json(src), "entries": entries, "counts": counts}
+    return {"ok": True, "source": _dl_source_json(src), "entries": entries, "counts": counts,
+            "disk": downloader.disk_info(src)}
 
 
 def _dl_ids(request, src):
@@ -1613,6 +1636,7 @@ def downloads(request):
         request, page_id="downloads", spa_title="Download — HomeFlix",
         sources=[_dl_source_json(s) for s in DownloadSource.objects.all()],
         tools=_dl_tools_json(),
+        refresh=refresh.status(),
         job=_dl_job_json(DownloadJob.objects.select_related("source").first()),
     ))
 
@@ -1633,6 +1657,25 @@ def dl_cookies(request):
     except ValueError as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=400)
     return JsonResponse({"ok": True, "cookies": downloader.cookie_status()})
+
+
+@require_POST
+@owner_required
+def dl_refresh(request):
+    """Update already-downloaded videos' thumbnail/author/title from YouTube."""
+    fields = {k: request.POST.get(k) == "1" for k in ("thumbs", "channel", "title")}
+    if not any(fields.values()):
+        return JsonResponse({"ok": False, "error": "Pick at least one thing to update"}, status=400)
+    if not downloader.ytdlp_available():
+        return JsonResponse({"ok": False, "error": "yt-dlp isn't installed on the server"}, status=400)
+    if not refresh.start_refresh(fields):
+        return JsonResponse({"ok": False, "error": "An update is already running"}, status=409)
+    return JsonResponse({"ok": True, "refresh": refresh.status()})
+
+
+@owner_required
+def dl_refresh_status(request):
+    return JsonResponse({"ok": True, "refresh": refresh.status()})
 
 
 @require_POST
@@ -1727,3 +1770,35 @@ def dl_job_status(request):
 @owner_required
 def dl_job_cancel(request):
     return JsonResponse({"ok": downloader.cancel_job()})
+
+
+# ---- Backups (owner only) ---------------------------------------------------
+
+@owner_required
+def backups(request):
+    return render(request, "library/backups.html", base_ctx(
+        request, page_id="backups", spa_title="Backups — HomeFlix", status=backup.status()))
+
+
+@owner_required
+def backups_status(request):
+    return JsonResponse({"ok": True, **backup.status()})
+
+
+@require_POST
+@owner_required
+def backups_save(request):
+    try:
+        backup.save_config(request.POST.get("enabled") == "1", request.POST.get("hours"),
+                           request.POST.get("path"), request.POST.get("keep"))
+    except ValueError as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=400)
+    return JsonResponse({"ok": True, **backup.status()})
+
+
+@require_POST
+@owner_required
+def backups_run(request):
+    if not backup.start_now():
+        return JsonResponse({"ok": False, "error": "A backup is already running"}, status=409)
+    return JsonResponse({"ok": True, **backup.status()})
