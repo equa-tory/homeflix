@@ -530,10 +530,14 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
    elements (siblings of #theVideo, never the .ph-stage box itself -- that is
    the fullscreen target) parked one stage-height above/below. Dragging moves
    all three together (see the shorts drag code in PLAYER). */
-.ph-stage video.sh-nb{display:none; position:absolute; inset:0; pointer-events:none;
-  transform:translate3d(0,100%,0); will-change:transform}
-.ph-stage video#phNbPrev{transform:translate3d(0,-100%,0)}
+.ph-stage video.sh-nb{display:none; position:absolute; inset:0; pointer-events:none; will-change:transform}
+/* These must out-rank `#player.ph-expanded .ph-stage video{transform:translateZ(0)}`
+   (the TV repaint rule) -- otherwise the parked neighbours sit at 0 on top of the real video. */
+#player .ph-stage video.sh-nb{transform:translate3d(0,100%,0)}
+#player .ph-stage video#phNbPrev{transform:translate3d(0,-100%,0)}
 #player.ph-expanded.ph-shorts .ph-stage video.sh-nb{display:block}
+#player.ph-expanded .ph-stage video.sh-nb{transform:translate3d(0,100%,0)}
+#player.ph-expanded .ph-stage video#phNbPrev{transform:translate3d(0,-100%,0)}
 #player.ph-expanded.ph-shorts .ph-stage{touch-action:none}
 .ph-stage.sh-drag .ctrls, .ph-stage.sh-drag .ripple, .ph-stage.sh-drag .ph-subbar{
   opacity:0!important; pointer-events:none!important}
