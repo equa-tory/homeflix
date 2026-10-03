@@ -143,7 +143,7 @@ PLAYLIST_RATING_ORDER_REV = ("video__favorite", "video__rating")
 
 # Vertical/"shorts" videos. `>=` so square videos count as vertical too.
 # Python-side twin: Video.is_portrait -- keep the two in sync.
-PORTRAIT_Q = Q(height__gte=F("width"), width__gt=0)
+PORTRAIT_Q = Q(height__gte=F("width"), width__gt=0, not_short=False)
 
 
 def _apply_sort(order, rev):
@@ -416,6 +416,14 @@ def _serialize_subs(pk, video):
     return out
 
 
+def _uses_hls(video):
+    """Non-browser-playable files go through the live HLS transcode, unless a
+    converted MP4 copy already exists (then it plays natively)."""
+    converted_ready = (video.convert_status == Video.CONVERT_DONE
+                       and video.converted_path and os.path.exists(video.converted_path))
+    return (not video.browser_playable) and not converted_ready
+
+
 def _build_watch_data(request, pk):
     """Serialize everything the player overlay needs, for SSR and the JSON API."""
     from .templatetags.library_extras import duration as fmt_dur, filesize as fmt_size
@@ -546,9 +554,7 @@ def _build_watch_data(request, pk):
     # Non-browser-playable files (mkv, HEVC, exotic audio, ...) play via a live
     # HLS transcode (Jellyfin-style) — unless a converted MP4 copy already
     # exists, in which case just play that natively (it's a clean file).
-    converted_ready = (video.convert_status == Video.CONVERT_DONE
-                       and video.converted_path and os.path.exists(video.converted_path))
-    use_hls = (not video.browser_playable) and not converted_ready
+    use_hls = _uses_hls(video)
 
     # Resume position resets once you've watched most of it, so reopening a
     # video you finished (or nearly did) starts fresh instead of a few
@@ -619,6 +625,9 @@ def _build_watch_data(request, pk):
         "playlists": [{"id": p.pk, "name": p.name} for p in Playlist.objects.all()],
         "ext": (video.ext or "").upper(),
         "is_portrait": video.is_portrait,
+        "is_vertical": video.is_vertical,
+        "not_short": video.not_short,
+        "not_short_url": f"/video/{pk}/not-short/",
         "aspect": round(video.width / video.height, 4) if (video.width and video.height) else None,
         "frame_url_base": f"/frame/{pk}/",
         "pl": pl_id or "",
@@ -699,7 +708,9 @@ def frame_thumb(request, pk, t):
         ])
         if code != 0 or not os.path.exists(path):
             raise Http404("Frame unavailable")
-    return FileResponse(open(path, "rb"), content_type="image/jpeg")
+    resp = FileResponse(open(path, "rb"), content_type="image/jpeg")
+    resp["Cache-Control"] = "private, max-age=604800"
+    return resp
 
 
 @public_when_enabled
@@ -938,6 +949,62 @@ def toggle_hidden(request, pk):
     video.hidden = not video.hidden
     video.save(update_fields=["hidden"])
     return JsonResponse({"hidden": video.hidden})
+
+
+@require_POST
+@owner_required
+def toggle_not_short(request, pk):
+    """Mark a vertical video as "not a short" (plays as a normal video, resumes,
+    leaves the Shorts tab) or back. Only vertical files have anything to toggle."""
+    video = get_object_or_404(Video, pk=pk)
+    if not video.is_vertical:
+        return JsonResponse({"ok": False, "error": "Only vertical videos can be shorts"}, status=400)
+    video.not_short = not video.not_short
+    video.save(update_fields=["not_short"])
+    return JsonResponse({"ok": True, "not_short": video.not_short, "is_portrait": video.is_portrait,
+                         "remember_position": video.remembers_position})
+
+
+@public_when_enabled
+def api_preview(request, pk):
+    """What the shorts player needs to preload a neighbour video."""
+    video = get_object_or_404(Video, pk=pk)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
+    return JsonResponse({
+        "id": video.pk, "stream_url": f"/stream/{pk}/", "hls": _uses_hls(video),
+        "thumb_url": f"/thumb/{pk}/" if video.thumbnail_path else "",
+        "is_portrait": video.is_portrait})
+
+
+@public_when_enabled
+def storyboard(request, pk):
+    """Sprite metadata for the seek-bar hover preview; starts a background
+    build the first time ({"pending": true} until it's ready)."""
+    video = get_object_or_404(Video, pk=pk)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
+    meta = services.storyboard_meta(video)
+    if meta:
+        return JsonResponse({"pending": False, "url": f"/storyboard/{pk}/img/?v={int(meta['src_mtime'])}",
+                             **{k: meta[k] for k in ("interval", "count", "cols", "w", "h")}})
+    if (video.duration_seconds or 0) >= 4:
+        services.start_storyboard(pk)
+        return JsonResponse({"pending": True})
+    return JsonResponse({"pending": False, "none": True})
+
+
+@public_when_enabled
+def storyboard_img(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    if video.hidden and not request.user.is_staff:
+        raise Http404("No such video")
+    path = services._sb_paths(video)[0]
+    if not os.path.exists(path):
+        raise Http404("No storyboard")
+    resp = FileResponse(open(path, "rb"), content_type="image/jpeg")
+    resp["Cache-Control"] = "private, max-age=604800"
+    return resp
 
 
 @require_POST
@@ -1709,7 +1776,15 @@ def dl_cookies(request):
         downloader.save_cookies(request.POST.get("text", ""))
     except ValueError as e:
         return JsonResponse({"ok": False, "error": str(e)}, status=400)
+    downloader.check_cookies_async()     # tell the owner soon if they don't work
     return JsonResponse({"ok": True, "cookies": downloader.cookie_status()})
+
+
+@require_POST
+@owner_required
+def dl_cookies_check(request):
+    downloader.check_cookies_async()
+    return JsonResponse({"ok": True})
 
 
 @require_POST

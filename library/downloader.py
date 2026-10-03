@@ -320,19 +320,152 @@ def clear_cookies():
         pass
 
 
+def _cookie_rows():
+    """[(name, expiry_epoch_or_0)] for every stored cookie, or None."""
+    try:
+        with open(cookie_path(), encoding="utf-8") as f:
+            rows = [l.rstrip("\n").split("\t") for l in f if l.strip() and not l.startswith("# ")]
+    except OSError:
+        return None
+    out = []
+    for r in rows:
+        if len(r) >= 6:
+            try:
+                exp = int(r[4])
+            except ValueError:
+                exp = 0
+            out.append((r[5], exp))
+    return out
+
+
 def cookie_status():
     path = cookie_path()
-    if not os.path.isfile(path):
+    rows = _cookie_rows()
+    if rows is None:
         return {"set": False}
     try:
-        with open(path, encoding="utf-8") as f:
-            rows = [l for l in f if l.strip() and not l.startswith("# ")]
-        names = {l.split("\t")[5] for l in rows if len(l.split("\t")) >= 6}
-        return {"set": True, "count": len(rows),
-                "has_login": bool(names & _LOGIN_COOKIES),
-                "saved": os.path.getmtime(path)}
+        saved = os.path.getmtime(path)
     except OSError:
         return {"set": False}
+    names = {n for n, _ in rows}
+    # When the login actually lapses: the earliest *real* expiry among the login
+    # cookies (0 = session cookie, and a pasted Cookie: header gets a far-future
+    # placeholder -- neither says anything).
+    exps = [e for n, e in rows if n in _LOGIN_COOKIES and 0 < e < int(_FAR_FUTURE)]
+    login_expires = min(exps) if exps else None
+    chk = read_cookie_check()
+    return {"set": True, "count": len(rows), "has_login": bool(names & _LOGIN_COOKIES),
+            "saved": saved, "login_expires": login_expires,
+            "expired": bool(login_expires and login_expires < time.time()),
+            "check": chk}
+
+
+# ---- Do the saved cookies still work? ---------------------------------------
+# YouTube invalidates exported cookies without telling anyone (and yt-dlp then
+# carries on *anonymously* with just a warning), so the only real test is to ask
+# for something that needs a signed-in account: the Watch Later list.
+
+COOKIE_BAD = ("Your YouTube cookies don't work anymore (expired or signed out). "
+              "Paste fresh ones in the cookies box.")
+CHECK_FRESH = 15 * 60
+
+
+def _check_file():
+    return os.path.join(settings.YTDL_DIR, "cookie_check.json")
+
+
+def read_cookie_check():
+    """The last test result for the *current* cookie file, else None."""
+    try:
+        with open(_check_file(), encoding="utf-8") as f:
+            c = json.load(f)
+        if abs(c.get("cookie_mtime", 0) - os.path.getmtime(cookie_path())) > 1e-3:
+            return None
+        return c
+    except (OSError, ValueError):
+        return None
+
+
+def _write_check(ok, msg):
+    try:
+        mt = os.path.getmtime(cookie_path())
+    except OSError:
+        return None
+    c = {"ok": ok, "msg": msg, "checked": time.time(), "cookie_mtime": mt}
+    tmp = _check_file() + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(c, f)
+        os.replace(tmp, _check_file())
+    except OSError:
+        pass
+    return c
+
+
+def check_cookies(timeout=60):
+    """Run the Watch Later probe on a *copy* of the cookies and store/return
+    {ok, msg, ...}. ok is True (signed in), False (cookies dead) or None
+    (couldn't tell -- network down, yt-dlp missing); None never blocks."""
+    if not os.path.isfile(cookie_path()):
+        return {"ok": False, "msg": "No cookies saved", "checked": time.time()}
+    if not ytdlp_available():
+        return _write_check(None, "yt-dlp isn't installed")
+    fd, tmp = tempfile.mkstemp(prefix="check_", suffix=".txt", dir=settings.YTDL_DIR)
+    os.close(fd)
+    try:
+        shutil.copyfile(cookie_path(), tmp)
+        cmd = [sys.executable, "-m", "yt_dlp", "--cookies", tmp, "--flat-playlist",
+               "--dump-single-json", "--playlist-end", "1", "--no-warnings",
+               "https://www.youtube.com/playlist?list=WL"]
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=timeout, env=_env(),
+                               creationflags=_NO_WINDOW, **_TEXT)
+        except subprocess.TimeoutExpired:
+            return _write_check(None, "YouTube took too long to answer")
+        except OSError as e:
+            return _write_check(None, f"Couldn't run yt-dlp: {e}")
+        err = (r.stderr or "").lower()
+        if "no longer valid" in err or "sign in" in err or "log in" in err or "login" in err:
+            return _write_check(False, COOKIE_BAD)
+        if r.returncode == 0:
+            try:
+                if isinstance(json.loads(r.stdout), dict):
+                    return _write_check(True, "Signed in")
+            except ValueError:
+                pass
+        if any(w in err for w in ("playlist does not exist", "unviewable", "private", "not available",
+                                  "does not exist")):
+            return _write_check(False, COOKIE_BAD)       # WL is always visible to its owner
+        return _write_check(None, "Couldn't tell (" + (err.strip().splitlines() or ["no answer"])[-1][:120] + ")")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def check_cookies_async():
+    def go():
+        try:
+            check_cookies()
+        finally:
+            connection.close()
+    threading.Thread(target=go, daemon=True).start()
+
+
+def cookies_ok_for_job():
+    """None if downloading may go ahead, else the message to refuse with.
+    Reuses a passing result for a few minutes so back-to-back jobs don't each
+    pay for a probe."""
+    if not os.path.isfile(cookie_path()):
+        return "YouTube cookies are required. Paste them first."
+    st = cookie_status()
+    if st.get("expired"):
+        return COOKIE_BAD
+    c = st.get("check")
+    if not c or time.time() - c.get("checked", 0) > CHECK_FRESH or c.get("ok") is None:
+        c = check_cookies()
+    return COOKIE_BAD if c and c.get("ok") is False else None
 
 
 # ---- yt-dlp availability / command building --------------------------------
@@ -503,6 +636,8 @@ def _count_lines(path):
 def hint_for(text):
     """Turn a yt-dlp error into advice the UI can show."""
     t = (text or "").lower()
+    if "no longer valid" in t:
+        return COOKIE_BAD
     if "not a bot" in t or "sign in" in t or ("cookies" in t and "invalid" in t):
         return "YouTube wants a sign-in. Paste fresh cookies above."
     if "private" in t or "members-only" in t or "join this channel" in t:
@@ -638,6 +773,8 @@ def start_job(source, ids):
         return None, "yt-dlp isn't installed on the server (pip install yt-dlp)."
     if not os.path.isfile(cookie_path()):
         return None, "YouTube cookies are required for downloads. Paste them in the box at the top first."
+    if cookie_status().get("expired"):
+        return None, COOKIE_BAD
     problem = runtime_problem()
     if problem:   # would fail every video at the challenge step -- say so up front
         return None, problem
@@ -699,10 +836,17 @@ def _run_job_inner(job_id):
             status=DownloadJob.FAILED, finished=timezone.now(),
             summary="YouTube cookies are required. Paste them first.")
         return
+    bad = cookies_ok_for_job()
+    if bad:     # dead cookies would quietly download as a logged-out visitor
+        DownloadJob.objects.filter(pk=job_id).update(
+            status=DownloadJob.FAILED, finished=timezone.now(),
+            summary=(bad + " Nothing was downloaded.")[:250])
+        return
     cmd, before, after, batch = build_cmd(ids, out_dir, archive, cookie_path())
 
     log, last_flush = [], 0.0
     cur_title, cur_pct = "", 0
+    cookie_dead = False
 
     def flush(force=False):
         nonlocal last_flush
@@ -740,6 +884,11 @@ def _run_job_inner(job_id):
                 cur_title = parts[3]
         elif line:
             log.append(line[:300])
+            if "no longer valid" in line.lower() and not cookie_dead:
+                # yt-dlp would carry on without the login: stop it instead.
+                cookie_dead = True
+                _write_check(False, COOKIE_BAD)
+                _kill_tree(proc.pid)
         flush()
     proc.wait()
 
@@ -752,7 +901,10 @@ def _run_job_inner(job_id):
     ok = len(succeeded & set(ids))
     fail = len(ids) - ok            # unavailable items never reach the "attempted" stage
     tail = "\n".join(log[-40:])
-    if fail == 0:
+    if cookie_dead:
+        status = DownloadJob.FAILED
+        summary = f"{COOKIE_BAD} ({ok} downloaded before it stopped.)"
+    elif fail == 0:
         status, summary = DownloadJob.DONE, f"{ok} downloaded"
     elif ok == 0:
         status = DownloadJob.FAILED

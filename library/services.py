@@ -1181,3 +1181,142 @@ def reset_library():
     n = Video.objects.count()
     Video.objects.all().delete()
     return n
+
+
+# ---- Seek-bar storyboard ------------------------------------------------------
+# One sprite sheet of up to 100 tiny frames per video, so hovering the timeline
+# can show a picture immediately instead of waiting for an ffmpeg run per step.
+
+SB_TILE_W = 160
+SB_COLS = 10
+SB_MAX_TILES = 100
+SB_LOCK_STALE = 300     # seconds before a build lock is considered abandoned
+
+
+def _sb_paths(video):
+    d = os.path.join(settings.THUMBNAIL_DIR, "frames")
+    return (os.path.join(d, f"sb_{video.id}.jpg"), os.path.join(d, f"sb_{video.id}.json"),
+            os.path.join(d, f"sb_{video.id}.lock"))
+
+
+def _video_source(video):
+    if (video.convert_status == Video.CONVERT_DONE and video.converted_path
+            and os.path.exists(video.converted_path)):
+        return video.converted_path
+    return video.file_path
+
+
+def storyboard_meta(video):
+    """The sprite's metadata if a current one exists (source file unchanged),
+    else None."""
+    _, meta_p, _ = _sb_paths(video)
+    try:
+        with open(meta_p, encoding="utf-8") as f:
+            meta = json.load(f)
+        src = _video_source(video)
+        if meta.get("src_mtime") != os.path.getmtime(src):
+            return None
+        if not os.path.exists(_sb_paths(video)[0]):
+            return None
+        return meta
+    except (OSError, ValueError):
+        return None
+
+
+def build_storyboard(video):
+    """Build the sprite (blocking). Returns its metadata, or None on failure.
+    Single-flight across threads *and* gunicorn workers via an O_EXCL lock."""
+    import math
+    import shutil
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+
+    dur = video.duration_seconds or 0
+    src = _video_source(video)
+    if dur < 4 or not os.path.exists(src):
+        return None
+    img_p, meta_p, lock_p = _sb_paths(video)
+    os.makedirs(os.path.dirname(img_p), exist_ok=True)
+    try:
+        if time_since(lock_p) > SB_LOCK_STALE:
+            os.remove(lock_p)
+    except OSError:
+        pass
+    try:
+        os.close(os.open(lock_p, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        return None
+    tmp = tempfile.mkdtemp(prefix="sb_", dir=os.path.dirname(img_p))
+    try:
+        interval = max(2, math.ceil(dur / SB_MAX_TILES))
+        count = max(1, int(dur // interval))
+        h = 2 * round(SB_TILE_W * ((video.height or 9) / (video.width or 16)) / 2)
+        h = max(2, min(h, 4 * SB_TILE_W))
+
+        def grab(i):
+            out = os.path.join(tmp, f"t{i:03d}.jpg")
+            code, _, _ = _run([
+                "ffmpeg", "-y", "-skip_frame", "nokey", "-ss", str(i * interval), "-i", src,
+                "-frames:v", "1", "-vf", f"scale={SB_TILE_W}:{h}", "-q:v", "7", out])
+            return out if code == 0 and os.path.exists(out) else None
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            tiles = list(ex.map(grab, range(count)))
+        if not any(tiles):
+            return None
+        last = next(t for t in tiles if t)
+        for i, t in enumerate(tiles):           # a failed tile repeats its neighbour
+            if t:
+                last = t
+            else:
+                shutil.copyfile(last, os.path.join(tmp, f"t{i:03d}.jpg"))
+        rows = math.ceil(count / SB_COLS)
+        sheet = os.path.join(tmp, "sheet.jpg")
+        code, _, _ = _run(["ffmpeg", "-y", "-framerate", "1", "-i", os.path.join(tmp, "t%03d.jpg"),
+                           "-vf", f"tile={SB_COLS}x{rows}", "-frames:v", "1", "-q:v", "6", sheet])
+        # ffmpeg numbers image sequences from 0 only with -start_number
+        if code != 0 or not os.path.exists(sheet):
+            code, _, _ = _run(["ffmpeg", "-y", "-framerate", "1", "-start_number", "0",
+                               "-i", os.path.join(tmp, "t%03d.jpg"),
+                               "-vf", f"tile={SB_COLS}x{rows}", "-frames:v", "1", "-q:v", "6", sheet])
+        if code != 0 or not os.path.exists(sheet):
+            return None
+        os.replace(sheet, img_p)
+        meta = {"interval": interval, "count": count, "cols": SB_COLS, "w": SB_TILE_W, "h": h,
+                "src_mtime": os.path.getmtime(src)}
+        with open(meta_p, "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        return meta
+    except Exception:
+        logger.exception("storyboard build failed for video %s", video.id)
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            os.remove(lock_p)
+        except OSError:
+            pass
+
+
+def time_since(path):
+    import time
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def start_storyboard(video_id):
+    """Kick off a background build; no-op while one is running."""
+    import threading
+    from django.db import connection
+
+    def go():
+        try:
+            v = Video.objects.filter(pk=video_id).first()
+            if v:
+                build_storyboard(v)
+        finally:
+            connection.close()
+
+    threading.Thread(target=go, daemon=True).start()

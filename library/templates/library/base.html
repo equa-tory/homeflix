@@ -393,6 +393,11 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
    into any focused input under 16px even with user-scalable=no on some versions. */
 @media(max-width:700px){.ph-search{width:70px; font-size:16px}.ph-search:focus{width:140px}}
 #player.ph-mini .ph-search{display:none}
+.ph-searchform{margin:0; display:flex; flex-shrink:0}
+/* While typing, the search box takes the whole bar (title steps aside). */
+.ph-topbar:has(.ph-search:focus) .ph-hdr-title{display:none}
+.ph-topbar:has(.ph-search:focus) .ph-searchform{flex:1}
+.ph-topbar:has(.ph-search:focus) .ph-search{width:100%}
 
 /* stage = the player box wrapping the ONE video */
 .ph-stage-wrap{max-width:none;margin:0;width:100%;position:relative}
@@ -521,10 +526,18 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 /* Force video repaint context on older TV WebKit */
 #player.ph-expanded .ph-stage video{transform:translateZ(0);-webkit-transform:translateZ(0)}
 
-/* Shorts slide-transition overlay frames (see shortsSlide() JS) -- static
-   thumbnails, siblings of <video>, never the .ph-stage box itself. */
-.shorts-trans-frame{position:absolute; inset:0; background-size:cover;
-  background-position:center; z-index:4; pointer-events:none; background-color:#000}
+/* Shorts feed: the previous/next videos are preloaded in two extra <video>
+   elements (siblings of #theVideo, never the .ph-stage box itself -- that is
+   the fullscreen target) parked one stage-height above/below. Dragging moves
+   all three together (see the shorts drag code in PLAYER). */
+.ph-stage video.sh-nb{display:none; position:absolute; inset:0; pointer-events:none;
+  transform:translate3d(0,100%,0); will-change:transform}
+.ph-stage video#phNbPrev{transform:translate3d(0,-100%,0)}
+#player.ph-expanded.ph-shorts .ph-stage video.sh-nb{display:block}
+#player.ph-expanded.ph-shorts .ph-stage{touch-action:none}
+.ph-stage.sh-drag .ctrls, .ph-stage.sh-drag .ripple, .ph-stage.sh-drag .ph-subbar{
+  opacity:0!important; pointer-events:none!important}
+.ph-stage.sh-drag ~ #phShortsRail{opacity:0; pointer-events:none}
 
 /* ripple */
 .ripple{position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
@@ -541,6 +554,12 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .ph-stage.show-ctrls .ripple .icon, .ph-stage.paused .ripple .icon{pointer-events:auto; cursor:pointer}
 .ph-stage.force-hide-ctrls .ripple{opacity:0}
 .ph-stage.force-hide-ctrls .ripple .icon{pointer-events:none}
+/* A video that is still loading is "paused" only technically: don't pin the
+   controls / big icon open over it (that flashed on every video start). A tap
+   or a real mouse move (show-ctrls) still brings them up. */
+.ph-stage.loading:not(.show-ctrls) .ctrls, .ph-stage.loading:not(.show-ctrls) .ripple{
+  opacity:0!important; pointer-events:none!important}
+.ph-stage.loading:not(.show-ctrls) .ph-subbar{bottom:20px}
 
 /* big controls (expanded only) */
 .ctrls{position:absolute; left:0; right:0; bottom:0; padding:8px 14px 14px;
@@ -577,7 +596,10 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .seek-preview{position:absolute; bottom:calc(100% + 10px); transform:translateX(-50%);
   width:160px; background:#111; border:1px solid #555; border-radius:7px;
   overflow:hidden; pointer-events:none; display:none; box-shadow:0 4px 20px #000a}
-.seek-preview img{width:160px; height:90px; object-fit:cover; display:block; background:#222}
+.sp-frame{position:relative; width:160px; height:90px; background:#222; overflow:hidden}
+#phSPSpr{position:absolute; inset:0; background-repeat:no-repeat; display:none}
+.seek-preview img{position:absolute; inset:0; width:160px; height:90px; object-fit:cover; display:block; opacity:0}
+.seek-preview img.ready{opacity:1}
 .seek-preview .sptime{display:block; color:#fff; font-size:12px;
   font-variant-numeric:tabular-nums; text-align:center; padding:4px 0; background:#000a}
 
@@ -996,13 +1018,18 @@ html.player-locked{overflow:hidden}
     <div class="ph-topbar">
       <button class="ph-back" id="phBack" title="Close">‹</button>
       <span class="ph-hdr-title" id="phHdr"></span>
-      <input type="search" id="phSearch" class="ph-search" placeholder="Search…">
+      <form id="phSearchForm" class="ph-searchform" role="search" action="/library/" method="get">
+        <input type="search" id="phSearch" name="q" class="ph-search" placeholder="Search…"
+               enterkeyhint="search" autocomplete="off" autocapitalize="off">
+      </form>
       <button class="ph-min-btn" id="phMinBtn" title="Minimize">▾</button>
     </div>
 
     <div class="ph-stage-wrap" id="phStageWrap">
       <div class="ph-stage paused" id="phStage" tabindex="0">
         <video id="theVideo" playsinline preload="metadata"></video>
+        <video id="phNbPrev" class="sh-nb" muted playsinline preload="auto"></video>
+        <video id="phNbNext" class="sh-nb" muted playsinline preload="auto"></video>
         <div class="ph-prep" id="phPrep"><div class="ph-spinner"></div><span>Preparing…</span>
           <button type="button" class="ph-prep-hide" id="phPrepHide">Hide</button></div>
         <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">▶</span></div>
@@ -1013,7 +1040,8 @@ html.player-locked{overflow:hidden}
             <div class="played" id="phPlayed"></div>
             <div class="knob" id="phKnob"></div>
             <div class="seek-preview" id="phSP">
-              <img id="phSPImg" src="" alt=""><span class="sptime" id="phSPTime">0:00</span>
+              <div class="sp-frame"><div id="phSPSpr"></div><img id="phSPImg" src="" alt=""></div>
+              <span class="sptime" id="phSPTime">0:00</span>
             </div>
           </div>
           <div class="btn-row">
@@ -1877,19 +1905,36 @@ const PAGE_INIT={
       return(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0');};
     const running=()=>!!(job&&job.running);
 
+    // Saved cookies that no longer work: expired (login cookie past its date)
+    // or the server's last live test says YouTube treats them as signed out.
+    function cookiesBad(){
+      const c=tools.cookies||{};
+      return !!(c.set&&(c.expired||(c.check&&c.check.ok===false)));
+    }
+    const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<1?'just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago';};
     function renderWarn(){
       const w=[];
+      if(cookiesBad())w.push('⚠ <b>Your YouTube cookies have expired or stopped working.</b> Downloads are switched off until you paste fresh ones (see the cookies box below).');
       if(!tools.installed)w.push('yt-dlp is not installed on the server. Run <code>pip install -r requirements.txt</code> and restart HomeFlix.');
       else if(!(tools.runtime&&tools.runtime.supported))w.push(esc((tools.runtime&&tools.runtime.problem)||'No JavaScript runtime found.'));
       $('#dlWarn').innerHTML=w.map(t=>`<div class="banner">${t}</div>`).join('');
     }
     function renderCookies(){
       const c=tools.cookies||{}, badge=$('#dlCookieBadge');
-      $('#dlCookieCard').classList.toggle('dl-nocookie',!c.set);
+      $('#dlCookieCard').classList.toggle('dl-nocookie',!c.set||cookiesBad());
       if(!c.set){badge.textContent='not set — recommended';badge.className='dl-badge bad';}
+      else if(cookiesBad()){badge.textContent=c.expired?'⚠ expired — paste fresh ones':'⚠ not working — paste fresh ones';badge.className='dl-badge bad';}
       else if(c.has_login===false){badge.textContent='saved ('+c.count+') — but no login cookie found';badge.className='dl-badge bad';}
-      else{badge.textContent='✓ set · '+c.count+' cookies · saved '+new Date(c.saved*1000).toLocaleDateString();badge.className='dl-badge';}
+      else{
+        let t='✓ set · '+c.count+' cookies · saved '+new Date(c.saved*1000).toLocaleDateString();
+        if(c.check&&c.check.ok===true)t='✓ working (checked '+ago(c.check.checked)+') · saved '+new Date(c.saved*1000).toLocaleDateString();
+        else if(c.check&&c.check.ok===null)t+=' · couldn\'t test just now';
+        if(c.login_expires){const days=Math.round((c.login_expires-Date.now()/1000)/86400);
+          if(days<=7)t+=' · login expires in '+Math.max(days,0)+' d';}
+        badge.textContent=t;badge.className='dl-badge'+(c.check&&c.check.ok===true?'':'');
+      }
       $('#dlCookieClear').hidden=!c.set;
+      $('#dlCookieTest').hidden=!c.set;
     }
     function renderTools(){
       const rt=tools.runtime||{};
@@ -1943,9 +1988,11 @@ const PAGE_INIT={
       bar.classList.toggle('active',on);
       document.body.classList.toggle('dl-bar-on',on);
       $('#dlSelCount').textContent=sel.size+' selected';
-      $('#dlStart').disabled=!sel.size||running()||!tools.installed||!hasCookies||!rtOk;
+      const ckBad=cookiesBad();
+      $('#dlStart').disabled=!sel.size||running()||!tools.installed||!hasCookies||ckBad||!rtOk;
       const info=$('#dlSelInfo');let bad=false,t='';
       if(!hasCookies){t='Paste your YouTube cookies above to enable downloading';bad=true;}
+      else if(ckBad){t='⚠ Cookies expired / not working — paste fresh ones above';bad=true;}
       else if(!rtOk){t='Install Deno first (see the warning at the top)';bad=true;}
       else{
         const parts=[];
@@ -2045,8 +2092,29 @@ const PAGE_INIT={
       say(m,'Saving…');
       post('/downloads/cookies/',{text}).then(j=>{
         if(!j.ok){say(m,j.error||'Not saved',true);return;}
-        $('#dlCookieText').value='';tools.cookies=j.cookies;renderCookies();updateBar();say(m,'Saved ✓');
+        $('#dlCookieText').value='';tools.cookies=j.cookies;renderCookies();renderWarn();updateBar();say(m,'Saved ✓ — testing them…');
+        watchCookieCheck(Date.now(),m);
       }).catch(e=>fail(m,e));
+    };
+    // The server tests the cookies in the background (a signed-in-only request
+    // to YouTube); poll until a result newer than `since` shows up.
+    let ckTimer=null;
+    function watchCookieCheck(since,m,n=0){
+      clearTimeout(ckTimer);
+      ckTimer=setTimeout(()=>{
+        getJSON('/downloads/tools/').then(j=>{
+          tools=j;renderWarn();renderCookies();updateBar();
+          const c=(tools.cookies||{}).check;
+          if(c&&c.checked*1000>=since-2000){
+            say(m,c.ok===true?'Cookies work ✓':c.ok===false?'These cookies don\'t work — they look expired or signed out':'Couldn\'t test them right now',c.ok===false);
+          }else if(n<14)watchCookieCheck(since,m,n+1);
+          else say(m,'');
+        }).catch(()=>{});
+      },n?2500:1500);
+    }
+    $('#dlCookieTest').onclick=()=>{
+      const m=$('#dlCookieMsg');say(m,'Testing…');
+      post('/downloads/cookies/check/').then(()=>watchCookieCheck(Date.now(),m)).catch(e=>fail(m,e));
     };
     $('#dlCookieClear').onclick=()=>{
       if(!confirm('Remove the saved YouTube cookies from the server?'))return;
@@ -2300,6 +2368,9 @@ const PLAYER=(function(){
   const SP    = document.getElementById('phSP');
   const SPIMG = document.getElementById('phSPImg');
   const SPTM  = document.getElementById('phSPTime');
+  const SPSPR = document.getElementById('phSPSpr');
+  const NB_PREV = document.getElementById('phNbPrev');
+  const NB_NEXT = document.getElementById('phNbNext');
   const INFO  = document.getElementById('phInfo');
   const SPIN  = document.getElementById('phSpin');
   const MBAR_T= document.getElementById('phMiniTitle');
@@ -2332,6 +2403,8 @@ const PLAYER=(function(){
 
   const SKEY='homeflix_player';
   let d=null, notes=[], autoplay=false, repeat='off', shuffle=false, prevVideoId=null, lastSave=0, pushed=false, ignorePop=false;
+  let shuffleNext=null, handoff=null;
+  const SD={on:false,locked:false,busy:false,x0:0,y0:0,dy:0,h:1,lastY:0,lastT:0,v:0};   // shorts drag state
   // Queue-aware prev/next: everything that used to read d.prev_id/d.next_id
   // directly now goes through these, so "repeat all" (wrap to the other end
   // of the current queue) and "shuffle" (random other member of the queue)
@@ -2343,8 +2416,11 @@ const PLAYER=(function(){
     if(!d)return null;
     const q=d.queue_ids||[];
     if(shuffle&&q.length>1){
-      let n;do{n=q[Math.floor(Math.random()*q.length)];}while(n===d.id&&q.length>1);
-      return n;
+      // One pick per loaded video, so the preloaded "next" is the one you land on.
+      if(shuffleNext==null||shuffleNext===d.id){
+        do{shuffleNext=q[Math.floor(Math.random()*q.length)];}while(shuffleNext===d.id&&q.length>1);
+      }
+      return shuffleNext;
     }
     if(d.next_id)return d.next_id;
     if(repeat==='all'&&q.length)return q[0];
@@ -2388,6 +2464,7 @@ const PLAYER=(function(){
     EL.classList.add('ph-'+s);
     EL.setAttribute('aria-hidden', s==='hidden'?'true':'false');
     document.documentElement.classList.toggle('player-locked', s==='expanded');
+    if(s!=='expanded'&&typeof nbClearAll==='function')nbClearAll();
     if(s!=='hidden'){EL.style.left='';EL.style.top='';EL.style.right='';EL.style.bottom='';}
     // mini corner-resize sets inline width on EL; must clear it leaving mini or
     // expanded/hidden inherit a leftover narrow width -> tall/portrait-looking box.
@@ -2438,9 +2515,21 @@ const PLAYER=(function(){
   function clearPersist(){try{sessionStorage.removeItem(SKEY);}catch{}}
 
   /* ---- load source onto the ONE video element ---- */
+  // .loading keeps the control overlay / big icon from popping up over a video
+  // that is merely starting (see the CSS by .ph-stage.loading). Cleared once
+  // frames flow, or at once when nothing is going to autoplay.
+  let loadingT=null;
+  function setLoading(on,play){
+    clearTimeout(loadingT);
+    STAGE.classList.toggle('loading',on);
+    if(on)loadingT=setTimeout(()=>STAGE.classList.remove('loading'),8000);
+  }
+  V.addEventListener('playing',()=>setLoading(false));
+  V.addEventListener('error',()=>setLoading(false));
   function loadSource(src,pos,play){
     V.pause(); V.removeAttribute('src'); V.load();
     STAGE.classList.add('paused'); PLAY.textContent='▶';
+    setLoading(!!play);
     V.src=src;
     V.addEventListener('loadedmetadata',function h(){
       V.removeEventListener('loadedmetadata',h);
@@ -2448,12 +2537,13 @@ const PLAYER=(function(){
       V.style.display='none'; void V.offsetHeight; V.style.display='';
       if(pos>2){
         try{V.currentTime=pos;}catch(e){}
-        if(play){const go=()=>V.play().catch(()=>{});
+        if(play){const go=()=>V.play().catch(()=>setLoading(false));
           V.addEventListener('seeked',go,{once:true});
           setTimeout(go,2000);}
       }else if(play){
         V.play().catch(()=>{
-          V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>{});},{once:true});
+          setLoading(false);   // autoplay blocked: the paused UI is needed to press play
+          V.addEventListener('canplay',function p(){V.removeEventListener('canplay',p);V.play().catch(()=>setLoading(false));},{once:true});
         });
       }
     },{once:true});
@@ -2484,6 +2574,7 @@ const PLAYER=(function(){
     hlsPk=pk;
     V.pause();V.removeAttribute('src');V.load();
     STAGE.classList.add('paused');PLAY.textContent='▶';
+    setLoading(!!play);
     // Show a "Preparing…" overlay over the video until playback actually
     // starts — the live transcode needs a moment to build a buffer lead.
     PREP.style.display='flex';
@@ -2762,7 +2853,8 @@ const PLAYER=(function(){
   /* ---- apply data (after fetch or SSR) ---- */
   function applyData(data,play){
     if(d)prevVideoId=d.id; // track where we came from for shuffle prev
-    d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0; recoverLog=[];
+    d=data; notes=data.notes||[]; autoplay=data.autoplay; lastSave=0; recoverLog=[]; shuffleNext=null;
+    sbReset();
     repeat=data.repeat||'off'; shuffle=!!data.shuffle;
     // Server value (per-account, via UserPref) wins over whatever this
     // browser had cached in localStorage -- that's what makes the seek step
@@ -2781,7 +2873,7 @@ const PLAYER=(function(){
     // ph-shorts: portrait vertical-feed player (swipe/wheel/arrow next-prev).
     // Now enabled on desktop too (was phone-only) -- kept as its own mode,
     // layered as siblings inside .ph-stage / driven entirely by CSS + the
-    // shortsSlide() transition below, so it never touches .ph-stage's own
+    // commitSlide() feed below, so it never touches .ph-stage's own
     // transform (that's goFull()'s fullscreen target -- see the comment
     // there for why that separation matters).
     EL.classList.toggle('ph-shorts', data.is_portrait===true);
@@ -2815,6 +2907,10 @@ const PLAYER=(function(){
     setupMediaSession(data);
     SPIN.style.display='none'; renderInfo(data); setupConversion(data);
     renderShortsRail(data);
+    preloadNeighbours();
+    // Hover devices get the seek-bar storyboard ready ahead of the first hover.
+    if(!data.is_portrait&&window.matchMedia&&matchMedia('(hover:hover)').matches){
+      const id=data.id;setTimeout(()=>{if(d&&d.id===id)sbLoad();},1500);}
   }
 
   function fetchApply(id,play,startPos,qp){
@@ -2908,10 +3004,17 @@ const PLAYER=(function(){
         `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
           `<span id="phConvText" class="sub"></span>`+
           `<button class="btn ghost" id="phConvCancel" style="margin-left:8px">✕ Cancel</button></div></div>`:'')+
+      `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
+        `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+
+        `<input type="text" id="phNoteIn" placeholder="Note at current time…" autocomplete="off">`+
+        `<button class="btn ghost" id="phNoteAdd">Add</button></div>`+
+        `<div class="note-list" id="phNoteList">${notesHtml}</div></div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
       `<details class="ph-utils"><summary class="nav-item" tabindex="0">🛠 Tools <span class="sub">file path${data.is_owner?' · thumbnail · rename':''}</span></summary>`+
       `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
+      (data.is_owner&&data.is_vertical?`<div class="thumb-tool"><div class="row-inline"><strong>Shorts</strong>`+
+        `<button class="btn ghost" id="phNotShort">${data.is_portrait?'▭ Not a short — play as a normal video':'▯ Mark as a short again'}</button></div></div>`:'')+
       (data.is_owner?`<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
@@ -2927,11 +3030,6 @@ const PLAYER=(function(){
         `<div class="sub" id="phRenameStatus" style="margin-top:6px;min-height:14px"></div></div>`:'')+
       `</details>`+
       (data.description?`<div class="desc">${esc(data.description)}</div>`:'')+
-      `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
-        `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+
-        `<input type="text" id="phNoteIn" placeholder="Note at current time…" autocomplete="off">`+
-        `<button class="btn ghost" id="phNoteAdd">Add</button></div>`+
-        `<div class="note-list" id="phNoteList">${notesHtml}</div></div>`+
       (recs?`<div class="rec-section"><h2>Up next</h2><div class="grid">${recs}</div></div>`:'')+
       `</div>`;
     bindInfo(data); renderNoteDots();
@@ -3013,6 +3111,8 @@ const PLAYER=(function(){
         post(data.playlist_url,{playlist:plSel.value}).then(()=>{plBtn.textContent='✓ Added';setTimeout(()=>plBtn.textContent='Add',1200);});
       }
     };
+    const nsInfo=document.getElementById('phNotShort');
+    if(nsInfo)nsInfo.onclick=e=>{e.stopPropagation();toggleNotShort(data);};
     const thBtn=document.getElementById('phThumbBtn');
     if(thBtn)thBtn.onclick=()=>{const p=document.getElementById('phThumbPct').value;
       post(data.regen_thumb_url,{percent:p}).then(()=>{thBtn.textContent='✓';setTimeout(()=>thBtn.textContent='Regenerate',1200);});};
@@ -3096,6 +3196,7 @@ const PLAYER=(function(){
               `<button class="btn ghost" id="railDeleteEntryGo" style="width:100%;margin-bottom:6px">Remove from library (keep file)</button>`+
               `<button class="btn" id="railDeleteFileGo" style="width:100%;background:#c0392b">Delete file permanently</button>`+
             `</div>`+
+            (data.is_vertical?`<button class="nav-item" id="railNotShortBtn">▭ Not a short (normal video)</button>`:'')+
             (data.needs_convert?`<button class="nav-item" id="railConvertBtn">⇄ Convert to MP4</button>`:'')+
             `<hr>`
           :'')+
@@ -3157,6 +3258,8 @@ const PLAYER=(function(){
     if(delFile)delFile.onclick=e=>{e.stopPropagation();
       if(!confirm('Delete this file from disk permanently? This cannot be undone.'))return;
       post(data.delete_url,{mode:'file'}).then(()=>close());};
+    const nsBtn=document.getElementById('railNotShortBtn');
+    if(nsBtn)nsBtn.onclick=e=>{e.stopPropagation();toggleNotShort(data);};
     const convBtn=document.getElementById('railConvertBtn');
     if(convBtn)convBtn.onclick=e=>{e.stopPropagation();
       post(data.convert_url).then(()=>{convBtn.textContent='Converting…';convBtn.disabled=true;});};
@@ -3188,6 +3291,19 @@ const PLAYER=(function(){
     }
   }
 
+  // Owner override for a vertical video: play it as a normal (landscape-style)
+  // video, or put it back in the shorts feed. The server decides what that
+  // means for resume/Shorts tab; here we just re-skin the player.
+  function toggleNotShort(data){
+    return post(data.not_short_url).then(r=>{
+      if(!r||!r.ok)return;
+      data.not_short=r.not_short; data.is_portrait=r.is_portrait; data.remember_position=r.remember_position;
+      EL.classList.toggle('ph-shorts',data.is_portrait===true);
+      if(state()==='mini'){applyMiniWidth();keepMiniInViewport();}
+      renderInfo(data); renderShortsRail(data); preloadNeighbours();
+    });
+  }
+
   function bindNote(el){
     el.querySelector('.note-ts-btn').onclick=e=>{seekTo(parseFloat(e.currentTarget.dataset.t));V.play().catch(()=>{});};
     el.querySelector('.note-del').onclick=()=>post(el.querySelector('.note-del').dataset.url).then(r=>{
@@ -3206,7 +3322,11 @@ const PLAYER=(function(){
   }
 
   /* ---- player controls ---- */
-  function toggle(){V.paused?V.play():V.pause();}
+  function toggle(){
+    const wasPaused=V.paused;
+    if(wasPaused)V.play().catch(()=>{}); else V.pause();
+    ripple(wasPaused?'⏸':'▶');
+  }
   PLAY.onclick=e=>{e.stopPropagation();toggle();};
   MBAR_P.onclick=e=>{e.stopPropagation();toggle();};
   // #phRIcon (the center icon) is the one dedicated on-video tap target for
@@ -3232,8 +3352,10 @@ const PLAYER=(function(){
   // button will do NEXT -- same convention PLAY/MBAR_P use one line earlier,
   // not "what action was just taken" (that was backwards: showed ▶ while
   // playing, so tapping it to pause looked like a play button).
-  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';ripple('⏸');});
-  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';ripple('▶');savePos();});
+  // Icons follow the element's state; the big flash (ripple) is only for the
+  // user's own play/pause (toggle()), not for every video that merely starts.
+  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';RICON.textContent='⏸';});
+  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';RICON.textContent='▶';savePos();});
 
   // Mouse vs. touch need different tap semantics below (desktop click still
   // toggles play; phone tap toggles the overlay -- see item 3).
@@ -3275,7 +3397,7 @@ const PLAYER=(function(){
   });
 
   // Fullscreen target is STAGE (.ph-stage) itself -- keep it that way. Shorts
-  // mode's slide transition (shortsSlide) intentionally only animates its own
+  // mode's slide (commitSlide) intentionally only animates #theVideo and its
   // sibling overlay divs, never STAGE's transform/box, so it can't interfere
   // with this regardless of which mode is active when the user hits fullscreen.
   function goFull(){
@@ -3304,7 +3426,7 @@ const PLAYER=(function(){
   V.addEventListener('loadedmetadata',()=>{DURLB.textContent=fmt(totalDur());renderNoteDots();});
   V.addEventListener('progress',()=>{const dur=totalDur();if(V.buffered.length&&dur)
     BUF.style.width=(V.buffered.end(V.buffered.length-1)/dur*100)+'%';});
-  V.addEventListener('ended',()=>{savePos();const nx=nextId();if(autoplay&&nx)setTimeout(()=>navigate(nx,true),800);});
+  V.addEventListener('ended',()=>{savePos();const nx=nextId();if(autoplay&&nx)setTimeout(()=>navigateShorts(nx,1),800);});
   // Diagnostic only. MediaError codes: 1=ABORTED, 2=NETWORK, 3=DECODE,
   // 4=SRC_NOT_SUPPORTED.
   V.addEventListener('error',()=>{
@@ -3355,12 +3477,52 @@ const PLAYER=(function(){
   function frac(e){const r=BAR.getBoundingClientRect(),cx=e.touches?e.touches[0].clientX:e.clientX;
     return Math.max(0,Math.min(1,(cx-r.left)/r.width));}
   function seekFrac(f){const dur=totalDur();if(dur)seekTo(Math.max(0,Math.min(dur,f*dur)));}
-  let spTimer=null,lastSnap=-1;
+  /* Hover preview. Two layers: a per-video storyboard sprite (one small image
+     of ~100 frames, built once by the server -> instant, any position), and the
+     exact 5 s frame that replaces it a moment after the pointer rests. Without
+     a storyboard (not built yet / failed) only the exact frames are used, and
+     the previous one stays up until the next has loaded, so it's never blank. */
+  let spTimer=null,lastSnap=-1,SB=null,sbId=null,sbTimer=null,sbTries=0;
+  function sbReset(){SB=null;sbId=null;sbTries=0;clearTimeout(sbTimer);
+    if(SPSPR){SPSPR.style.display='none';}if(SPIMG)SPIMG.classList.remove('ready');}
+  function sbLoad(){
+    if(!d||d.is_portrait||sbId===d.id)return;
+    const id=sbId=d.id;
+    (function poll(){
+      fetch('/storyboard/'+id+'/').then(r=>r.json()).then(m=>{
+        if(!d||d.id!==id)return;
+        if(m.pending){if(++sbTries<15)sbTimer=setTimeout(poll,2000);return;}
+        if(m.none||!m.url)return;
+        const im=new Image();im.onload=()=>{if(d&&d.id===id)SB=Object.assign(m,{ready:true});};im.src=m.url;
+      }).catch(()=>{});
+    })();
+  }
+  function paintSprite(t){
+    if(!SB||!SPSPR)return false;
+    const i=Math.max(0,Math.min(SB.count-1,Math.floor(t/SB.interval)));
+    const col=i%SB.cols,row=Math.floor(i/SB.cols);
+    // tiles keep the video's aspect; centre them in the 160x90 frame
+    SPSPR.style.backgroundImage='url('+SB.url+')';
+    SPSPR.style.backgroundSize=(SB.cols*SB.w)+'px auto';
+    SPSPR.style.backgroundPosition=(-col*SB.w)+'px '+(-row*SB.h+(90-SB.h)/2)+'px';
+    SPSPR.style.display='block';
+    return true;
+  }
+  function loadExact(snap){
+    const id=d.id,url=d.frame_url_base+snap+'/';
+    const im=new Image();
+    im.onload=()=>{if(!d||d.id!==id||lastSnap!==snap)return;SPIMG.src=url;SPIMG.classList.add('ready');};
+    im.src=url;
+  }
   function showSP(f){const dur=totalDur();if(!dur||!d)return;
+    if(!SB&&sbId!==d.id)sbLoad();
     const t=Math.max(0,Math.min(Math.floor(dur),Math.round(f*dur)));
     SP.style.left=Math.max(8,Math.min(92,f*100))+'%';SPTM.textContent=fmt(t);SP.style.display='block';
-    const snap=Math.round(t/5)*5;if(snap!==lastSnap){lastSnap=snap;clearTimeout(spTimer);
-      spTimer=setTimeout(()=>{SPIMG.src=d.frame_url_base+snap+'/';},90);}}
+    const hasSprite=paintSprite(t);
+    const snap=Math.round(t/5)*5;
+    if(snap!==lastSnap){lastSnap=snap;clearTimeout(spTimer);
+      if(hasSprite)SPIMG.classList.remove('ready');
+      spTimer=setTimeout(()=>loadExact(snap),hasSprite?180:60);}}
   function hideSP(){SP.style.display='none';clearTimeout(spTimer);lastSnap=-1;}
   BAR.addEventListener('click',e=>{e.stopPropagation();seekFrac(frac(e));});
   let barDrag=false;
@@ -3378,10 +3540,24 @@ const PLAYER=(function(){
   function volIcon(v,m){return(m||v===0)?'🔇':v<.5?'🔉':'🔊';}
   function syncVol(){const vol=V.muted?0:V.volume;MUTE.textContent=volIcon(V.volume,V.muted);
     if(VOL){VOL.value=vol;VOL.style.setProperty('--v',(vol*100)+'%');}}
-  MUTE.onclick=e=>{e.stopPropagation();V.muted=!V.muted;syncVol();};
+  MUTE.onclick=e=>{e.stopPropagation();
+    if(V.muted&&V.volume===0)V.volume=.5;     // unmuting a zero-volume player must be audible
+    V.muted=!V.muted;syncVol();};
   if(VOL){VOL.addEventListener('input',e=>{e.stopPropagation();V.volume=parseFloat(VOL.value);V.muted=V.volume===0;syncVol();});
     VOL.addEventListener('pointerdown',e=>e.stopPropagation());}
-  V.addEventListener('volumechange',syncVol);
+  // Volume + mute survive reloads and apply to every video (this device only).
+  const VOLKEY='homeflix_volume';
+  try{
+    const sv=JSON.parse(localStorage.getItem(VOLKEY)||'null');
+    if(sv&&isFinite(sv.v)){V.volume=Math.max(0,Math.min(1,+sv.v));V.muted=!!sv.muted;}
+  }catch{}
+  syncVol();
+  let volSaveT=null;
+  V.addEventListener('volumechange',()=>{
+    syncVol();
+    clearTimeout(volSaveT);
+    volSaveT=setTimeout(()=>{try{localStorage.setItem(VOLKEY,JSON.stringify({v:V.volume,muted:V.muted}));}catch{}},300);
+  });
   function applyRepeat(val){
     repeat=val; V.loop=(repeat==='one'); LOOP.classList.toggle('looping',repeat!=='off');
     LOOP.textContent=(repeat==='one')?'🔂':'↻';
@@ -3393,15 +3569,15 @@ const PLAYER=(function(){
     if(d&&d.repeat_toggle_url)post(d.repeat_toggle_url).then(r=>applyRepeat(r.repeat));};
   if(SHUF)SHUF.onclick=e=>{e.stopPropagation();
     if(!d||!d.shuffle_toggle_url)return;
-    post(d.shuffle_toggle_url).then(r=>{shuffle=!!r.shuffle;SHUF.classList.toggle('shuffling',shuffle);
+    post(d.shuffle_toggle_url).then(r=>{shuffle=!!r.shuffle;shuffleNext=null;SHUF.classList.toggle('shuffling',shuffle);
       SHUF.title=shuffle?'Shuffle: on':'Shuffle: off';
       PREV.disabled=!prevId();NEXT.disabled=!nextId();
       if(MBAR_SB)MBAR_SB.disabled=!prevId();if(MBAR_SF)MBAR_SF.disabled=!nextId();});};
   if(DL)DL.onclick=e=>e.stopPropagation();
 
   /* prev/next: swap source on the SAME element -> iOS keeps autoplay */
-  PREV.onclick=e=>{e.stopPropagation();const p=prevId();if(p)navigate(p,true);};
-  NEXT.onclick=e=>{e.stopPropagation();const n=nextId();if(n)navigate(n,true);};
+  PREV.onclick=e=>{e.stopPropagation();const p=prevId();if(p)navigateShorts(p,-1);};
+  NEXT.onclick=e=>{e.stopPropagation();const n=nextId();if(n)navigateShorts(n,1);};
 
   /* auto-hide controls */
   let hideT;
@@ -3418,7 +3594,12 @@ const PLAYER=(function(){
       if(!V.paused)STAGE.classList.remove('show-ctrls');
     },2800);
   }
-  STAGE.addEventListener('mousemove',activity);STAGE.addEventListener('touchstart',activity,{passive:true});
+  // A mousemove with zero movement is the browser re-sending the pointer
+  // position after the stage appeared/changed under a still cursor -- not the
+  // user. (Browsers without movementX give undefined, which passes.) Touch
+  // taps reach activity() through the click handler above, so a swipe doesn't
+  // summon the controls.
+  STAGE.addEventListener('mousemove',e=>{if(e.movementX===0&&e.movementY===0)return;activity();});
   // Mouse leaving the player -> hide the overlay right away instead of
   // waiting out the timer (paused normally pins it open; force-hide-ctrls
   // overrides that too, since the mouse genuinely left).
@@ -3437,11 +3618,11 @@ const PLAYER=(function(){
       case' ':case'k':case'K':e.preventDefault();toggle();break;
       case'ArrowRight':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()+SEEK_STEP);}break;
       case'ArrowLeft':if(document.activeElement!==BAR){e.preventDefault();seekTo(curTime()-SEEK_STEP);}break;
-      case'ArrowUp':e.preventDefault();{const n=nextId();if(n){if(EL.classList.contains('ph-shorts'))shortsSlide(n,1);navigate(n,true);}}break;
-      case'ArrowDown':e.preventDefault();{const p=prevId();if(p){if(EL.classList.contains('ph-shorts'))shortsSlide(p,-1);navigate(p);}}break;
+      case'ArrowUp':e.preventDefault();{const n=nextId();if(n)navigateShorts(n,1);}break;
+      case'ArrowDown':e.preventDefault();{const p=prevId();if(p)navigateShorts(p,-1);}break;
       case'f':case'F':goFull();break;
       case'l':case'L':LOOP.click();break;
-      case'm':case'M':V.muted=!V.muted;syncVol();break;
+      case'm':case'M':MUTE.click();break;
       case'Escape':minimize();break;
       default:if(e.key>='0'&&e.key<='9'&&e.key.length===1){e.preventDefault();const dur=totalDur();if(dur)seekTo(parseInt(e.key)/10*dur);}}
   });
@@ -3484,17 +3665,14 @@ const PLAYER=(function(){
       }
       return;
     }
+    // Shorts feed: the drag engine below owns the gesture (it also swallows
+    // the trailing synthetic click so the new video doesn't get a stray tap).
+    if(SD.locked){e.preventDefault();swY=null;endShortsDrag(false);return;}
+    SD.on=false;
     if(swY==null)return;
     const dy=e.changedTouches[0].clientY-swY, dt=Date.now()-swT; swY=null;
     if(state()==='expanded'){
-      if(EL.classList.contains('ph-shorts')&&Math.abs(dy)>60&&dt<700){
-        // Shorts mode: swipe up = next, swipe down = prev. preventDefault so
-        // the browser doesn't also fire a trailing synthetic click on the
-        // (now different) video underneath.
-        e.preventDefault();
-        if(dy<0){const n=nextId();if(n)navigateShorts(n,1);}
-        else if(dy>0){const p=prevId();if(p)navigateShorts(p,-1);}
-      } else if(!EL.classList.contains('ph-shorts')&&dy>70&&dt<500){
+      if(!EL.classList.contains('ph-shorts')&&dy>70&&dt<500){
         // Same reason: without this, a trailing synthetic click hits STAGE's
         // click handler right after minimize() just set state to 'mini' ->
         // "if(state()==='mini'){expand();return;}" immediately re-expands it,
@@ -3511,7 +3689,7 @@ const PLAYER=(function(){
   STAGE.addEventListener('wheel',e=>{
     if(state()!=='expanded'||!EL.classList.contains('ph-shorts'))return;
     e.preventDefault();
-    if(wheelLock||Math.abs(e.deltaY)<8)return;
+    if(wheelLock||SD.busy||Math.abs(e.deltaY)<8)return;
     wheelLock=true;setTimeout(()=>{wheelLock=false;},350);
     if(e.deltaY>0){const n=nextId();if(n)navigateShorts(n,1);}
     else{const p=prevId();if(p)navigateShorts(p,-1);}
@@ -3560,14 +3738,26 @@ const PLAYER=(function(){
 
   /* topbar search: minimize (keep playing) and jump to library results */
   const PHSEARCH=document.getElementById('phSearch');
-  if(PHSEARCH){
+  const PHSF=document.getElementById('phSearchForm');
+  if(PHSEARCH&&PHSF){
     PHSEARCH.onclick=e=>e.stopPropagation();
-    PHSEARCH.addEventListener('keydown',e=>{
-      if(e.key!=='Enter')return;
+    // Same box as the header one: start from what the Library search currently
+    // shows, and submit as a real <form> so a phone keyboard's "search" key
+    // (which often isn't a plain Enter keydown) works.
+    PHSEARCH.addEventListener('focus',()=>{
+      const hdr=document.querySelector('#searchForm input[name=q]');
+      if(!PHSEARCH.value&&hdr&&hdr.value)PHSEARCH.value=hdr.value;
+    });
+    PHSEARCH.addEventListener('keydown',e=>{if(e.key==='Enter')e.stopPropagation();});
+    PHSF.addEventListener('submit',e=>{
       e.preventDefault();e.stopPropagation();
       const val=PHSEARCH.value.trim();
-      minimize();
-      ROUTER.search(val);
+      PHSEARCH.blur();
+      // No history.back() here (minimize() would), because the search then
+      // navigates too: replace the /watch/ entry instead, so there is no
+      // back-then-push race and Back returns to wherever you came from.
+      minimize({keepUrl:true});
+      ROUTER.go('/library/?q='+encodeURIComponent(val),{replace:true});
     });
   }
 
@@ -3637,12 +3827,12 @@ const PLAYER=(function(){
   setupRH('phRhBl',false);setupRH('phRhBr',true);
 
   /* ---- transitions ---- */
-  function expand(){setState('expanded');SCRL.scrollTop=0;persist();
+  function expand(){setState('expanded');SCRL.scrollTop=0;persist();preloadNeighbours();
     if(pushed&&!/\/watch\/\d+\//.test(location.pathname)&&d){
       history.pushState({watch:d.id},'',d.watch_url);}}
-  function minimize(){savePos();setState('mini');persist();
+  function minimize(opts){savePos();setState('mini');persist();
     // restore underlying URL if we were on a /watch/ url
-    if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
+    if(!(opts&&opts.keepUrl)&&/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
   function close(){savePos();teardownHls();V.pause();V.removeAttribute('src');V.load();
     setState('hidden');d=null;clearPersist();
     if(/\/watch\/\d+\//.test(location.pathname)){ignorePop=true;history.back();}}
@@ -3657,34 +3847,136 @@ const PLAYER=(function(){
     if(push){history.pushState({watch:id},'','/watch/'+id+'/');}
     fetchApply(id,null,undefined,qp);
   }
-  function navigate(id,fromZero=false){const playing=!V.paused;
+  function navigate(id,fromZero=false,forcePlay=null){
+    const playing=forcePlay!==null?forcePlay:!V.paused;
     fetchApply(id,playing||autoplay,fromZero?0:undefined,d?d._qp||'':'');
     history.replaceState({watch:id},'','/watch/'+id+'/');SCRL.scrollTop=0;}
 
-  /* Vertical "shorts" transition: a quick thumbnail slide (dir=1 up for next,
-     dir=-1 down for prev) layered as siblings of <video> inside .ph-stage --
-     purely visual, removed after the animation. Deliberately never transforms
-     .ph-stage itself: that element is what goFull()/requestFullscreen() below
-     targets, and animating the fullscreen target is exactly the class of bug
-     that broke the old PC "similar videos" panel's fullscreen sometimes. */
-  function shortsSlide(targetId,dir){
-    if(!d)return;
-    const cur=document.createElement('div');cur.className='shorts-trans-frame';
-    cur.style.backgroundImage=`url(/thumb/${d.id}/)`;
-    const nxt=document.createElement('div');nxt.className='shorts-trans-frame';
-    nxt.style.backgroundImage=`url(/thumb/${targetId}/)`;
-    nxt.style.transform=`translateY(${dir*100}%)`;
-    STAGE.appendChild(cur);STAGE.appendChild(nxt);
-    requestAnimationFrame(()=>{
-      cur.style.transition=nxt.style.transition='transform .26s ease';
-      cur.style.transform=`translateY(${-dir*100}%)`;
-      nxt.style.transform='translateY(0)';
-    });
-    setTimeout(()=>{cur.remove();nxt.remove();},280);
+  /* ---- Shorts feed ---------------------------------------------------
+     The previous and next videos are kept preloaded in two extra <video>
+     elements (#phNbPrev/#phNbNext, siblings of #theVideo inside .ph-stage;
+     everything else is unloaded). A touch drag moves current + both neighbours
+     with the finger. Only when the finger is lifted and the slide has landed
+     does the real player take over and play: the landed neighbour keeps
+     covering the stage (showing its first frame) until #theVideo has a frame
+     of its own. Deliberately never transforms .ph-stage itself (fullscreen
+     target, see goFull). */
+  const NB={prev:NB_PREV,next:NB_NEXT};
+  function nbClear(el){
+    if(!el)return;
+    delete el.dataset.id;
+    if(el.getAttribute('src')!==null){el.removeAttribute('src');el.load();}
+    el.removeAttribute('poster');
+  }
+  function nbClearAll(){if(handoff)return;nbClear(NB_PREV);nbClear(NB_NEXT);}
+  function nbLoad(el,id){
+    if(!id){nbClear(el);return;}
+    if(el.dataset.id===String(id))return;
+    nbClear(el);
+    el.dataset.id=String(id);
+    el.poster='/thumb/'+id+'/';
+    fetch('/api/preview/'+id+'/').then(r=>r.ok?r.json():null).then(p=>{
+      if(!p||el.dataset.id!==String(id))return;
+      if(!p.hls){el.src=p.stream_url;el.load();}     // HLS videos show their thumbnail only
+    }).catch(()=>{});
+  }
+  function preloadNeighbours(){
+    if(handoff)return;                       // re-run when the handoff ends
+    if(!d||state()!=='expanded'||!EL.classList.contains('ph-shorts')){nbClear(NB_PREV);nbClear(NB_NEXT);return;}
+    nbLoad(NB_PREV,prevId());nbLoad(NB_NEXT,nextId());
+  }
+  function sdAnimate(on){
+    const tr=on?'transform .22s cubic-bezier(.2,.8,.2,1)':'none';
+    V.style.transition=NB_PREV.style.transition=NB_NEXT.style.transition=tr;
+  }
+  function sdReset(){
+    V.style.transition=V.style.transform='';
+    [NB_PREV,NB_NEXT].forEach(n=>{n.style.transition='';n.style.transform='';});
+  }
+  // pure decision (unit-tested in node): commit the slide, or spring back?
+  // dy = finger travel (px, negative = up), v = recent velocity (px/ms), h = stage height.
+  function shouldCommit(dy,v,h){
+    if(Math.abs(v)>0.5&&v*dy<0)return false;                 // flicked back the other way
+    return Math.abs(dy)>0.22*h||(Math.abs(v)>0.5&&Math.abs(dy)>24);
+  }
+  function shDragTo(dy){
+    const hasNext=!!nextId(),hasPrev=!!prevId();
+    let y=dy;
+    if((dy<0&&!hasNext)||(dy>0&&!hasPrev))y=dy*0.3;          // nothing there: rubber band
+    V.style.transform='translate3d(0,'+y+'px,0)';
+    NB_NEXT.style.transform='translate3d(0,'+(SD.h+y)+'px,0)';
+    NB_PREV.style.transform='translate3d(0,'+(-SD.h+y)+'px,0)';
+  }
+  function shortsMode(){return state()==='expanded'&&EL.classList.contains('ph-shorts');}
+  STAGE.addEventListener('touchstart',e=>{
+    if(SD.busy||!shortsMode()||e.touches.length!==1||e.target.closest('.ctrls,.bar'))return;
+    const t=e.touches[0];
+    SD.on=true;SD.locked=false;SD.x0=t.clientX;SD.y0=t.clientY;SD.dy=0;
+    SD.h=STAGE.clientHeight||1;SD.lastY=t.clientY;SD.lastT=Date.now();SD.v=0;
+  },{passive:true});
+  STAGE.addEventListener('touchmove',e=>{
+    if(!SD.on)return;
+    const t=e.touches[0],dx=t.clientX-SD.x0,dy=t.clientY-SD.y0;
+    if(!SD.locked){
+      if(Math.abs(dx)<10&&Math.abs(dy)<10)return;
+      if(Math.abs(dx)>Math.abs(dy)){SD.on=false;return;}       // sideways: not a feed swipe
+      SD.locked=true;STAGE.classList.add('sh-drag');sdAnimate(false);
+      preloadNeighbours();
+    }
+    e.preventDefault();
+    const now=Date.now(),dt=Math.max(1,now-SD.lastT);
+    SD.v=0.6*SD.v+0.4*((t.clientY-SD.lastY)/dt);SD.lastY=t.clientY;SD.lastT=now;
+    SD.dy=dy;shDragTo(dy);
+  },{passive:false});
+  STAGE.addEventListener('touchcancel',()=>{if(SD.locked)endShortsDrag(true);SD.on=false;});
+  function endShortsDrag(cancelled){
+    const dy=SD.dy,v=SD.v;SD.on=false;SD.locked=false;
+    const dir=dy<0?1:-1,id=dir===1?nextId():prevId();
+    if(!cancelled&&id&&shouldCommit(dy,v,SD.h)){commitSlide(dir,id,true);return;}
+    sdAnimate(true);                                            // spring back
+    V.style.transform='translate3d(0,0,0)';
+    NB_NEXT.style.transform='translate3d(0,100%,0)';NB_PREV.style.transform='translate3d(0,-100%,0)';
+    setTimeout(()=>{sdReset();if(!handoff)STAGE.classList.remove('sh-drag');},240);
+  }
+  function commitSlide(dir,id,fromDrag){
+    SD.busy=true;
+    // The old video stops as soon as the finger is up; the new one starts only
+    // after the slide has landed (see below).
+    const wasPlaying=!V.paused;
+    V.pause();
+    const nb=dir===1?NB_NEXT:NB_PREV,other=dir===1?NB_PREV:NB_NEXT;
+    STAGE.classList.add('sh-drag');
+    if(nb.dataset.id!==String(id)){nbLoad(nb,id);}             // not preloaded: slide in its thumbnail
+    if(!fromDrag){
+      // programmatic slide starts from rest
+      V.style.transform='translate3d(0,0,0)';
+      nb.style.transform='translate3d(0,'+(dir*100)+'%,0)';
+      void STAGE.offsetHeight;
+    }
+    sdAnimate(true);
+    V.style.transform='translate3d(0,'+(-dir*100)+'%,0)';
+    nb.style.transform='translate3d(0,0,0)';
+    other.style.transform='translate3d(0,'+(-dir*200)+'%,0)';
+    handoff={el:nb,id:id};
+    setTimeout(()=>{
+      // landed: the neighbour covers the stage; now (finger up) start the real player under it
+      sdAnimate(false);V.style.transform='';V.style.transition='';
+      const done=()=>finishHandoff();
+      V.addEventListener('loadeddata',done,{once:true});
+      handoff.timer=setTimeout(()=>{V.removeEventListener('loadeddata',done);done();},6000);
+      navigate(id,true,wasPlaying);
+    },230);
+  }
+  function finishHandoff(){
+    if(!handoff)return;
+    clearTimeout(handoff.timer);handoff=null;
+    sdReset();STAGE.classList.remove('sh-drag');SD.busy=false;
+    preloadNeighbours();
   }
   function navigateShorts(id,dir){
-    if(EL.classList.contains('ph-shorts'))shortsSlide(id,dir);
-    navigate(id,true);
+    if(SD.busy)return;
+    if(!shortsMode()){navigate(id,true);return;}
+    commitSlide(dir,id,false);
   }
 
   function openFromSSR(data){

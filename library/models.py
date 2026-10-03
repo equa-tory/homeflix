@@ -40,6 +40,8 @@ class Video(models.Model):
     # Whether <video> can play this directly in a desktop browser.
     # MKV containers and HEVC/H.265 are flagged False -> conversion candidates.
     browser_playable = models.BooleanField(default=True)
+    # Owner override: a vertical file that is NOT a short (see is_portrait).
+    not_short = models.BooleanField(default=False)
 
     # On-demand conversion to a browser-friendly MP4 (for MKV / HEVC etc.)
     CONVERT_NONE, CONVERT_QUEUED, CONVERT_RUNNING, CONVERT_DONE, CONVERT_FAILED = (
@@ -117,11 +119,18 @@ class Video(models.Model):
         return not (self.duration_seconds is not None and self.duration_seconds < RESUME_MIN_SECONDS)
 
     @property
-    def is_portrait(self):
-        """Vertical video. Square (w == h) counts as vertical on purpose --
-        it frames far better in the shorts/vertical player than in 16:9.
-        SQL-side twin: views.PORTRAIT_Q -- keep the two in sync."""
+    def is_vertical(self):
+        """The file's real shape: vertical (or square) pixels. Square counts
+        on purpose -- it frames far better in the shorts player than in 16:9."""
         return bool(self.width and self.height and self.height >= self.width)
+
+    @property
+    def is_portrait(self):
+        """A "short": vertical AND not marked `not_short` by the owner (some
+        vertical files are really normal videos). Drives the Shorts tab, the
+        shorts player mode and the no-resume rule.
+        SQL-side twin: views.PORTRAIT_Q -- keep the two in sync."""
+        return self.is_vertical and not self.not_short
 
 
 class VideoSubtitle(models.Model):

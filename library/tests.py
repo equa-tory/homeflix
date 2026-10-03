@@ -498,6 +498,9 @@ class DownloaderHelperTests(TestCase):
                 downloader.resolve_target("link")
 
 
+REAL_CHECK = downloader.check_cookies       # DownloaderCase patches the module attribute
+
+
 class DownloaderCase(AuthTestCase):
     """Per-test scratch library + YTDL_DIR, so nothing here can touch real
     saved cookies or a real library."""
@@ -512,6 +515,15 @@ class DownloaderCase(AuthTestCase):
         self.addCleanup(shutil.rmtree, self.lib, True)
         self.addCleanup(shutil.rmtree, self.ytdl, True)
         self.src = DownloadSource.objects.create(url="https://www.youtube.com/playlist?list=PL1")
+        # The live "do the cookies still work" probe talks to YouTube: never in tests
+        # (individual tests patch it again to exercise the outcomes).
+        p = mock.patch.object(downloader, "check_cookies",
+                              return_value={"ok": True, "msg": "Signed in", "checked": time.time()})
+        p.start()
+        self.addCleanup(p.stop)
+        p = mock.patch.object(downloader, "check_cookies_async")
+        p.start()
+        self.addCleanup(p.stop)
 
     def entries(self, *titles):
         return [{"id": f"vid{i:08d}", "title": t, "duration": 60, "index": i + 1}
@@ -1628,3 +1640,272 @@ class PlayerToolsTests(AuthTestCase):
         self.assertIn('id="phSrc"', html)
         self.assertIn("function sourceAt(url,sec)", html)
         self.assertIn("src.href=sourceAt(base,curTime())", html)
+
+
+# ---- Round 6: not-a-short, preview/storyboard, cookie health, player markup ----
+
+class NotShortTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.vert = _make_video(title="vert", width=720, height=1280, duration_seconds=600)
+        self.wide = _make_video(title="wide", width=1920, height=1080, duration_seconds=600)
+        self.client.force_login(self.owner)
+
+    def toggle(self, v):
+        return self.client.post(reverse("toggle_not_short", args=[v.pk]))
+
+    def test_toggle_flips_everything_that_depends_on_being_a_short(self):
+        self.assertTrue(self.vert.is_portrait)
+        self.assertFalse(self.vert.remembers_position)
+        r = self.toggle(self.vert).json()
+        self.assertEqual((r["not_short"], r["is_portrait"], r["remember_position"]), (True, False, True))
+        d = self.client.get(reverse("watch_api", args=[self.vert.pk])).json()
+        self.assertEqual((d["is_portrait"], d["is_vertical"], d["not_short"], d["remember_position"]),
+                         (False, True, True, True))
+        shorts = self.client.get(reverse("shorts")).content.decode()
+        self.assertNotIn(f"/watch/{self.vert.pk}/", shorts)
+        # ...and back again
+        r = self.toggle(self.vert).json()
+        self.assertEqual((r["not_short"], r["is_portrait"]), (False, True))
+        self.assertIn(f"/watch/{self.vert.pk}/", self.client.get(reverse("shorts")).content.decode())
+
+    def test_only_vertical_videos_can_be_toggled(self):
+        r = self.toggle(self.wide)
+        self.assertEqual(r.status_code, 400)
+        self.wide.refresh_from_db()
+        self.assertFalse(self.wide.not_short)
+
+    def test_owner_only(self):
+        self.client.force_login(self.viewer)
+        self.assertNotEqual(self.toggle(self.vert).status_code, 200)
+        self.vert.refresh_from_db()
+        self.assertFalse(self.vert.not_short)
+
+    def test_marked_video_resumes_like_a_normal_one(self):
+        PlaybackState.objects.create(video=self.vert, user=self.owner, position_seconds=300)
+        titles = lambda: {v.title for v in self.client.get(reverse("home")).context["continue_watching"]}
+        self.assertNotIn("vert", titles())                          # a short: never "continue"
+        self.toggle(self.vert)
+        self.assertIn("vert", titles())
+        self.client.post(reverse("save_progress", args=[self.vert.pk]), {"position": "42"})
+        self.assertEqual(PlaybackState.objects.get(video=self.vert, user=self.owner).position_seconds, 42)
+
+    def test_refresh_still_treats_it_as_letterboxed(self):
+        self.vert.not_short = True
+        self.vert.save()
+        self.assertTrue(self.vert.is_vertical)
+        self.assertFalse(self.vert.is_portrait)
+
+
+class PreviewApiTests(AuthTestCase):
+    def test_preview_payload_and_hidden(self):
+        v = _make_video(title="p", width=720, height=1280, thumbnail_path="/x.jpg")
+        self.client.force_login(self.owner)
+        d = self.client.get(reverse("api_preview", args=[v.pk])).json()
+        self.assertEqual((d["id"], d["hls"], d["is_portrait"]), (v.pk, False, True))
+        self.assertEqual(d["stream_url"], f"/stream/{v.pk}/")
+        mkv = _make_video(title="m", ext="mkv", browser_playable=False)
+        self.assertTrue(self.client.get(reverse("api_preview", args=[mkv.pk])).json()["hls"])
+        v.hidden = True
+        v.save()
+        self.client.force_login(self.viewer)
+        self.assertEqual(self.client.get(reverse("api_preview", args=[v.pk])).status_code, 404)
+
+
+@override_settings(THUMBNAIL_DIR=tempfile.mkdtemp())
+class StoryboardTests(AuthTestCase):
+    def make_clip(self, seconds=12):
+        out = tempfile.mkstemp(suffix=".mp4")[1]
+        os.remove(out)
+        code, _, err = services._run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                                      f"testsrc=duration={seconds}:size=320x180:rate=10",
+                                      "-g", "10", "-pix_fmt", "yuv420p", out])
+        self.assertEqual(code, 0, err)
+        self.addCleanup(lambda: os.path.exists(out) and os.remove(out))
+        return out
+
+    def test_build_serve_and_rebuild_on_change(self):
+        clip = self.make_clip(12)
+        v = _make_video(file_path=clip, rel_path="c.mp4", filename="c.mp4", width=320, height=180,
+                        duration_seconds=12)
+        meta = services.build_storyboard(v)
+        self.assertEqual((meta["interval"], meta["count"], meta["cols"], meta["w"], meta["h"]),
+                         (2, 6, 10, 160, 90))
+        img, mp, lock = services._sb_paths(v)
+        self.assertTrue(os.path.getsize(img) > 500)
+        self.assertFalse(os.path.exists(lock))                      # lock released
+        self.assertEqual(services.storyboard_meta(v)["count"], 6)
+        self.client.force_login(self.owner)
+        j = self.client.get(reverse("storyboard", args=[v.pk])).json()
+        self.assertEqual((j["pending"], j["interval"]), (False, 2))
+        r = self.client.get(reverse("storyboard_img", args=[v.pk]))
+        self.assertEqual((r.status_code, r["Content-Type"]), (200, "image/jpeg"))
+        self.assertIn("max-age", r["Cache-Control"])
+        # a changed source file invalidates it
+        os.utime(clip, (time.time() + 100, time.time() + 100))
+        self.assertIsNone(services.storyboard_meta(v))
+
+    def test_single_flight_lock(self):
+        clip = self.make_clip(6)
+        v = _make_video(file_path=clip, rel_path="d.mp4", filename="d.mp4", width=320, height=180,
+                        duration_seconds=6)
+        lock = services._sb_paths(v)[2]
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        open(lock, "w").close()
+        self.assertIsNone(services.build_storyboard(v))             # someone else is building
+        self.assertTrue(os.path.exists(lock))                       # ...and we left their lock alone
+
+    def test_endpoint_reports_pending_and_starts_a_build(self):
+        v = _make_video(title="s", width=320, height=180, duration_seconds=60)
+        self.client.force_login(self.owner)
+        with mock.patch.object(services, "start_storyboard") as start:
+            j = self.client.get(reverse("storyboard", args=[v.pk])).json()
+        self.assertTrue(j["pending"])
+        start.assert_called_once_with(v.pk)
+        tiny = _make_video(title="t", duration_seconds=2)
+        self.assertTrue(self.client.get(reverse("storyboard", args=[tiny.pk])).json()["none"])
+
+    def test_frame_thumbs_are_browser_cacheable(self):
+        clip = self.make_clip(6)
+        v = _make_video(file_path=clip, rel_path="e.mp4", filename="e.mp4", duration_seconds=6)
+        self.client.force_login(self.owner)
+        r = self.client.get(reverse("frame_thumb", args=[v.pk, 0]))
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("max-age", r["Cache-Control"])
+
+
+class CookieHealthTests(DownloaderCase):
+    def jar(self, login_exp):
+        rows = ["# Netscape HTTP Cookie File"]
+        for name, exp in (("SID", login_exp), ("VISITOR_INFO1_LIVE", 1)):
+            rows.append("\t".join([".youtube.com", "TRUE", "/", "TRUE", str(exp), name, "v"]))
+        with open(downloader.cookie_path(), "w") as f:
+            f.write("\n".join(rows) + "\n")
+
+    def test_expiry_reported_from_login_cookies_only(self):
+        soon = int(time.time()) + 3 * 86400
+        self.jar(soon)
+        st = downloader.cookie_status()
+        self.assertEqual(st["login_expires"], soon)
+        self.assertFalse(st["expired"])
+        self.jar(int(time.time()) - 10)
+        self.assertTrue(downloader.cookie_status()["expired"])
+        self.assertFalse(downloader.cookie_status().get("check") and True)
+
+    def test_pasted_header_has_no_real_expiry(self):
+        downloader.save_cookies("SID=x; HSID=y")                    # far-future placeholder
+        st = downloader.cookie_status()
+        self.assertIsNone(st["login_expires"])
+        self.assertFalse(st["expired"])
+
+    def run_probe(self, stderr="", stdout="", rc=0):
+        downloader.save_cookies("SID=x; HSID=y")
+        fake = mock.Mock(returncode=rc, stdout=stdout, stderr=stderr)
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True), \
+             mock.patch.object(downloader.subprocess, "run", return_value=fake):
+            return REAL_CHECK()
+
+    def test_probe_outcomes(self):
+        self.assertIs(self.run_probe(stdout='{"title": "Watch later"}')["ok"], True)
+        self.assertIs(self.run_probe(stderr="ERROR: WL: YouTube said: The playlist does not exist.", rc=1)["ok"], False)
+        self.assertIs(self.run_probe(stderr="WARNING: The provided YouTube account cookies are no longer valid.", rc=1)["ok"], False)
+        self.assertIsNone(self.run_probe(stderr="ERROR: unable to download: connection reset", rc=1)["ok"])
+        # the result is remembered for *this* cookie file only, and surfaced in the status
+        self.assertIsNone(downloader.cookie_status()["check"]["ok"])
+        time.sleep(0.05); downloader.save_cookies("SID=other; HSID=y")
+        self.assertIsNone(downloader.cookie_status()["check"])
+
+    def test_job_refuses_to_start_on_dead_cookies(self):
+        downloader.save_cookies("SID=x; HSID=y")
+        job = DownloadJob.objects.create(source=self.src, ids=json.dumps(["aaaaaaaaaaa"]), total=1)
+        with mock.patch.object(downloader, "check_cookies",
+                               return_value={"ok": False, "msg": downloader.COOKIE_BAD, "checked": time.time()}), \
+             mock.patch.object(downloader, "build_cmd") as build:
+            downloader._run_job(job.pk)
+        job.refresh_from_db()
+        self.assertEqual(job.status, DownloadJob.FAILED)
+        self.assertIn("don't work anymore", job.summary)
+        self.assertIn("Nothing was downloaded", job.summary)
+        build.assert_not_called()
+
+    def test_inconclusive_probe_does_not_block(self):
+        downloader.save_cookies("SID=x; HSID=y")
+        with mock.patch.object(downloader, "check_cookies", return_value={"ok": None, "checked": time.time()}):
+            self.assertIsNone(downloader.cookies_ok_for_job())
+
+    def test_recent_good_result_is_reused(self):
+        downloader.save_cookies("SID=x; HSID=y")
+        downloader._write_check(True, "Signed in")
+        with mock.patch.object(downloader, "check_cookies") as probe:
+            self.assertIsNone(downloader.cookies_ok_for_job())
+        probe.assert_not_called()
+
+    def test_start_job_refuses_expired_cookies_up_front(self):
+        self.jar(int(time.time()) - 10)
+        with mock.patch.object(downloader, "ytdlp_available", return_value=True):
+            job, err = downloader.start_job(self.src, ["aaaaaaaaaaa"])
+        self.assertIsNone(job)
+        self.assertIn("don't work anymore", err)
+
+    def test_running_job_is_stopped_when_yt_dlp_reports_dead_cookies(self):
+        # yt-dlp's real behaviour: warn, then carry on logged out. We must not.
+        script = ("import sys,time\n"
+                  "mode, before, after, *ids = sys.argv[1:]\n"
+                  "open(before,'w').write('\\n'.join(ids)+'\\n')\n"
+                  "print('WARNING: [youtube] The provided YouTube account cookies are no longer valid.', flush=True)\n"
+                  "time.sleep(30)\n")
+        downloader.save_cookies("SID=x; HSID=y")
+        job = DownloadJob.objects.create(source=self.src, ids=json.dumps(["aaaaaaaaaaa"]), total=1)
+
+        def fake_build(ids_, out_dir, archive, cookie):
+            before, after = os.path.join(self.ytdl, "b.txt"), os.path.join(self.ytdl, "a.txt")
+            return ([sys.executable, "-c", script, "x", before, after, *ids_], before, after,
+                    os.path.join(self.ytdl, "u.txt"))
+
+        t0 = time.time()
+        with mock.patch.object(downloader, "build_cmd", side_effect=fake_build), \
+             mock.patch.object(downloader.services, "scan_library"):
+            downloader._run_job(job.pk)
+        job.refresh_from_db()
+        self.assertLess(time.time() - t0, 20)                       # killed, not waited out
+        self.assertEqual(job.status, DownloadJob.FAILED)
+        self.assertIn("don't work anymore", job.summary)
+        self.assertFalse(downloader.read_cookie_check()["ok"])      # the UI now shows the warning
+
+    def test_cookies_state_and_test_endpoint(self):
+        self.client.force_login(self.owner)
+        downloader.save_cookies("SID=x; HSID=y")
+        r = self.client.get(reverse("dl_tools"), HTTP_X_SPA="1").json()
+        self.assertIn("login_expires", r["cookies"])
+        with mock.patch.object(downloader, "check_cookies_async") as go:
+            self.assertEqual(self.client.post(reverse("dl_cookies_check")).status_code, 200)
+        go.assert_called_once()
+        self.client.force_login(self.viewer)
+        self.assertNotEqual(self.client.post(reverse("dl_cookies_check")).status_code, 200)
+
+
+
+class PlayerMarkupTests(AuthTestCase):
+    def html(self):
+        self.client.force_login(self.owner)
+        return self.client.get(reverse("library")).content.decode()
+
+    def test_notes_sit_above_the_playlist_block(self):
+        h = self.html()
+        self.assertLess(h.index('class="notes-section"'), h.index('class="pl-form"'))
+        self.assertLess(h.index('class="tech"'), h.index('class="notes-section"'))
+        self.assertLess(h.index('class="pl-form"'), h.index('class="ph-utils"'))
+
+    def test_player_search_is_a_real_form_like_the_header_one(self):
+        h = self.html()
+        self.assertIn('id="phSearchForm"', h)
+        self.assertIn('enterkeyhint="search"', h)
+        self.assertIn("minimize({keepUrl:true})", h)
+
+    def test_shorts_feed_and_polish_hooks_are_present(self):
+        h = self.html()
+        for needle in ('id="phNbPrev"', 'id="phNbNext"', "function commitSlide", "function shouldCommit",
+                       "/api/preview/", "homeflix_volume", "/storyboard/", "setLoading(", "railNotShortBtn",
+                       "e.movementX===0&&e.movementY===0"):
+            self.assertIn(needle, h, needle)
+        self.assertNotIn("shortsSlide(", h)

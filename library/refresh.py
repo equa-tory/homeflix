@@ -149,7 +149,7 @@ def apply_entry(video, entry, fields):
         changed.add("title")
     # Shorts keep their own frame: YouTube's thumbnail for a vertical video is
     # a landscape image with the video letterboxed in the middle.
-    if fields.get("thumbs") and not video.is_portrait:
+    if fields.get("thumbs") and not video.is_vertical:
         dest = os.path.join(settings.THUMBNAIL_DIR, f"video_{video.id}.jpg")
         if fetch_thumbnail(entry["id"], dest):
             if video.thumbnail_path != dest:
