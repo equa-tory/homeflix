@@ -85,6 +85,8 @@ A third, optional tier sits below viewer: with `HOMEFLIX_PUBLIC=1` (`settings.PU
 
 **Channels tab** (`views.channels`, `channels.html`, nav entry in both the top nav and the mobile tab bar): groups non-hidden videos by their exact `channel` string; the cover is a CSS collage of the channel's 4 newest thumbnails (no generated image). A card opens the Library with `?channel=<name>` (an exact-match filter in `_filtered_videos`, which therefore also scopes `api_videos`, the player's prev/next queue and `/random/` — `randomScope()` forwards `channel`). Videos without a channel are just counted. Most existing videos have no channel until the owner runs Downloads → "Update library from YouTube".
 
+**Source link**: the player's "source ↗" (`#phSrc`) rewrites its own `href` via `sourceAt()` just before use (pointerdown/touchstart/focus/contextmenu/click), so YouTube links open at the current second (`youtu.be/ID?t=49`, `watch?v=ID&t=49s`); other hosts are left untouched.
+
 **Player "Tools"**: the file path, thumbnail regenerate and rename controls in `renderInfo()` are inside a collapsed `<details class="ph-utils">` (convert-to-MP4 stays visible because it's a prompt, not a utility).
 
 **Subtitles:** `services.list_subtitles()` merges three sources — manually uploaded (`VideoSubtitle` model, via `store_uploaded_subtitle()`), yt-dlp/sidecar files (`.srt`/`.ass`/etc.), and embedded MKV subtitle tracks. `ensure_subtitle_vtt()` converts/caches any of them to WebVTT under `SUBTITLE_DIR` on first request.

@@ -1621,3 +1621,10 @@ class PlayerToolsTests(AuthTestCase):
         for needle in ("phRemotePath", "phThumbBtn", "phRenameBtn"):
             self.assertIn(needle, block)
         self.assertNotIn(" open", html.split('<details class="ph-utils">')[1][:5])
+
+    def test_source_link_is_stamped_with_the_current_time(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("library")).content.decode()
+        self.assertIn('id="phSrc"', html)
+        self.assertIn("function sourceAt(url,sec)", html)
+        self.assertIn("src.href=sourceAt(base,curTime())", html)

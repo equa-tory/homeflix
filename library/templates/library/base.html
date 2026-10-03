@@ -2901,7 +2901,7 @@ const PLAYER=(function(){
           `</div></div></div>`:'')+
       `<span class="spacer"></span>`+
       `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${data.autoplay?'▶▶ Auto On':'▶▶ Auto Off'}</button></div>`+
-      `<div class="tech">${tech}${data.source_url?`<a href="${esc(data.source_url)}" target="_blank" style="color:var(--accent)">source ↗</a>`:''}</div>`+
+      `<div class="tech">${tech}${data.source_url?`<a id="phSrc" href="${esc(data.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Opens the source at the current time">source ↗</a>`:''}</div>`+
       (data.needs_convert&&data.is_owner?`<div class="conv-inline" id="phConvInline">`+
         `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
         `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+
@@ -2937,7 +2937,26 @@ const PLAYER=(function(){
     bindInfo(data); renderNoteDots();
   }
 
+  // YouTube links jump to the current playback second (?t=49 / &t=49s);
+  // any other site's link is left alone. The href is refreshed right before
+  // the link is used, so click, middle-click, long-press and "copy link" all
+  // get the time of that moment.
+  function sourceAt(url,sec){
+    sec=Math.max(0,Math.floor(sec||0));
+    let u; try{u=new URL(url);}catch(e){return url;}
+    const h=u.hostname.replace(/^www\./,'');
+    if(!(h==='youtu.be'||h==='youtube.com'||h==='m.youtube.com'||h==='music.youtube.com'))return url;
+    if(sec<1)u.searchParams.delete('t'); else u.searchParams.set('t',h==='youtu.be'?String(sec):sec+'s');
+    u.hash='';
+    return u.toString();
+  }
   function bindInfo(data){
+    const src=document.getElementById('phSrc');
+    if(src){
+      const base=data.source_url;
+      const fresh=()=>{src.href=sourceAt(base,curTime());};
+      ['pointerdown','mousedown','touchstart','focus','mouseenter','contextmenu','click'].forEach(ev=>src.addEventListener(ev,fresh,{passive:true}));
+    }
     const st=document.getElementById('phStars');
     if(st)st.querySelectorAll('.star').forEach(s=>s.onclick=()=>post(data.rating_url,{rating:s.dataset.v})
       .then(r=>st.querySelectorAll('.star').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r.rating))));
