@@ -296,6 +296,17 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   border-bottom:1px solid var(--border);font-size:13.5px}
 .bk-file:last-child{border-bottom:0}
 
+/* ---- library folders page ---- */
+.fl-row{display:grid;gap:8px;padding:12px 0;border-bottom:1px solid var(--border)}
+.fl-row:last-child{border-bottom:0}
+.fl-row input[type=text]{width:100%;padding:9px 12px;border-radius:8px;border:1px solid var(--border);
+  background:var(--bg);color:var(--text);font-size:14px}
+.fl-main{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700}
+.fl-main input{width:20px;height:20px;accent-color:var(--accent)}
+.fl-info{font-size:13px;margin:0}
+.fl-info.bad{color:var(--danger,#e5484d)}
+.fl-top{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+
 /* ---- player: playback-interrupted notice (see recoverPlayback) ---- */
 #phPlayMsg{position:absolute;left:50%;bottom:76px;transform:translateX(-50%);z-index:20;
   background:#000d;color:#fff;padding:8px 12px;border-radius:10px;font-size:13px;
@@ -880,6 +891,7 @@ html.player-locked{overflow:hidden}
       <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
       <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
       <a href="{% url 'downloads' %}" class="nav-item spa-link">⬇ Download from playlist…</a>
+      <a href="{% url 'folders' %}" class="nav-item spa-link">📁 Library folders…</a>
       <a href="{% url 'backups' %}" class="nav-item spa-link">💾 Backups…</a>
       <hr>
       <div class="nav-item row-inline" style="cursor:default">
@@ -1888,6 +1900,78 @@ const PAGE_INIT={
     fillForm();render();
     if(st.running)poll();
     return()=>clearTimeout(timer);
+  },
+
+  /* ----- LIBRARY FOLDERS: any number of folders, one main for downloads (owner only) ----- */
+  folders(root){
+    const $=s=>root.querySelector(s);
+    let st={folders:[]};try{st=JSON.parse($('#flData').textContent);}catch{}
+    let rows=[];            // editable copy: {path,remote,main,info}
+    const say=(t,bad)=>{const m=$('#flMsg');m.textContent=t||'';m.classList.toggle('dl-err',!!bad);};
+    const fmtB=n=>{if(n==null)return '?';const u=['B','KB','MB','GB','TB'];let i=0;while(n>=1024&&i<4){n/=1024;i++;}return(i>=3?n.toFixed(1):Math.round(n))+' '+u[i];};
+    function load(){
+      rows=(st.folders||[]).map(f=>({path:f.path,remote:f.remote||'',main:!!f.main,info:f}));
+      if(!rows.some(r=>r.main)&&rows.length)rows[0].main=true;
+      render();
+    }
+    function infoText(r){
+      const f=r.info;
+      if(!f)return{t:'Not saved yet. Press Save to start using this folder.',bad:false};
+      if(!f.online)return{t:'⚠ Not reachable right now (unmounted or unplugged). Its videos are kept and not marked missing.',bad:true};
+      const parts=['✓ online',f.videos+' video'+(f.videos===1?'':'s')];
+      if(f.missing)parts.push(f.missing+' missing');
+      if(f.free!=null)parts.push(fmtB(f.free)+' free of '+fmtB(f.total));
+      if(!f.writable)parts.push('read-only for HomeFlix: downloads can\'t go here');
+      return{t:parts.join(' · '),bad:!f.writable};
+    }
+    function render(){
+      const box=$('#flList');
+      box.innerHTML=rows.map((r,i)=>{
+        const inf=infoText(r);
+        return `<div class="fl-row" data-i="${i}">
+          <div class="fl-top">
+            <label class="fl-main"><input type="radio" name="flMain" class="nav-item" ${r.main?'checked':''}> ${r.main?'Main · downloads go here':'Use for downloads'}</label>
+            <button type="button" class="btn ghost nav-item fl-del" ${rows.length<2?'disabled title="Keep at least one folder"':''}>✕ Remove</button>
+          </div>
+          <input type="text" class="nav-item fl-path" value="${esc(r.path)}" placeholder="/mnt/big/YouTube" autocapitalize="off" autocomplete="off" spellcheck="false">
+          <input type="text" class="nav-item fl-remote" value="${esc(r.remote)}" placeholder="Network path (optional), e.g. \\\\192.168.1.39\\big\\YouTube" autocapitalize="off" autocomplete="off" spellcheck="false">
+          <p class="sub fl-info${inf.bad?' bad':''}">${esc(inf.t)}</p>
+        </div>`;}).join('');
+      box.querySelectorAll('.fl-row').forEach(el=>{
+        const i=+el.dataset.i;
+        el.querySelector('.fl-path').oninput=e=>{rows[i].path=e.target.value;};
+        el.querySelector('.fl-remote').oninput=e=>{rows[i].remote=e.target.value;};
+        el.querySelector('input[type=radio]').onchange=()=>{rows.forEach((r,j)=>r.main=(j===i));render();};
+        el.querySelector('.fl-del').onclick=()=>{
+          const f=rows[i].info;
+          if(f&&f.videos&&!confirm('Remove '+rows[i].path+' from HomeFlix?\n\n'+f.videos+' video(s) there will disappear from the library (no file is deleted; history and notes come back if you add the folder again).'))return;
+          const wasMain=rows[i].main;
+          rows.splice(i,1);
+          if(wasMain&&rows.length)rows[0].main=true;
+          render();
+        };
+      });
+    }
+    $('#flAdd').onclick=()=>{
+      rows.push({path:'',remote:'',main:false,info:null});render();
+      const ins=$('#flList').querySelectorAll('.fl-path');ins[ins.length-1].focus();
+    };
+    $('#flSave').onclick=()=>{
+      say('Saving…');
+      const main=(rows.find(r=>r.main)||{}).path||'';
+      post('/folders/save/',{config:JSON.stringify({folders:rows.map(r=>({path:r.path,remote:r.remote})),main})}).then(j=>{
+        if(!j.ok){say(j.error||'Not saved',true);return;}
+        st=j;load();say('Saved ✓  Press Rescan to pick up new videos.');
+      }).catch(()=>say('Something went wrong',true));
+    };
+    $('#flScan').onclick=()=>{
+      say('');
+      post('/folders/rescan/').then(j=>{
+        say(j.started?'Scanning in the background. Counts update when you reopen this page.':'A scan is already running.');
+      }).catch(()=>say('Something went wrong',true));
+    };
+    load();
+    return null;
   },
 
   /* ----- DOWNLOADS: pull a playlist's undownloaded videos (owner only) ----- */

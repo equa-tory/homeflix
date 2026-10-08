@@ -162,7 +162,12 @@ python manage.py createsuperuser   # your owner login
 python manage.py scan              # or press "Rescan" in the Manage (⋯) menu
 python manage.py runserver 0.0.0.0:8002
 ```
-Open `http://<server-ip>:8002/` and sign in. `HOMEFLIX_DEBUG=1` enables Django's
+Open `http://<server-ip>:8002/` and sign in. `HOMEFLIX_LIBRARY` is the folder used until you
+change it: **⋯ → Library folders…** lets you add any number of folders (another drive, a second
+share) and mark one as the *main* folder where downloads are saved. All of them are scanned and
+watched as one library; nothing has to be moved.
+
+ `HOMEFLIX_DEBUG=1` enables Django's
 debug pages and its built-in static file serving for `/admin` — leave it unset
 (the default, `DEBUG=False`) for anything reachable outside your own machine.
 

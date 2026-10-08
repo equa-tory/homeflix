@@ -63,6 +63,10 @@ urlpatterns = [
     path("downloads/job/cancel/", views.dl_job_cancel, name="dl_job_cancel"),
 
     # backups (owner only)
+    path("folders/", views.folders, name="folders"),
+    path("folders/status/", views.folders_status, name="folders_status"),
+    path("folders/save/", views.folders_save, name="folders_save"),
+    path("folders/rescan/", views.folders_rescan, name="folders_rescan"),
     path("backups/", views.backups, name="backups"),
     path("backups/status/", views.backups_status, name="backups_status"),
     path("backups/save/", views.backups_save, name="backups_save"),

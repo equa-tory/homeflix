@@ -28,10 +28,10 @@ from urllib.parse import parse_qs, urlparse
 
 from django.conf import settings
 from django.db import connection
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-from . import services
+from . import roots, services
 from .models import DownloadJob, DownloadSource, SkippedEntry, Video
 
 logger = logging.getLogger(__name__)
@@ -72,12 +72,12 @@ def normalize_url(raw):
     return u
 
 
-def resolve_target(subdir):
-    """Absolute download folder for a source: LIBRARY_ROOT + a relative
-    subfolder (blank = the root itself). Raises ValueError if the subfolder
-    would resolve outside LIBRARY_ROOT (.., absolute path, drive letter,
-    symlink escape)."""
-    root = os.path.normpath(settings.LIBRARY_ROOT)
+def resolve_target(subdir, root=None):
+    """Absolute download folder for a source: a library folder (default: the
+    main one, where downloads are saved) + a relative subfolder (blank = the
+    folder itself). Raises ValueError if the subfolder would resolve outside
+    that folder (.., absolute path, drive letter, symlink escape)."""
+    root = os.path.normpath(root or roots.main_root())
     parts = [p for p in re.split(r"[\\/]+", (subdir or "").strip()) if p]
     if not parts:
         return root
@@ -88,6 +88,20 @@ def resolve_target(subdir):
     if real_full != real_root and not real_full.startswith(real_root + os.sep):
         raise ValueError("Folder must be inside the library")
     return full
+
+
+def all_targets(subdir):
+    """The source's subfolder in every library folder (the main one first):
+    what counts as "already downloaded" is looked up in all of them, since a
+    playlist's videos may have been saved before the main folder was switched."""
+    main = roots.main_root()
+    out = []
+    for r in [main] + [r for r in roots.library_roots() if r != main]:
+        try:
+            out.append(resolve_target(subdir, r))
+        except ValueError:
+            continue
+    return out
 
 
 def name_key(s):
@@ -101,11 +115,15 @@ def name_key(s):
     return re.sub(r"[\W_]+", "", s)
 
 
+def _archive_name(source):
+    h = hashlib.md5(source.url.encode(), usedforsecurity=False).hexdigest()[:8]
+    return f"_yt_archive_{h}.txt"
+
+
 def archive_path(source):
     """Lasso's archive file for this playlist: md5 of the saved URL, inside the
-    target folder. Same name/format as Lasso so the two tools share it."""
-    h = hashlib.md5(source.url.encode(), usedforsecurity=False).hexdigest()[:8]
-    return os.path.join(resolve_target(source.target_subdir), f"_yt_archive_{h}.txt")
+    main download folder. Same name/format as Lasso so the two tools share it."""
+    return os.path.join(resolve_target(source.target_subdir), _archive_name(source))
 
 
 def read_archive_ids(path):
@@ -140,29 +158,35 @@ def local_index(source):
     """What's already on disk for this source: {'names': set of name_keys,
     'ids': set of video ids, 'archive': set of ids in Lasso's archive file}.
 
-    The walk is recursive because Organize moves files into YYYY-MM/DD/
-    folders. Library rows under the folder add their yt-dlp sidecar title
-    (the real, unsanitised title) and source URL (the video id)."""
-    target = resolve_target(source.target_subdir)
-    names, ids = set(), set()
-    if os.path.isdir(target):
-        for dirpath, _dirs, files in os.walk(target):
-            for f in files:
-                stem, ext = os.path.splitext(f)
-                if ext.lower() in settings.VIDEO_EXTENSIONS:
-                    k = name_key(stem)
-                    if k:
-                        names.add(k)
-    prefix = target.rstrip(os.sep) + os.sep
-    rows = Video.objects.filter(file_path__startswith=prefix, missing=False)
-    for title, url in rows.values_list("title", "source_url").iterator():
-        k = name_key(title)
-        if k:
-            names.add(k)
-        m = _URL_ID_RE.search(url or "")
-        if m:
-            ids.add(m.group(1))
-    return {"names": names, "ids": ids, "archive": read_archive_ids(archive_path(source))}
+    Looked up in the playlist's subfolder of *every* library folder. The walk
+    is recursive because Organize moves files into YYYY-MM/DD/ folders.
+    Library rows under those folders add their yt-dlp sidecar title (the real,
+    unsanitised title) and source URL (the video id)."""
+    targets = all_targets(source.target_subdir)
+    names, ids, archived = set(), set(), set()
+    for target in targets:
+        if os.path.isdir(target):
+            for dirpath, _dirs, files in os.walk(target):
+                for f in files:
+                    stem, ext = os.path.splitext(f)
+                    if ext.lower() in settings.VIDEO_EXTENSIONS:
+                        k = name_key(stem)
+                        if k:
+                            names.add(k)
+        archived |= read_archive_ids(os.path.join(target, _archive_name(source)))
+    if targets:
+        q = Q()
+        for t in targets:
+            q |= Q(file_path__startswith=roots.prefix(t))
+        rows = Video.objects.filter(q, missing=False)
+        for title, url in rows.values_list("title", "source_url").iterator():
+            k = name_key(title)
+            if k:
+                names.add(k)
+            m = _URL_ID_RE.search(url or "")
+            if m:
+                ids.add(m.group(1))
+    return {"names": names, "ids": ids, "archive": archived}
 
 
 def classify(entries, index, skipped_ids):
@@ -244,7 +268,7 @@ def disk_info(source):
 
 # ---- Cookies ---------------------------------------------------------------
 # The pasted cookies carry the owner's YouTube login, so they are stored
-# 0600 outside LIBRARY_ROOT and never sent back to the browser -- the UI only
+# 0600 outside the library and never sent back to the browser -- the UI only
 # ever learns "set / how many / when".
 
 _LOGIN_COOKIES = {"SID", "__Secure-1PSID", "__Secure-3PSID", "LOGIN_INFO"}

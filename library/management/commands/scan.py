@@ -16,4 +16,6 @@ class Command(BaseCommand):
             return
         self.stdout.write(self.style.SUCCESS(
             f"Added {summary['added']}, updated {summary['updated']}, "
-            f"missing {summary['missing']} (root: {summary['root']})"))
+            f"missing {summary['missing']} (folders: {summary['root']})"))
+        for w in summary.get("warnings", []):
+            self.stderr.write(self.style.WARNING(w))

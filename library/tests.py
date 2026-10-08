@@ -26,7 +26,7 @@ from django.utils import timezone
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
-from . import backup, downloader, refresh, services, views
+from . import backup, downloader, refresh, roots, services, views
 from .auth import LOGIN_ATTEMPT_LIMIT, public_when_enabled
 from .models import (
     DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
@@ -42,12 +42,13 @@ User = get_user_model()
 OWNER_POST_NO_PK = [
     "scan", "set_default_thumb_percent", "purge_missing", "reset_library",
     "bulk_regen_thumb", "bulk_rename", "bulk_hide", "bulk_unhide", "bulk_delete",
+    "folders_save", "folders_rescan",
 ]
 OWNER_POST_PK = [
     "regen_thumb", "rename_video", "toggle_hidden", "delete_video",
     "convert", "cancel_convert",
 ]
-OWNER_GET_NO_PK = ["hidden_videos", "organize", "duplicates"]
+OWNER_GET_NO_PK = ["hidden_videos", "organize", "duplicates", "folders", "folders_status"]
 
 
 def _make_video(**kw):
@@ -1909,3 +1910,281 @@ class PlayerMarkupTests(AuthTestCase):
                        "e.movementX===0&&e.movementY===0"):
             self.assertIn(needle, h, needle)
         self.assertNotIn("shortsSlide(", h)
+
+
+
+# ---- Several library folders ---------------------------------------------------------------
+
+class MultiFolderCase(AuthTestCase):
+    """Two scratch folders saved as the library; `a` is the main one."""
+
+    def setUp(self):
+        super().setUp()
+        self.a, self.b = tempfile.mkdtemp(), tempfile.mkdtemp()
+        self.ytdl = tempfile.mkdtemp()
+        ov = override_settings(YTDL_DIR=self.ytdl)
+        ov.enable()
+        self.addCleanup(ov.disable)
+        for d in (self.a, self.b, self.ytdl):
+            self.addCleanup(shutil.rmtree, d, True)
+
+    def use(self, *paths, main=None):
+        return roots.save_config([{"path": p} for p in paths], main or paths[0])
+
+    def touch(self, root, *parts):
+        path = os.path.join(root, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        return path
+
+    def scan(self, **kw):
+        return services.scan_library(make_thumbs=False, **kw)
+
+    def vid(self, path):
+        return Video.objects.get(file_path=path)
+
+
+class LibraryFoldersConfigTests(MultiFolderCase):
+    def test_default_is_the_library_root_setting(self):
+        from django.conf import settings
+        self.assertEqual(roots.library_roots(), [os.path.normpath(settings.LIBRARY_ROOT)])
+        self.assertEqual(roots.main_root(), os.path.normpath(settings.LIBRARY_ROOT))
+        self.assertFalse(roots.is_custom())
+
+    def test_save_keeps_order_and_main(self):
+        self.use(self.a, self.b, main=self.b)
+        self.assertEqual(roots.library_roots(), [self.a, self.b])
+        self.assertEqual(roots.main_root(), self.b)
+        self.use(self.b, self.a, main=self.a)
+        self.assertEqual(roots.library_roots(), [self.b, self.a])
+        self.assertEqual(roots.main_root(), self.a)
+        self.assertTrue(roots.is_custom())
+
+    def test_save_rejects_bad_input(self):
+        gone = os.path.join(self.a, "nope")
+        sub = os.path.join(self.a, "inner")
+        os.makedirs(sub)
+        cases = [
+            ([], self.a, "at least one"),
+            ([{"path": "relative/dir"}], "relative/dir", "full path"),
+            ([{"path": gone}], gone, "No such folder"),
+            ([{"path": self.a}, {"path": self.a + "/"}], self.a, "twice"),
+            ([{"path": self.a}, {"path": sub}], self.a, "overlap"),
+            ([{"path": self.a}], self.b, "Pick which folder"),
+            ([{"path": "/"}], "/", "pick a folder"),
+        ]
+        for folders, main, msg in cases:
+            with self.subTest(msg=msg):
+                with self.assertRaisesRegex(ValueError, msg):
+                    roots.save_config(folders, main)
+        self.assertFalse(roots.is_custom())     # nothing half-saved
+
+    def test_a_saved_but_offline_folder_can_stay_in_the_list(self):
+        self.use(self.a, self.b)
+        shutil.rmtree(self.b)                   # drive unplugged
+        roots.save_config([{"path": self.a}, {"path": self.b, "remote": r"\\nas\b"}], self.a)
+        self.assertEqual(roots.library_roots(), [self.a, self.b])
+        st = {f["path"]: f for f in roots.status()["folders"]}
+        self.assertFalse(st[self.b]["online"])
+        self.assertTrue(st[self.a]["online"])
+
+    def test_main_must_be_writable(self):
+        with mock.patch.object(roots.os, "access", side_effect=lambda p, m: not (m & os.W_OK)):
+            with self.assertRaisesRegex(ValueError, "read-only"):
+                self.use(self.a)
+
+    def test_root_of_does_not_confuse_prefix_siblings(self):
+        r = ["/x/b", "/x/bc"]
+        self.assertEqual(roots.root_of("/x/bc/v.mp4", r), "/x/bc")
+        self.assertEqual(roots.root_of("/x/b/v.mp4", r), "/x/b")
+        self.assertIsNone(roots.root_of("/x/bcd/v.mp4", r))
+        self.assertEqual(roots.root_of("/x/b/sub/v.mp4", ["/x", "/x/b"]), "/x/b")
+
+
+class LibraryFoldersScanTests(MultiFolderCase):
+    def test_scan_reads_every_folder_with_its_own_relative_path(self):
+        self.use(self.a, self.b)
+        pa = self.touch(self.a, "one.mp4")
+        pb = self.touch(self.b, "sub", "two.mp4")
+        self.touch(self.b, "notes.txt")
+        r = self.scan()
+        self.assertEqual(r["added"], 2)
+        self.assertEqual(r["warnings"], [])
+        self.assertEqual(self.vid(pa).rel_path, "one.mp4")
+        self.assertEqual(self.vid(pb).rel_path, os.path.join("sub", "two.mp4"))
+
+    def test_an_unreachable_folder_is_not_judged(self):
+        self.use(self.a, self.b)
+        pa = self.touch(self.a, "one.mp4")
+        pb = self.touch(self.b, "two.mp4")
+        self.scan()
+        shutil.rmtree(self.b)                   # share not mounted
+        r = self.scan()
+        self.assertEqual(r["missing"], 0)
+        self.assertTrue(any("not found" in w for w in r["warnings"]))
+        self.assertFalse(self.vid(pb).missing)
+        self.assertFalse(self.vid(pa).missing)
+
+    def test_an_emptied_mountpoint_is_not_judged_but_a_real_delete_is(self):
+        self.use(self.a, self.b)
+        self.touch(self.a, "keep.mp4")
+        gone = self.touch(self.a, "gone.mp4")
+        pb = self.touch(self.b, "two.mp4")
+        self.scan()
+        os.remove(pb)                           # b is now an empty directory: looks unmounted
+        os.remove(gone)                         # a still has files, so this one is a real deletion
+        r = self.scan()
+        self.assertTrue(any("looks unmounted" in w for w in r["warnings"]))
+        self.assertFalse(self.vid(pb).missing)
+        self.assertTrue(self.vid(gone).missing)
+        self.assertEqual(r["missing"], 1)
+
+    def test_a_removed_folder_makes_its_videos_missing_and_adding_it_back_restores_them(self):
+        self.use(self.a, self.b)
+        self.touch(self.a, "one.mp4")
+        pb = self.touch(self.b, "two.mp4")
+        self.scan()
+        PlaybackState.objects.create(video=self.vid(pb), user=self.owner, position_seconds=42)
+        self.use(self.a)
+        self.scan()
+        self.assertTrue(self.vid(pb).missing)
+        self.use(self.a, self.b)
+        self.scan()
+        v = self.vid(pb)
+        self.assertFalse(v.missing)
+        self.assertEqual(v.playback_states.get(user=self.owner).position_seconds, 42)   # history survived
+
+    def test_nothing_reachable_is_an_error_not_a_mass_delete(self):
+        self.use(self.a, self.b)
+        pa = self.touch(self.a, "one.mp4")
+        self.scan()
+        shutil.rmtree(self.a)
+        shutil.rmtree(self.b)
+        r = self.scan()
+        self.assertTrue(r["error"])
+        self.assertFalse(self.vid(pa).missing)
+
+
+class LibraryFoldersFileOpsTests(MultiFolderCase):
+    def test_organize_keeps_each_video_on_its_own_folder(self):
+        self.use(self.a, self.b)
+        pa = self.touch(self.a, "one.mp4")
+        pb = self.touch(self.b, "two.mp4")
+        self.scan()
+        result = services.organize_by_mtime(execute=True)
+        self.assertEqual(result["count"], 2)
+        for orig, root in ((pa, self.a), (pb, self.b)):
+            v = Video.objects.get(filename=os.path.basename(orig))
+            self.assertTrue(v.file_path.startswith(root + os.sep), v.file_path)
+            self.assertTrue(os.path.exists(v.file_path))
+            self.assertRegex(v.rel_path, r"^\d{4}-\d{2}/\d{2}/")
+
+    def test_organize_ignores_videos_outside_every_folder(self):
+        self.use(self.a)
+        outside = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, outside, True)
+        _make_video(file_path=self.touch(outside, "x.mp4"), file_mtime=timezone.now())
+        self.assertEqual(services.organize_by_mtime(execute=False)["count"], 0)
+
+    def test_rename_keeps_a_relative_path_inside_the_right_folder(self):
+        self.use(self.a, self.b)
+        pb = self.touch(self.b, "sub", "old.mp4")
+        self.scan()
+        ok, err = services.rename_video(self.vid(pb), new_title="New name", new_stem="New name")
+        self.assertTrue(ok, err)
+        v = Video.objects.get(filename="New name.mp4")
+        self.assertEqual(v.rel_path, os.path.join("sub", "New name.mp4"))
+
+    def test_remote_path_uses_the_folders_own_network_path(self):
+        roots.save_config([{"path": self.a, "remote": r"\\nas\one"}, {"path": self.b}], self.a)
+        pa = self.touch(self.a, "d", "x.mp4")
+        pb = self.touch(self.b, "y.mp4")
+        self.scan()
+        self.assertEqual(roots.remote_path(self.vid(pa)), "\\\\nas\\one\\d\\x.mp4")
+        self.assertEqual(roots.remote_path(self.vid(pb)), pb)       # no network path: the local one
+
+
+class LibraryFoldersDownloadTests(MultiFolderCase):
+    def setUp(self):
+        super().setUp()
+        self.use(self.a, self.b, main=self.b)
+        self.src = DownloadSource.objects.create(url="https://www.youtube.com/playlist?list=PL1")
+
+    def test_downloads_go_to_the_main_folder(self):
+        self.assertEqual(downloader.resolve_target(""), self.b)
+        self.assertEqual(downloader.resolve_target("Music"), os.path.join(self.b, "Music"))
+        self.assertTrue(downloader.archive_path(self.src).startswith(self.b + os.sep))
+        self.use(self.a, self.b, main=self.a)
+        self.assertEqual(downloader.resolve_target(""), self.a)
+
+    def test_subfolder_escape_is_still_refused(self):
+        for bad in ("..", "x/../..", "../" + os.path.basename(self.a)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                downloader.resolve_target(bad, self.b)
+        os.symlink(self.a, os.path.join(self.b, "link"))
+        with self.assertRaises(ValueError):
+            downloader.resolve_target("link", self.b)
+
+    def test_already_downloaded_is_looked_up_in_every_folder(self):
+        self.touch(self.a, "Old Song.mp4")                      # saved back when `a` was the main one
+        self.touch(self.b, "New Song.mp4")
+        old_id = "oldidoldid1"
+        with open(os.path.join(self.a, downloader._archive_name(self.src)), "w") as f:
+            f.write(f"youtube {old_id}\n")
+        es = [{"id": "i1", "title": "Old Song", "duration": 60}, {"id": "i2", "title": "New Song", "duration": 60},
+              {"id": "i3", "title": "Fresh", "duration": 60}, {"id": old_id, "title": "Renamed upstream", "duration": 60}]
+        got = {e["title"]: e["status"] for e in downloader.classify(es, downloader.local_index(self.src), set())}
+        self.assertEqual(got, {"Old Song": "downloaded", "New Song": "downloaded",
+                               "Fresh": "new", "Renamed upstream": "archived"})
+
+    def test_free_space_is_reported_for_the_main_folder(self):
+        with mock.patch.object(downloader, "free_space", return_value=(5, 10)) as fs:
+            self.assertEqual(downloader.disk_info(self.src)["free"], 5)
+        self.assertEqual(fs.call_args[0][0], self.b)
+
+
+class LibraryFoldersViewTests(MultiFolderCase):
+    def post_cfg(self, folders, main):
+        return self.client.post(reverse("folders_save"),
+                                {"config": json.dumps({"folders": folders, "main": main})})
+
+    def test_owner_can_save_and_the_page_lists_the_folders(self):
+        self.client.force_login(self.owner)
+        r = self.post_cfg([{"path": self.a, "remote": ""}, {"path": self.b}], self.b)
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual([f["main"] for f in body["folders"]], [False, True])
+        page = self.client.get(reverse("folders")).content.decode()
+        self.assertIn('id="flData"', page)
+        self.assertIn(self.b, page)
+        self.assertEqual(self.client.get(reverse("folders_status")).json()["folders"][1]["path"], self.b)
+
+    def test_bad_input_is_a_400_with_a_message(self):
+        self.client.force_login(self.owner)
+        r = self.post_cfg([{"path": "nope"}], "nope")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("full path", r.json()["error"])
+        self.assertEqual(self.client.post(reverse("folders_save"), {"config": "{not json"}).status_code, 400)
+        self.assertEqual(self.client.post(reverse("folders_save"), {"config": "[]"}).status_code, 400)
+
+    def test_viewer_is_locked_out(self):
+        self.client.force_login(self.viewer)
+        for name in ("folders", "folders_status"):
+            self.assertNotEqual(self.client.get(reverse(name)).status_code, 200, name)
+        for name in ("folders_save", "folders_rescan"):
+            self.assertNotEqual(self.client.post(reverse(name)).status_code, 200, name)
+
+    def test_rescan_starts_a_background_scan(self):
+        self.client.force_login(self.owner)
+        with mock.patch.object(views.threading, "Thread") as th:
+            r = self.client.post(reverse("folders_rescan"))
+        self.assertTrue(r.json()["started"])
+        th.assert_called_once()
+        views._SCAN_LOCK.release()      # the patched thread never ran, so it never released it
+
+    def test_menu_links_to_the_page_for_owners_only(self):
+        self.client.force_login(self.owner)
+        self.assertIn(reverse("folders"), self.client.get(reverse("library")).content.decode())
+        self.client.force_login(self.viewer)
+        self.assertNotIn('Library folders…', self.client.get(reverse("library")).content.decode())

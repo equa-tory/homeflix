@@ -45,7 +45,7 @@
     <div class="big">🎬</div>
     <p>Library is empty.</p>
     <p class="sub">Use the <b>⋯ → Rescan</b> button to scan your video folder.<br>
-      Current folder: <code>{{ library_root }}</code></p>
+      Library folders: {% for r in library_roots %}<code>{{ r }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}{% if is_owner %} · <a href="{% url 'folders' %}" data-spa>change</a>{% endif %}</p>
   {% endif %}
 </div>
 {% endblock %}

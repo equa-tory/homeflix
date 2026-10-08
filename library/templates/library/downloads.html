@@ -54,7 +54,7 @@
     <button class="btn nav-item" id="dlAddBtn">Save link</button>
   </form>
   <p class="sub" id="dlAddMsg"></p>
-  <p class="sub">Videos land in <code>{{ library_root }}</code> (plus the folder above). A video counts as already downloaded if a file with the same name exists anywhere under that folder.</p>
+  <p class="sub">Videos are saved in <code>{{ library_root }}</code> (the main library folder, <a href="{% url 'folders' %}" data-spa>change</a>), plus the folder above. A video counts as already downloaded if a file with the same name exists in that folder inside <i>any</i> library folder.</p>
 </section>
 
 <section id="dlMain" hidden>

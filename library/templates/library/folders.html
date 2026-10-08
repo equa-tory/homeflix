@@ -1,0 +1,31 @@
+{% extends base_template %}
+{% block content %}
+<h1>Library folders</h1>
+<p class="sub">Everything in all of these folders shows up in HomeFlix as one library. <b>New downloads</b> are saved in the one marked <b>main</b>, so when a drive fills up you can add a bigger one and mark that as main, without moving anything.</p>
+
+{{ status|json_script:"flData" }}
+
+<section class="dl-card">
+  <h2>Folders</h2>
+  <div id="flList"></div>
+  <div class="dl-row">
+    <button type="button" class="btn ghost nav-item" id="flAdd">＋ Add folder</button>
+    <button type="button" class="btn nav-item" id="flSave">Save</button>
+    <button type="button" class="btn ghost nav-item" id="flScan">↻ Rescan now</button>
+    <span class="sub" id="flMsg"></span>
+  </div>
+  <p class="sub" style="margin-bottom:0">Type the full path as the server sees it (for example <code>/mnt/big/YouTube</code>). The <b>network path</b> is optional: it is what the player shows under a video so you can open the file from another PC (for example <code>\\192.168.1.39\big\YouTube</code>).</p>
+</section>
+
+<details class="dl-card dl-how">
+  <summary class="nav-item" tabindex="0">What happens when I change this?</summary>
+  <ul>
+    <li><b>Adding</b> a folder: press Save, then Rescan (it also happens automatically every 30 minutes). A big folder takes a while, because every new video gets a thumbnail.</li>
+    <li><b>Removing</b> a folder only removes it from HomeFlix, no file is touched. Its videos disappear from the library, but their history, notes and playlist entries are kept and come back if you add the folder again.</li>
+    <li><b>Changing the path</b> of a folder (say the drive got a new mount point) counts as removing the old one and adding a new one, so those videos start over without history. If you can, keep the path and change what is mounted there instead.</li>
+    <li>A folder that is offline (drive unplugged, share not mounted) is skipped, and its videos are <b>not</b> marked missing.</li>
+    <li>Switching the main folder doesn't make earlier downloads look new: "already downloaded" checks every folder.</li>
+    <li>Organize by date keeps each video in the folder it is already in.</li>
+  </ul>
+</details>
+{% endblock %}

@@ -47,6 +47,8 @@ class LibraryConfig(AppConfig):
                     else:
                         logger.info("Background scan: +%d added, %d missing",
                                     r["added"], r["missing"])
+                    for w in r.get("warnings", []):
+                        logger.warning("Background scan: %s", w)
             except Exception as exc:
                 logger.error("Background scan failed: %s", exc)
             finally:

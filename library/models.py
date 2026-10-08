@@ -219,6 +219,23 @@ class Setting(models.Model):
         cls.objects.update_or_create(key=key, defaults={"value": str(value)})
 
 
+class LibraryFolder(models.Model):
+    """One folder of the library. Every folder is scanned and watched; the one
+    flagged `is_main` is where downloads are saved. With no rows at all the
+    library is just `settings.LIBRARY_ROOT` (see library/roots.py)."""
+    path = models.CharField(max_length=1024, unique=True)
+    # Optional network path (e.g. \\server\share) shown under the player for this folder.
+    remote = models.CharField(max_length=1024, blank=True, default="")
+    is_main = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return self.path
+
+
 class UserPref(models.Model):
     """Per-user key/value store (theme, autoplay, repeat, shuffle) -- the
     per-user twin of Setting. Kept as a separate model rather than adding a

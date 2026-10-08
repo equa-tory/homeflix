@@ -1,7 +1,7 @@
 {% extends base_template %}
 {% block content %}
 <h1>Organize files by date</h1>
-<p class="sub">Moves each video into <code>{{ library_root }}/YYYY-MM/DD/</code> based on its
+<p class="sub">Moves each video into a <code>YYYY-MM/DD/</code> folder inside the library folder it is already in ({% for r in library_roots %}<code>{{ r }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}) based on its
 modified date. Subtitles and sidecar files (same name) move with it. Other files
 (txt, png, jpeg…) are left exactly where they are.</p>
 
@@ -22,7 +22,7 @@ modified date. Subtitles and sidecar files (same name) move with it. Other files
     <tbody>
       {% for m in result.moves|slice:":300" %}
         <tr>
-          <td><code>{{ m.src }}</code></td>
+          <td>{% if library_roots|length > 1 %}<span class="scinfo">{{ m.root }}/</span>{% endif %}<code>{{ m.src }}</code></td>
           <td class="arrow">→</td>
           <td><code>{{ m.dst }}</code></td>
           <td class="scinfo">{% if m.sidecars %}+{{ m.sidecars|length }} sidecar{{ m.sidecars|length|pluralize }}{% endif %}</td>

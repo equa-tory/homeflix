@@ -13,6 +13,7 @@ from django.conf import settings
 from django.db import IntegrityError
 from django.utils import timezone
 
+from . import roots
 from .models import Video, VideoSubtitle, Setting
 
 
@@ -264,36 +265,61 @@ def _scan_file(root, full, name, ext, make_thumbs):
 
 
 def scan_library(root=None, make_thumbs=True):
-    """Walk the library, add new videos, update existing, flag deletions.
-    Returns a summary dict. Non-video files are completely ignored.
-    """
-    root = root or settings.LIBRARY_ROOT
-    summary = {"added": 0, "updated": 0, "missing": 0, "root": root, "error": ""}
-    if not os.path.isdir(root):
-        summary["error"] = f"Library folder not found: {root}"
-        return summary
+    """Walk every library folder (or just `root`), add new videos, update
+    existing, flag deletions. Returns a summary dict. Non-video files are
+    completely ignored.
+
+    A folder that can't be reached (unmounted share, unplugged drive) or that
+    has become an empty directory while the database still lists videos in it
+    (an unmounted mountpoint looks exactly like that) is *not judged*: its
+    videos are left alone instead of being flagged missing, and a warning is
+    reported. `error` is only set when no folder could be scanned at all."""
+    folders = [os.path.normpath(root)] if root else roots.library_roots()
+    summary = {"added": 0, "updated": 0, "missing": 0, "root": ", ".join(folders),
+               "roots": folders, "error": "", "warnings": []}
 
     seen_paths = set()
-    for dirpath, _dirs, files in os.walk(root):
-        for name in files:
-            ext = os.path.splitext(name)[1].lower()
-            if ext not in settings.VIDEO_EXTENSIONS:
-                continue  # leave txt/png/jpeg and other files untouched
-            if is_ytdlp_temp(name):
-                continue  # a download in progress -- picked up once it's merged
-            full = os.path.join(dirpath, name)
-            try:
-                summary[_scan_file(root, full, name, ext, make_thumbs)] += 1
-                seen_paths.add(full)
-            except FileNotFoundError:
-                continue  # vanished mid-scan (moved/deleted/merged)
-            except IntegrityError:
-                # Another scan (each gunicorn worker runs its own, and the
-                # downloader scans after a job) inserted the same file first.
-                seen_paths.add(full)
+    unjudged = []          # folders whose videos must not be flagged missing
+    scanned = 0
+    for r in folders:
+        if not os.path.isdir(r):
+            summary["warnings"].append(f"Library folder not found: {r}")
+            unjudged.append(r)
+            continue
+        found = 0
+        for dirpath, _dirs, files in os.walk(r):
+            for name in files:
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in settings.VIDEO_EXTENSIONS:
+                    continue  # leave txt/png/jpeg and other files untouched
+                if is_ytdlp_temp(name):
+                    continue  # a download in progress -- picked up once it's merged
+                full = os.path.join(dirpath, name)
+                try:
+                    summary[_scan_file(r, full, name, ext, make_thumbs)] += 1
+                    seen_paths.add(full)
+                    found += 1
+                except FileNotFoundError:
+                    continue  # vanished mid-scan (moved/deleted/merged)
+                except IntegrityError:
+                    # Another scan (each gunicorn worker runs its own, and the
+                    # downloader scans after a job) inserted the same file first.
+                    seen_paths.add(full)
+                    found += 1
+        scanned += 1
+        if not found and not os.listdir(r) and \
+                Video.objects.filter(file_path__startswith=roots.prefix(r), missing=False).exists():
+            summary["warnings"].append(f"{r} is empty -- looks unmounted, its videos were left alone")
+            unjudged.append(r)
+
+    if not scanned:
+        summary["error"] = summary["warnings"][0] if summary["warnings"] else "No library folder"
+        return summary
 
     # Flag any DB rows whose files vanished
     gone = Video.objects.exclude(file_path__in=seen_paths).filter(missing=False)
+    for r in unjudged:
+        gone = gone.exclude(file_path__startswith=roots.prefix(r))
     summary["missing"] = gone.count()
     gone.update(missing=True)
     return summary
@@ -1057,7 +1083,7 @@ def rename_video(video, new_title=None, new_stem=None):
 
     shutil.move(video.file_path, new_path)
     video.file_path = new_path
-    video.rel_path = os.path.relpath(new_path, settings.LIBRARY_ROOT)
+    video.rel_path = roots.rel_to_root(new_path)
     video.filename = new_name
     video.save(update_fields=["file_path", "rel_path", "filename"])
     return True, None
@@ -1131,16 +1157,20 @@ def find_duplicates():
 
 
 def organize_by_mtime(execute=False):
-    """Plan (and optionally perform) moving each video into LIBRARY_ROOT/YYYY-MM/DD/.
-    Moves the video plus its sidecars; leaves unrelated files untouched.
-    Returns {"moves": [(rel_src, rel_dst), ...], "count": n, "executed": bool}.
+    """Plan (and optionally perform) moving each video into <its library
+    folder>/YYYY-MM/DD/ -- never to another folder, so a video stays on its
+    drive. Moves the video plus its sidecars; leaves unrelated files untouched.
+    Returns {"moves": [{...}, ...], "count": n, "executed": bool}.
     """
     from .models import Video
-    root = settings.LIBRARY_ROOT
+    all_roots = roots.library_roots()
     moves = []
     for v in Video.objects.filter(missing=False):
         if not v.file_mtime or not os.path.exists(v.file_path):
             continue
+        root = roots.root_of(v.file_path, all_roots)
+        if root is None:
+            continue  # not inside any library folder -- leave it alone
         folder = v.file_mtime.strftime("%Y-%m/%d")  # e.g. 2026-06/18
         dest_dir = os.path.join(root, folder)
         dest = os.path.join(dest_dir, v.filename)
@@ -1148,6 +1178,7 @@ def organize_by_mtime(execute=False):
             continue  # already in place
         moves.append({
             "video_id": v.id,
+            "root": root,
             "src": os.path.relpath(v.file_path, root),
             "dst": os.path.relpath(dest, root),
             "sidecars": [os.path.basename(s) for s in _sidecars_for(v.file_path)],

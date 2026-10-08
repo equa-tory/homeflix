@@ -1,4 +1,5 @@
 import os
+import threading
 import re
 import json
 import difflib
@@ -22,7 +23,7 @@ from .models import (
     Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
     UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob, RESUME_MIN_SECONDS,
 )
-from . import services, downloader, backup, refresh
+from . import services, downloader, backup, refresh, roots
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 CHUNK = 8192
@@ -57,7 +58,8 @@ def is_spa(request):
 def base_ctx(request, *, active_nav="", page_id="", spa_title="HomeFlix", **extra):
     ctx = {
         "theme": theme(request),
-        "library_root": settings.LIBRARY_ROOT,
+        "library_root": roots.main_root(),
+        "library_roots": roots.library_roots(),
         "active_nav": active_nav,
         "page_id": page_id,
         "spa_title": spa_title,
@@ -546,10 +548,7 @@ def _build_watch_data(request, pk):
     if video.size_bytes:
         tech.append(fmt_size(video.size_bytes))
 
-    if settings.REMOTE_ROOT:
-        remote_path = settings.REMOTE_ROOT.rstrip("\\/") + "\\" + video.rel_path.replace("/", "\\")
-    else:
-        remote_path = video.file_path
+    remote_path = roots.remote_path(video)
 
     # Non-browser-playable files (mkv, HEVC, exotic audio, ...) play via a live
     # HLS transcode (Jellyfin-style) — unless a converted MP4 copy already
@@ -1930,3 +1929,56 @@ def backups_run(request):
     if not backup.start_now():
         return JsonResponse({"ok": False, "error": "A backup is already running"}, status=409)
     return JsonResponse({"ok": True, **backup.status()})
+
+
+# ---- Library folders (owner only) --------------------------------------------
+
+_SCAN_LOCK = threading.Lock()
+
+
+def _scan_in_background():
+    """A first scan of a big new folder (ffprobe + a thumbnail per video) takes
+    far longer than a request may live, so it runs in a thread. One at a time
+    per process; the periodic scan in apps.py handles the cross-worker case."""
+    if not _SCAN_LOCK.acquire(blocking=False):
+        return False
+
+    def run():
+        try:
+            services.scan_library()
+        finally:
+            _SCAN_LOCK.release()
+            from django.db import connection
+            connection.close()
+
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+@owner_required
+def folders(request):
+    return render(request, "library/folders.html", base_ctx(
+        request, page_id="folders", spa_title="Library folders — HomeFlix", status=roots.status()))
+
+
+@owner_required
+def folders_status(request):
+    return JsonResponse({"ok": True, **roots.status()})
+
+
+@require_POST
+@owner_required
+def folders_save(request):
+    try:
+        cfg = json.loads(request.POST.get("config") or "{}")
+        st = roots.save_config(cfg.get("folders"), cfg.get("main"))
+    except (ValueError, AttributeError) as e:   # JSONDecodeError is a ValueError
+        return JsonResponse({"ok": False, "error": str(e)}, status=400)
+    return JsonResponse({"ok": True, **st})
+
+
+@require_POST
+@owner_required
+def folders_rescan(request):
+    started = _scan_in_background()
+    return JsonResponse({"ok": True, "started": started})

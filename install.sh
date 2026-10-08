@@ -34,7 +34,8 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; cat <<'U'
 
 Options:
-  --library PATH   folder with your videos (HOMEFLIX_LIBRARY)
+  --library PATH   first folder with your videos (HOMEFLIX_LIBRARY); more can be added
+                   later in the app under Manage -> Library folders
   --port N         port to listen on (default 8002)
   --bind ADDR      0.0.0.0 = reachable from phones/TVs on your LAN (default),
                    127.0.0.1 = this machine only (use with nginx, see README)
