@@ -3069,9 +3069,9 @@ const PLAYER=(function(){
       `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>◀ ▶</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>▲▼</b> next/prev video</span></div>`+
       `<h1 class="wtitle">${esc(data.title)}</h1>`+
       `<div class="wbar"><span class="like-box">`+
-        `<button class="iconbtn" id="phDislike" title="Dislike (−1)">👎</button>`+
+        `<button class="iconbtn" id="phLike" title="Like (+1)">♥</button>`+
         `<span class="like-n ${likeCls(data.rating)}" id="phScore" title="Net likes">${likeTxt(data.rating)}</span>`+
-        `<button class="iconbtn" id="phLike" title="Like (+1)">♥</button></span>`+
+        `<button class="iconbtn" id="phDislike" title="Dislike (−1)">👎</button></span>`+
       (data.is_owner?`<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
         (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`:'')+
       (data.is_owner?`<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
