@@ -20,6 +20,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from datetime import timedelta
 
 from django.utils import timezone
@@ -165,9 +166,9 @@ class OwnerOnlyTests(AuthTestCase):
 
     def test_viewer_keeps_non_owner_actions(self):
         """Sanity check the split isn't over-broad: everyday viewer actions
-        (favorite, rating, playlists, progress) must still work."""
+        (like/dislike, playlists, progress) must still work."""
         self.client.force_login(self.viewer)
-        resp = self.client.post(reverse("toggle_favorite", args=[self.video.pk]), {}, HTTP_X_SPA="1")
+        resp = self.client.post(reverse("set_rating", args=[self.video.pk]), {"delta": "1"}, HTTP_X_SPA="1")
         self.assertEqual(resp.status_code, 200)
         resp = self.client.post(reverse("save_progress", args=[self.video.pk]), {"position": "12"})
         self.assertEqual(resp.status_code, 200)
@@ -1441,8 +1442,8 @@ class SmartMatchModeTests(AuthTestCase):
     def setUp(self):
         super().setUp()
         self.a = _make_video(title="Alpha one", rating=0)
-        self.b = _make_video(title="Beta two", favorite=True)
-        self.c = _make_video(title="Alpha fav", favorite=True)
+        self.b = _make_video(title="Beta two", rating=5)
+        self.c = _make_video(title="Alpha fav", rating=5)
         self.d = _make_video(title="Gamma")
         self.sp = SmartPlaylist.objects.create(name="s")
 
@@ -1455,7 +1456,7 @@ class SmartMatchModeTests(AuthTestCase):
         self.sp.save()
 
     TITLE = {"field": "title", "op": "contains", "value": "alpha"}
-    FAV = {"field": "favorite", "op": "is", "value": ""}
+    FAV = {"field": "rating", "op": "gte", "value": "5"}
 
     def test_all_requires_every_rule_any_requires_one(self):
         self.rules("all", self.TITLE, self.FAV)
@@ -1476,9 +1477,9 @@ class SmartMatchModeTests(AuthTestCase):
         self.assertEqual(len(self.titles()), 4)
 
     def test_any_with_not_contains_and_number_rules(self):
-        self.a.rating = 5
+        self.a.rating = 6
         self.a.save()
-        self.rules("any", {"field": "rating", "op": "gte", "value": "5"},
+        self.rules("any", {"field": "rating", "op": "gte", "value": "6"},
                    {"field": "title", "op": "contains", "value": "gamma"})
         self.assertEqual(self.titles(), ["Alpha one", "Gamma"])
         self.rules("all", {"field": "title", "op": "not_contains", "value": "alpha"})
@@ -2188,3 +2189,125 @@ class LibraryFoldersViewTests(MultiFolderCase):
         self.assertIn(reverse("folders"), self.client.get(reverse("library")).content.decode())
         self.client.force_login(self.viewer)
         self.assertNotIn('Library folders…', self.client.get(reverse("library")).content.decode())
+
+
+
+# ---- Likes (the old stars + favorite, folded into one net score) ---------------------------------
+
+class LikesTests(AuthTestCase):
+    def rate(self, video, delta, **kw):
+        return self.client.post(reverse("set_rating", args=[video.pk]), {"delta": delta}, **kw)
+
+    def test_every_press_moves_the_score_and_it_can_go_negative(self):
+        self.client.force_login(self.viewer)
+        for delta, want in ((1, 1), (1, 2), (1, 3), (-1, 2), (-1, 1), (-1, 0), (-1, -1), (-1, -2)):
+            r = self.rate(self.video, delta)
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.json()["rating"], want)
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.rating, -2)
+
+    def test_only_plus_or_minus_one_is_accepted(self):
+        self.client.force_login(self.viewer)
+        for bad in ("0", "2", "-5", "abc", ""):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.rate(self.video, bad).status_code, 400)
+        self.assertEqual(self.client.post(reverse("set_rating", args=[self.video.pk]), {"rating": "5"}).status_code, 400)
+        self.video.refresh_from_db()
+        self.assertEqual(self.video.rating, 0)
+
+    def test_unknown_video_is_404_and_anonymous_is_redirected(self):
+        self.client.force_login(self.viewer)
+        self.assertEqual(self.client.post(reverse("set_rating", args=[999999]), {"delta": "1"}).status_code, 404)
+        self.client.logout()
+        self.assertEqual(self.rate(self.video, 1).status_code, 302)
+
+    def test_old_favorite_urls_are_gone(self):
+        from django.urls import NoReverseMatch
+        for name in ("toggle_favorite", "bulk_favorite"):
+            with self.assertRaises(NoReverseMatch):
+                reverse(name, args=[1]) if name == "toggle_favorite" else reverse(name)
+
+    def test_bulk_like_and_dislike(self):
+        a, b = _make_video(title="a", rating=2), _make_video(title="b")
+        self.client.force_login(self.viewer)
+        ids = f"{a.pk},{b.pk}"
+        self.assertEqual(self.client.post(reverse("bulk_rating"), {"ids": ids, "delta": "1"}).json()["count"], 2)
+        self.client.post(reverse("bulk_rating"), {"ids": ids, "delta": "-1"})
+        self.client.post(reverse("bulk_rating"), {"ids": ids, "delta": "-1"})
+        self.assertEqual(self.client.post(reverse("bulk_rating"), {"ids": ids, "delta": "3"}).status_code, 400)
+        a.refresh_from_db(); b.refresh_from_db()
+        self.assertEqual((a.rating, b.rating), (1, -1))
+
+    def test_library_sort_by_likes_and_the_liked_filter(self):
+        top = _make_video(title="top", rating=7)
+        mid = _make_video(title="mid", rating=2)
+        bad = _make_video(title="bad", rating=-3)
+        self.video.title, self.video.rating = "zero", 0
+        self.video.save()
+        self.client.force_login(self.viewer)
+        titles = lambda **q: [i["title"] for i in self.client.get(reverse("api_videos"), q).json()["items"]]
+        self.assertEqual(titles(sort="rating"), ["top", "mid", "zero", "bad"])
+        self.assertEqual(titles(sort="rating", rev="1"), ["bad", "zero", "mid", "top"])
+        self.assertEqual(sorted(titles(fav="1")), ["mid", "top"])           # "Liked" = above zero
+        item = next(i for i in self.client.get(reverse("api_videos"), {"fav": "1"}).json()["items"] if i["title"] == "top")
+        self.assertEqual(item["rating"], 7)
+
+    def test_playlist_sort_by_likes_falls_back_to_playlist_order(self):
+        a, b, c = _make_video(title="a", rating=1), _make_video(title="b", rating=9), _make_video(title="c", rating=1)
+        pl = Playlist.objects.create(name="p")
+        for i, v in enumerate((a, b, c)):
+            PlaylistItem.objects.create(playlist=pl, video=v, order=i)
+        self.client.force_login(self.viewer)
+        got = lambda **q: [it.video.title for it in self.client.get(reverse("playlist_detail", args=[pl.pk]), q).context["items"]]
+        self.assertEqual(got(sort="rating"), ["b", "a", "c"])
+        self.assertEqual(got(sort="rating", rev="1"), ["a", "c", "b"])
+
+    def test_smart_playlist_rules_take_negative_likes(self):
+        good, meh = _make_video(title="good", rating=3), _make_video(title="meh", rating=-2)
+        sp = SmartPlaylist.objects.create(name="s", rules=json.dumps([{"field": "rating", "op": "lte", "value": "-1"}]))
+        self.assertEqual([v.title for v in sp.get_videos()], ["meh"])
+        sp.rules = json.dumps([{"field": "favorite", "op": "is", "value": ""}])     # removed field: ignored
+        sp.save()
+        self.assertGreaterEqual(len(list(sp.get_videos())), 2)
+
+    def test_player_payload_and_pages_have_no_stars_left(self):
+        self.client.force_login(self.viewer)
+        data = self.client.get(reverse("watch_api", args=[self.video.pk])).json()
+        self.assertIn("rating", data)
+        self.assertNotIn("favorite", data)
+        self.assertNotIn("favorite_url", data)
+        html = self.client.get(reverse("library")).content.decode()
+        for gone in ("bulkStars", "phStars", "railStars", "bulkFavBtn", "/bulk/favorite/"):
+            self.assertNotIn(gone, html, gone)
+        for there in ("bulkLikeBtn", "bulkDislikeBtn", "phLike", "phDislike", "railLikeBtn", "railDislikeBtn", "bindLikes"):
+            self.assertIn(there, html, there)
+
+
+class LikesMigrationTests(TransactionTestCase):
+    """0014 folds `favorite` into the score and rewrites saved smart-playlist rules."""
+
+    def tearDown(self):
+        ex = MigrationExecutor(connection)
+        ex.migrate(ex.loader.graph.leaf_nodes())            # leave the schema current for later tests
+
+    def test_favorites_become_five_extra_likes(self):
+        ex = MigrationExecutor(connection)
+        ex.migrate([("library", "0013_libraryfolder")])
+        old = ex.loader.project_state([("library", "0013_libraryfolder")]).apps
+        V, SP = old.get_model("library", "Video"), old.get_model("library", "SmartPlaylist")
+        mk = lambda n, **kw: V.objects.create(file_path=f"/x/{n}.mp4", rel_path=f"{n}.mp4", filename=f"{n}.mp4",
+                                              ext="mp4", title=n, **kw)
+        mk("plain"); mk("stars", rating=3); mk("heart", favorite=True); mk("both", favorite=True, rating=4)
+        keep = [{"field": "rating", "op": "gte", "value": "4"}]
+        SP.objects.create(name="f", rules=json.dumps([{"field": "favorite", "op": "is", "value": ""}] + keep))
+        SP.objects.create(name="broken", rules="not json")
+
+        ex = MigrationExecutor(connection)
+        ex.migrate([("library", "0014_likes")])
+        self.assertEqual(dict(Video.objects.values_list("title", "rating")),
+                         {"plain": 0, "stars": 3, "heart": 5, "both": 9})
+        rules = json.loads(SmartPlaylist.objects.get(name="f").rules)
+        self.assertEqual(rules, [{"field": "rating", "op": "gte", "value": "5"}] + keep)
+        self.assertEqual(SmartPlaylist.objects.get(name="broken").rules, "not json")
+        self.assertFalse(any(f.name == "favorite" for f in Video._meta.get_fields()))

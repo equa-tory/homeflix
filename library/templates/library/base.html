@@ -252,8 +252,6 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   border:1px solid var(--border);background:var(--bg);color:var(--text)}
 .bulk-pop select{flex:1;padding:7px;border-radius:7px;border:1px solid var(--border);
   background:var(--bg);color:var(--text);font-size:13px}
-.bulk-stars span{cursor:pointer;font-size:26px;color:var(--border);padding:2px}
-.bulk-stars span.on{color:var(--accent)}
 .sel-mode .card{cursor:pointer}
 .sel-mode .card.selected .thumb{outline:2px solid var(--accent);outline-offset:-2px}
 .sel-mode .card.selected .thumb::after{content:'✓';position:absolute;top:5px;left:5px;
@@ -472,7 +470,7 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   }
 }
 
-/* ---- Shorts action rail (favorite/rating/playlist + a ••• overflow for
+/* ---- Shorts action rail (like/dislike/playlist + a ••• overflow for
    owner tools) -- see renderShortsRail()/bindShortsRail() JS. #phInfo is
    hidden in shorts mode (rule above), so this is the only place those
    actions are reachable there. Hidden entirely outside shorts mode. ---- */
@@ -687,8 +685,13 @@ html.tv-mode #player.ph-expanded .ph-stage{height:56.25vw}
 .wtitle{font-size:20px; margin:12px 0 4px; letter-spacing:-.01em}
 @media(max-width:700px){.wtitle{font-size:17px}}
 .wbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0}
-.star{cursor:pointer; font-size:22px; color:var(--border)}
-.star.on{color:var(--accent)}
+.like-box{display:inline-flex; align-items:center; gap:8px}
+.like-n,.rail-score{min-width:3ch; text-align:center; font-weight:700; font-variant-numeric:tabular-nums}
+.like-n.pos,.rail-score.pos{color:var(--accent)}
+.like-n.neg,.rail-score.neg{color:#e5484d}
+.rail-score{font-size:14px; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); margin:-6px 0}
+.rail-score.pos{color:var(--accent)}
+@media(min-width:701px){.rail-score{color:var(--text); text-shadow:none}.rail-score.pos{color:var(--accent)}}
 .spacer{flex:1}
 .tech{color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; margin-top:4px}
 .remote-path{margin-top:8px; padding:8px 12px; background:var(--surface); border:1px solid var(--border);
@@ -976,18 +979,8 @@ html.player-locked{overflow:hidden}
     </div>
   </div>
 
-  <div class="bulk-aw">
-    <button class="btn ghost" id="bulkRateBtn">★ Rate</button>
-    <div class="bulk-pop" id="bulkRatePop">
-      <label>Set rating for selected</label>
-      <div class="bulk-stars" id="bulkStars">
-        <span data-v="1">★</span><span data-v="2">★</span><span data-v="3">★</span>
-        <span data-v="4">★</span><span data-v="5">★</span>
-      </div>
-    </div>
-  </div>
-
-  <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
+  <button class="btn ghost" id="bulkLikeBtn" title="+1 like for every selected video">♥ Like</button>
+  <button class="btn ghost" id="bulkDislikeBtn" title="-1 for every selected video">👎 Dislike</button>
   {% if user.is_staff %}
   <button class="btn ghost" id="bulkHideBtn">🙈 Hide</button>
   <button class="btn ghost" id="bulkUnhideBtn" style="display:none">👁 Unhide</button>
@@ -1157,7 +1150,7 @@ html.player-locked{overflow:hidden}
       </div>
 
       <!-- Shorts-mode action rail (see renderShortsRail/bindShortsRail below):
-           #phInfo (renderInfo's favorite/rating/playlist/hide/delete/etc.) is
+           #phInfo (renderInfo's like/playlist/hide/delete/etc.) is
            hidden entirely in .ph-shorts mode (#player.ph-expanded.ph-shorts
            #phInfo{display:none} above) -- this is a compact sibling exposing
            the same actions, positioned beside the stage on desktop and as an
@@ -1238,6 +1231,23 @@ function randomScope(){
   let m=location.pathname.match(/^\/playlists\/(\d+)\//);if(m)out.set('pl',m[1]);
   m=location.pathname.match(/^\/smart-playlists\/(\d+)\//);if(m)out.set('sp',m[1]);
   return out.toString();
+}
+// Likes: `rating` is the net score (+1 per like, -1 per dislike). The player's
+// info panel and the shorts rail share these; bindLikes keeps the two in step.
+function likeTxt(n){n=+n||0;return n>0?'+'+n:n<0?'\u2212'+(-n):'0';}
+function likeCls(n){n=+n||0;return n>0?'pos':n<0?'neg':'';}
+function bindLikes(data,btns){
+  btns.forEach(([id,delta])=>{
+    const b=document.getElementById(id);
+    if(b)b.onclick=e=>{e.stopPropagation();
+      post(data.rating_url,{delta}).then(r=>{
+        if(!r||r.rating==null)return;
+        data.rating=r.rating;
+        // both widgets exist at once (CSS shows one): repaint them both
+        ['phScore','railScore'].forEach(sid=>{const n=document.getElementById(sid);
+          if(n){n.textContent=likeTxt(r.rating);n.className=(sid==='phScore'?'like-n ':'rail-score ')+likeCls(r.rating);}});
+      });};
+  });
 }
 function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // Grid thumbnails: TV browsers under load sometimes drop an image request
@@ -1437,7 +1447,7 @@ const SELECT_MODE=(function(){
     // popup toggles. bulkThumbBtn/bulkRenBtn/bulkDelBtn only exist for the
     // owner (see the is_staff check around the bulk bar above) -- a viewer
     // simply has none of those buttons to wire up.
-    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRateBtn:'bulkRatePop',bulkRenBtn:'bulkRenPop',bulkDelBtn:'bulkDelPop'};
+    const pops={bulkThumbBtn:'bulkThumbPop',bulkPlBtn:'bulkPlPop',bulkRenBtn:'bulkRenPop',bulkDelBtn:'bulkDelPop'};
     Object.entries(pops).forEach(([btnId,popId])=>{
       const btn=document.getElementById(btnId),pop=document.getElementById(popId);
       if(!btn||!pop)return;
@@ -1489,23 +1499,13 @@ const SELECT_MODE=(function(){
       }
     };
 
-    // rating stars
-    const stars=document.getElementById('bulkStars');
-    stars.querySelectorAll('span').forEach(s=>{
-      s.onmouseenter=()=>stars.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=+s.dataset.v));
-      s.onmouseleave=()=>stars.querySelectorAll('span').forEach(x=>x.classList.remove('on'));
-      s.onclick=e=>{e.stopPropagation();
-        const ids=getIds().join(',');if(!ids)return;
-        post('/bulk/rating/',{ids,rating:s.dataset.v}).then(()=>{
-          document.getElementById('bulkRatePop').classList.remove('open');});
+    // like / dislike: +1 / -1 on every selected video
+    [['bulkLikeBtn',1,'♥ Like'],['bulkDislikeBtn',-1,'👎 Dislike']].forEach(([id,delta,label])=>{
+      document.getElementById(id).onclick=e=>{e.stopPropagation();
+        const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
+        post('/bulk/rating/',{ids,delta}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent=label,1200);});
       };
     });
-
-    // favorite
-    document.getElementById('bulkFavBtn').onclick=e=>{e.stopPropagation();
-      const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
-      post('/bulk/favorite/',{ids}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='♥ Favorite',1200);});
-    };
 
     // After hide/unhide/delete the selected items no longer belong in the
     // current listing — clear the selection and refresh in place (SPA nav,
@@ -1765,7 +1765,7 @@ const PAGE_INIT={
       const badge=item.needs_convert?'<span class="warn">MKV/HEVC</span>':(item.quality?`<span class="qbadge">${item.quality}</span>`:'');
       const prog=item.progress>1?`<div class="progress" style="width:${item.progress}%"></div>`:'';
       const thumb=item.thumb?`<img src="${item.thumb}" alt="" loading="lazy" onerror="thumbErr(this)">`:'<div class="placeholder">▶</div>';
-      const sub=esc((item.channel?item.channel+' · ':'')+item.date+(item.favorite?' · ★':''));
+      const sub=esc((item.channel?item.channel+' · ':'')+item.date+(item.rating>0?' · ♥ '+item.rating:(item.rating<0?' · 👎 '+item.rating:'')));
       const el=document.createElement('a');
       el.className='vcard card nav-item';el.tabIndex=0;el.href=item.url;
       el.innerHTML=`<div class="thumb">${thumb}${badge}<span class="dur">${item.dur}</span>${prog}</div>`+
@@ -2337,13 +2337,11 @@ const PAGE_INIT={
     const form=root.querySelector('#rulesForm');
     if(!form)return selCleanup;
     const FIELDS=[{v:'title',l:'Title'},{v:'filename',l:'Filename'},{v:'channel',l:'Channel'},
-      {v:'tags',l:'Tag'},{v:'ext',l:'Format (ext)'},{v:'rating',l:'Rating (stars)'},
-      {v:'duration_seconds',l:'Duration (s)'},{v:'height',l:'Quality (px height)'},{v:'favorite',l:'Is favorite'}];
+      {v:'tags',l:'Tag'},{v:'ext',l:'Format (ext)'},{v:'rating',l:'Likes (score)'},
+      {v:'duration_seconds',l:'Duration (s)'},{v:'height',l:'Quality (px height)'}];
     const OPS_TEXT=[{v:'contains',l:'contains'},{v:'not_contains',l:'does not contain'}];
     const OPS_NUM=[{v:'gte',l:'≥'},{v:'lte',l:'≤'},{v:'is',l:'='}];
-    const OPS_BOOL=[{v:'is',l:'is true'}];
-    function opsFor(f){if(['rating','duration_seconds','height'].includes(f))return OPS_NUM;
-      if(f==='favorite')return OPS_BOOL;return OPS_TEXT;}
+    function opsFor(f){return['rating','duration_seconds','height'].includes(f)?OPS_NUM:OPS_TEXT;}
     let rules=[];try{rules=JSON.parse(form.dataset.rules||'[]');}catch{}
     const list=root.querySelector('#rulesList');
     function renderRules(){
@@ -2353,8 +2351,8 @@ const PAGE_INIT={
         const fieldSel=`<select class="field-sel" data-i="${i}">${FIELDS.map(f=>`<option value="${f.v}"${r.field===f.v?' selected':''}>${f.l}</option>`).join('')}</select>`;
         const ops=opsFor(r.field);
         const opSel=`<select class="op-sel" data-i="${i}">${ops.map(o=>`<option value="${o.v}"${r.op===o.v?' selected':''}>${o.l}</option>`).join('')}</select>`;
-        const valInput=r.field==='favorite'?'':
-          `<input type="${['rating','duration_seconds','height'].includes(r.field)?'number':'text'}" class="val-inp" data-i="${i}" value="${(r.value||'').toString().replace(/"/g,'&quot;')}" placeholder="value" min="0" step="any">`;
+        const valInput=
+          `<input type="${['rating','duration_seconds','height'].includes(r.field)?'number':'text'}" class="val-inp" data-i="${i}" value="${(r.value||'').toString().replace(/"/g,'&quot;')}" placeholder="value"${r.field==='rating'?'':' min="0"'} step="any">`;
         row.innerHTML=fieldSel+opSel+valInput+`<button type="button" class="del-rule" data-i="${i}">×</button>`;
         list.appendChild(row);
       });
@@ -3053,7 +3051,6 @@ const PLAYER=(function(){
 
   /* ---- info panel ---- */
   function renderInfo(data){
-    const stars=[1,2,3,4,5].map(i=>`<span class="${i<=data.rating?'star on':'star'}" data-v="${i}">★</span>`).join('');
     const tech=(data.tech||[]).map(t=>`<span>${esc(t)}</span>`).join('');
     const recs=(data.recommended||[]).map(r=>
       `<a class="card" href="${esc(r.watch_url)}"><div class="thumb">`+
@@ -3071,9 +3068,10 @@ const PLAYER=(function(){
     INFO.innerHTML=`<div class="ph-pad">`+
       `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>◀ ▶</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>▲▼</b> next/prev video</span></div>`+
       `<h1 class="wtitle">${esc(data.title)}</h1>`+
-      `<div class="wbar"><span id="phStars" data-url="${esc(data.rating_url)}">${stars}</span>`+
-      `<button class="iconbtn" id="phFav" data-url="${esc(data.favorite_url)}" title="Favorite"`+
-        (data.favorite?' style="color:var(--accent);border-color:var(--accent)"':'')+`>♥</button>`+
+      `<div class="wbar"><span class="like-box">`+
+        `<button class="iconbtn" id="phDislike" title="Dislike (−1)">👎</button>`+
+        `<span class="like-n ${likeCls(data.rating)}" id="phScore" title="Net likes">${likeTxt(data.rating)}</span>`+
+        `<button class="iconbtn" id="phLike" title="Like (+1)">♥</button></span>`+
       (data.is_owner?`<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
         (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`:'')+
       (data.is_owner?`<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
@@ -3143,12 +3141,7 @@ const PLAYER=(function(){
       const fresh=()=>{src.href=sourceAt(base,curTime());};
       ['pointerdown','mousedown','touchstart','focus','mouseenter','contextmenu','click'].forEach(ev=>src.addEventListener(ev,fresh,{passive:true}));
     }
-    const st=document.getElementById('phStars');
-    if(st)st.querySelectorAll('.star').forEach(s=>s.onclick=()=>post(data.rating_url,{rating:s.dataset.v})
-      .then(r=>st.querySelectorAll('.star').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r.rating))));
-    const fav=document.getElementById('phFav');
-    if(fav)fav.onclick=e=>{e.stopPropagation();post(data.favorite_url).then(r=>{
-      fav.style.color=r.favorite?'var(--accent)':'';fav.style.borderColor=r.favorite?'var(--accent)':'';});};
+    bindLikes(data,[['phLike',1],['phDislike',-1]]);
     const hideBtn=document.getElementById('phHide');
     if(hideBtn)hideBtn.onclick=e=>{e.stopPropagation();post(data.hide_url).then(r=>{
       data.hidden=r.hidden;
@@ -3246,7 +3239,7 @@ const PLAYER=(function(){
 
   /* ---- Shorts action rail --------------------------------------------
      Compact stand-in for #phInfo (hidden entirely in .ph-shorts mode --
-     see the CSS near .ph-stage-wrap above): favorite, rating, add-to-
+     see the CSS near .ph-stage-wrap above): like/dislike, add-to-
      playlist, and a ••• overflow for the rest (hide/delete/convert, all
      owner-only like they are in renderInfo, plus a quick add-note field).
      Reuses the same .bulk-aw/.bulk-pop popover chrome the bulk-select bar
@@ -3260,12 +3253,10 @@ const PLAYER=(function(){
     if(!rail)return;
     const plOpts=(data.playlists||[]).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
     const plNewOpt=`<option value="__new__">＋ New playlist…</option>`;
-    const stars=[1,2,3,4,5].map(i=>`<span data-v="${i}" class="${i<=data.rating?'on':''}">★</span>`).join('');
     rail.innerHTML=
-      `<button class="rail-btn${data.favorite?' on':''}" id="railFavBtn" title="Favorite">♥</button>`+
-      `<div class="bulk-aw"><button class="rail-btn" id="railRateBtn" title="Rate">★</button>`+
-        `<div class="bulk-pop" id="railRatePop" style="left:auto;right:0;bottom:calc(100% + 8px)">`+
-          `<label>Rating</label><div class="bulk-stars" id="railStars">${stars}</div></div></div>`+
+      `<button class="rail-btn" id="railLikeBtn" title="Like (+1)">♥</button>`+
+      `<div class="rail-score ${likeCls(data.rating)}" id="railScore" title="Net likes">${likeTxt(data.rating)}</div>`+
+      `<button class="rail-btn" id="railDislikeBtn" title="Dislike (−1)">👎</button>`+
       `<div class="bulk-aw"><button class="rail-btn" id="railPlaylistBtn" title="Add to playlist">☰</button>`+
         `<div class="bulk-pop" id="railPlaylistPop" style="left:auto;right:0;bottom:calc(100% + 8px)">`+
           `<label>Add to playlist</label>`+
@@ -3300,16 +3291,7 @@ const PLAYER=(function(){
   function bindShortsRail(data){
     const rail=document.getElementById('phShortsRail');
     if(!rail)return;
-    const fav=document.getElementById('railFavBtn');
-    if(fav)fav.onclick=e=>{e.stopPropagation();post(data.favorite_url).then(r=>{
-      data.favorite=r.favorite;fav.classList.toggle('on',r.favorite);});};
-    const rateBtn=document.getElementById('railRateBtn'),ratePop=document.getElementById('railRatePop');
-    if(rateBtn&&ratePop)rateBtn.onclick=e=>{e.stopPropagation();ratePop.classList.toggle('open');};
-    const stars=document.getElementById('railStars');
-    if(stars)stars.querySelectorAll('span').forEach(s=>s.onclick=e=>{e.stopPropagation();
-      post(data.rating_url,{rating:s.dataset.v}).then(r=>{
-        stars.querySelectorAll('span').forEach(x=>x.classList.toggle('on',+x.dataset.v<=r.rating));
-        ratePop.classList.remove('open');});});
+    bindLikes(data,[['railLikeBtn',1],['railDislikeBtn',-1]]);
     const plBtn=document.getElementById('railPlaylistBtn'),plPop=document.getElementById('railPlaylistPop');
     if(plBtn&&plPop)plBtn.onclick=e=>{e.stopPropagation();plPop.classList.toggle('open');};
     const plSel=document.getElementById('railPlSel'),plNew=document.getElementById('railPlNew'),

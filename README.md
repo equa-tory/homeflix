@@ -2,7 +2,7 @@
 
 A minimal, self-hosted "YouTube for one" built with Django + SQLite.
 Open it from your PC, phone, and LG TV at the same URL — all state (resume,
-history, favorites, ratings, playlists, theme) lives in one database on the
+history, likes, playlists, theme) lives in one database on the
 server, so everything stays in sync automatically.
 
 ## Features
@@ -16,7 +16,7 @@ server, so everything stays in sync automatically.
 - **Custom player** with HTTP Range streaming (seeking + 4K friendly), resume,
   buffered bar, volume, fullscreen, prev/next, and auto-advance on end.
 - Search, sort (date added / name / duration / modified), Recently added,
-  Continue watching, watch history, favorites, 1–5 star ratings, tags, playlists.
+  Continue watching, watch history, likes and dislikes (a net score you can sort by), tags, playlists.
 - Dark / light theme, remembered server-side.
 
 **Plays MKV / HEVC** — files a browser can't play natively show a one-click
@@ -43,7 +43,7 @@ Reset & rebuild (clears records and rescans — files on disk are never deleted)
 **Accounts** — everyone signs in. There are two roles:
 - **Owner** (`is_staff`) — everything, including scan/organize/convert/rename/
   delete and the Manage menu. Create yours with `createsuperuser` (below).
-- **Viewer** — browse, search, stream, resume, favorite, rate, use and create
+- **Viewer** — browse, search, stream, resume, like/dislike, use and create
   playlists, add notes. Blocked from anything that touches files or the
   catalog (no Manage menu, no delete/rename/organize/convert, no Hidden page).
   Create one in `/admin` → *Users* → *Add* (leave "Staff status" unchecked).
@@ -55,7 +55,7 @@ repeat, shuffle, seek step) are private per account.
 search, and watch without signing in at all (a "YouTube, not Fort Knox" mode
 for casually sharing the link). A **Log in** link stays in the top right for
 you (and friends) to get an account and its extras. Anything that writes
-shared data (favorite, rating, playlists, notes) or touches the filesystem/
+shared data (likes, playlists, notes) or touches the filesystem/
 catalog still requires an account — an anonymous visitor gets sent to
 `/login/` the moment they try. Off by default; needs a process restart
 (like every other `HOMEFLIX_*` variable) to take effect.
@@ -109,7 +109,7 @@ the **Update yt-dlp** button on the page when everything suddenly fails.
 **Manage (⋯) → 💾 Backups…** — automatic backups of HomeFlix's own data. Defaults: every
 **48 hours** into **`/mnt/ssd/backups/homeflix`**, keeping **1** backup (a new one replaces the
 old only after it succeeded). One archive `homeflix-YYYYMMDD-HHMMSS.tar.gz` holds a consistent
-snapshot of the database (favorites, ratings, playlists, notes, history, accounts, saved download
+snapshot of the database (likes, playlists, notes, history, accounts, saved download
 playlists), `thumbnails/` (incl. uploaded playlist covers) and `subtitles/`. **Not** included: your
 videos, `converted/`, and secrets (`homeflix.env`, saved YouTube cookies). Only files named
 `homeflix-YYYYMMDD-HHMMSS.tar.gz` are ever created or deleted in that folder.

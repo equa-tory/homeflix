@@ -43,8 +43,8 @@ ALLOWED_HOSTS = [h.strip() for h in _hosts.split(",") if h.strip()] or ["localho
 # Set HOMEFLIX_PUBLIC=1 to let anyone browse/search/watch/stream without an
 # account (a "YouTube, not Fort Knox" mode for casually sharing the link) --
 # see library/auth.py's public_when_enabled decorator for exactly which
-# views that exempts. Anything that writes shared library data (favorite,
-# rating, playlists, notes) or touches the filesystem/catalog (owner-only)
+# views that exempts. Anything that writes shared library data (likes,
+# playlists, notes) or touches the filesystem/catalog (owner-only)
 # still requires logging in. Off by default -- an existing deployment's
 # behavior doesn't change unless this is explicitly set.
 PUBLIC_ACCESS = os.environ.get("HOMEFLIX_PUBLIC") == "1"

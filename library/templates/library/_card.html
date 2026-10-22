@@ -22,7 +22,7 @@
     <div class="s">
       {% if video.channel %}{{ video.channel }} · {% endif %}
       {{ video.date_added|date:"M j, Y" }}
-      {% if video.favorite %} · ★{% endif %}
+      {% if video.rating > 0 %} · ♥ {{ video.rating }}{% elif video.rating < 0 %} · 👎 {{ video.rating }}{% endif %}
     </div>
   </div>
 </a>

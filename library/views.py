@@ -135,13 +135,14 @@ PLAYLIST_SORTS = {
     "duration": "-video__duration_seconds",
 }
 
-# "Rating" sort is two-key (favorites/hearts first, then star rating) so it
-# can't live in the single-string SORTS/PLAYLIST_SORTS dicts above -- these
-# are the field pairs used to special-case it in each sort site below.
-RATING_ORDER = ("-favorite", "-rating")
-RATING_ORDER_REV = ("favorite", "rating")
-PLAYLIST_RATING_ORDER = ("-video__favorite", "-video__rating")
-PLAYLIST_RATING_ORDER_REV = ("video__favorite", "video__rating")
+# "Likes" sort (the `rating` field is net likes) is two-key: most liked first,
+# and among the many ties the newest / the playlist's own order, so it can't
+# live in the single-string SORTS/PLAYLIST_SORTS dicts above -- these are the
+# field pairs used to special-case it in each sort site below.
+RATING_ORDER = ("-rating", "-date_added")
+RATING_ORDER_REV = ("rating", "-date_added")
+PLAYLIST_RATING_ORDER = ("-video__rating", "order")
+PLAYLIST_RATING_ORDER_REV = ("video__rating", "order")
 
 # Vertical/"shorts" videos. `>=` so square videos count as vertical too.
 # Python-side twin: Video.is_portrait -- keep the two in sync.
@@ -223,8 +224,8 @@ def _filtered_videos(request):
     tag = request.GET.get("tag", "").strip()
     if tag:
         qs = qs.filter(tags__name=tag)
-    if request.GET.get("fav") == "1":
-        qs = qs.filter(favorite=True)
+    if request.GET.get("fav") == "1":      # the "Liked" chip: net likes above zero
+        qs = qs.filter(rating__gt=0)
     if request.GET.get("shorts") == "1":
         qs = qs.filter(PORTRAIT_Q)
     channel = request.GET.get("channel", "").strip()
@@ -607,8 +608,7 @@ def _build_watch_data(request, pk):
         "filename_stem": os.path.splitext(video.filename)[0],
         "filename_ext": os.path.splitext(video.filename)[1],
         "source_url": video.source_url or "", "tech": tech,
-        "favorite": video.favorite, "rating": video.rating,
-        "favorite_url": f"/video/{pk}/favorite/",
+        "rating": video.rating,
         "rating_url": f"/video/{pk}/rating/",
         "playlist_url": f"/video/{pk}/playlist/",
         "autoplay_toggle_url": "/autoplay/",
@@ -934,14 +934,6 @@ def save_progress(request, pk):
 
 
 @require_POST
-def toggle_favorite(request, pk):
-    video = get_object_or_404(Video, pk=pk)
-    video.favorite = not video.favorite
-    video.save(update_fields=["favorite"])
-    return JsonResponse({"favorite": video.favorite})
-
-
-@require_POST
 @owner_required
 def toggle_hidden(request, pk):
     video = get_object_or_404(Video, pk=pk)
@@ -1014,16 +1006,25 @@ def delete_video(request, pk):
     return JsonResponse({"ok": True})
 
 
+def _like_delta(request):
+    """+1 (like) or -1 (dislike) from the POST body; anything else is refused."""
+    try:
+        delta = int(request.POST.get("delta", ""))
+    except ValueError:
+        return None
+    return delta if delta in (1, -1) else None
+
+
 @require_POST
 def set_rating(request, pk):
-    video = get_object_or_404(Video, pk=pk)
-    try:
-        rating = int(request.POST.get("rating", 0))
-    except ValueError:
-        rating = 0
-    video.rating = max(0, min(5, rating))
-    video.save(update_fields=["rating"])
-    return JsonResponse({"rating": video.rating})
+    """Like (+1) / dislike (-1). An F() update, so two quick presses (or two
+    people) never overwrite each other with a stale read-modify-write."""
+    delta = _like_delta(request)
+    if delta is None:
+        return JsonResponse({"ok": False, "error": "delta must be 1 or -1"}, status=400)
+    if not Video.objects.filter(pk=pk).update(rating=F("rating") + delta):
+        raise Http404
+    return JsonResponse({"ok": True, "rating": Video.objects.get(pk=pk).rating})
 
 
 @require_POST
@@ -1154,7 +1155,7 @@ def _serialize(video, qs_suffix=""):
         "needs_convert": video.needs_convert_ui,
         "channel": video.channel,
         "date": _fmt_date(video.date_added),
-        "favorite": video.favorite,
+        "rating": video.rating,
         "progress": round(progress, 1),
     }
 
@@ -1519,12 +1520,15 @@ def bulk_regen_thumb(request):
 
 @require_POST
 def bulk_rating(request):
+    """Like (+1) / dislike (-1) every selected video."""
+    delta = _like_delta(request)
     try:
         ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
-        rating = max(0, min(5, int(request.POST.get('rating', 0))))
     except ValueError:
         return JsonResponse({'ok': False})
-    Video.objects.filter(pk__in=ids).update(rating=rating)
+    if delta is None:
+        return JsonResponse({'ok': False, 'error': 'delta must be 1 or -1'}, status=400)
+    Video.objects.filter(pk__in=ids).update(rating=F('rating') + delta)
     return JsonResponse({'ok': True, 'count': len(ids)})
 
 
@@ -1551,16 +1555,6 @@ def bulk_add_playlist(request):
         except Video.DoesNotExist:
             pass
     return JsonResponse({'ok': True, 'count': added, 'playlist_id': pl.pk, 'playlist': pl.name})
-
-
-@require_POST
-def bulk_favorite(request):
-    try:
-        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
-    except ValueError:
-        return JsonResponse({'ok': False})
-    Video.objects.filter(pk__in=ids).update(favorite=True)
-    return JsonResponse({'ok': True, 'count': len(ids)})
 
 
 @require_POST

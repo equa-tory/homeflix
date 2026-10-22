@@ -16,7 +16,7 @@
     <select name="sort" class="nav-item" data-filter-sort>
       <option value="added"    {% if sort == 'added'    %}selected{% endif %}>Date added</option>
       <option value="duration" {% if sort == 'duration' %}selected{% endif %}>Duration</option>
-      <option value="rating"   {% if sort == 'rating'   %}selected{% endif %}>Rating</option>
+      <option value="rating"   {% if sort == 'rating'   %}selected{% endif %}>Likes</option>
     </select>
   </label>
   <a class="btn ghost nav-item" data-spa
@@ -25,7 +25,7 @@
     {% if rev %}↑{% else %}↓{% endif %}
   </a>
   <a class="chip nav-item {% if fav %}active{% endif %}" data-spa
-     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">★ Favorites</a>
+     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">♥ Liked</a>
   <a class="btn ghost nav-item" data-random
      href="{% url 'random_video' %}?q={{ q|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
      title="Play a random video from these results" style="font-size:13px;padding:7px 10px">🎲 Random</a>
