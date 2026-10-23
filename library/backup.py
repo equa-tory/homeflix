@@ -1,7 +1,7 @@
 """Automatic backups of HomeFlix's own data (not the videos).
 
 A backup is one `homeflix-YYYYmmdd-HHMMSS.tar.gz` holding a consistent snapshot
-of the database (likes, playlists, notes, history, accounts, saved
+of the database (favorites, likes, playlists, notes, history, accounts, saved
 download sources, settings) plus `thumbnails/` (which holds uploaded playlist
 covers that can't be regenerated) and `subtitles/` (uploaded subtitles). The
 videos themselves, the regenerable `converted/`, `hls/`, `cache/` and

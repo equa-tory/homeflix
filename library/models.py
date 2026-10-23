@@ -77,8 +77,9 @@ class Video(models.Model):
     upload_date = models.DateField(null=True, blank=True)
 
     # User state
-    # Net likes: every like is +1, every dislike -1 (can go negative). It used
-    # to be a 1-5 star rating plus a favorite flag; migration 0014 folded both in.
+    # Net likes: every 👍 is +1, every 👎 -1 (can go negative). It used to be a
+    # 1-5 star rating (migration 0014). `favorite` is the separate ♥ flag.
+    favorite = models.BooleanField(default=False)
     rating = models.IntegerField(default=0)
     tags = models.ManyToManyField(Tag, blank=True, related_name="videos")
 
@@ -306,7 +307,7 @@ class SmartPlaylist(models.Model):
         value yet (an empty text rule would otherwise match *everything* in
         "any" mode, or exclude everything for "does not contain")."""
         f, op, val = rule.get("field", ""), rule.get("op", ""), rule.get("value", "")
-        if not str(val).strip():
+        if f != "favorite" and not str(val).strip():
             return None
         try:
             if   f == "title"            and op == "contains":     return Q(title__icontains=val)
@@ -315,6 +316,7 @@ class SmartPlaylist(models.Model):
             elif f == "channel"          and op == "contains":     return Q(channel__icontains=val)
             elif f == "tags"             and op == "is":           return Q(tags__name__iexact=val)
             elif f == "ext"              and op == "is":           return Q(ext=val.lower().lstrip("."))
+            elif f == "favorite"         and op == "is":           return Q(favorite=True)
             elif f == "rating"           and op == "gte":          return Q(rating__gte=int(val))
             elif f == "rating"           and op == "lte":          return Q(rating__lte=int(val))
             elif f == "duration_seconds" and op == "gte":          return Q(duration_seconds__gte=float(val))

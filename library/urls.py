@@ -83,6 +83,7 @@ urlpatterns = [
     path("storyboard/<int:pk>/", views.storyboard, name="storyboard"),
     path("storyboard/<int:pk>/img/", views.storyboard_img, name="storyboard_img"),
     path("video/<int:pk>/delete/", views.delete_video, name="delete_video"),
+    path("video/<int:pk>/favorite/", views.toggle_favorite, name="toggle_favorite"),
     path("video/<int:pk>/rating/", views.set_rating, name="set_rating"),
     path("video/<int:pk>/playlist/", views.add_to_playlist, name="add_to_playlist"),
     path("theme/", views.toggle_theme, name="toggle_theme"),
@@ -110,6 +111,7 @@ urlpatterns = [
     # Bulk actions
     path("bulk/thumb-regen/", views.bulk_regen_thumb, name="bulk_regen_thumb"),
     path("bulk/rating/", views.bulk_rating, name="bulk_rating"),
+    path("bulk/favorite/", views.bulk_favorite, name="bulk_favorite"),
     path("bulk/playlist/", views.bulk_add_playlist, name="bulk_add_playlist"),
     path("bulk/rename/", views.bulk_rename, name="bulk_rename"),
     path("bulk/hide/", views.bulk_hide, name="bulk_hide"),

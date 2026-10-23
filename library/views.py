@@ -224,8 +224,8 @@ def _filtered_videos(request):
     tag = request.GET.get("tag", "").strip()
     if tag:
         qs = qs.filter(tags__name=tag)
-    if request.GET.get("fav") == "1":      # the "Liked" chip: net likes above zero
-        qs = qs.filter(rating__gt=0)
+    if request.GET.get("fav") == "1":      # the "♥ Favorites" chip
+        qs = qs.filter(favorite=True)
     if request.GET.get("shorts") == "1":
         qs = qs.filter(PORTRAIT_Q)
     channel = request.GET.get("channel", "").strip()
@@ -608,7 +608,8 @@ def _build_watch_data(request, pk):
         "filename_stem": os.path.splitext(video.filename)[0],
         "filename_ext": os.path.splitext(video.filename)[1],
         "source_url": video.source_url or "", "tech": tech,
-        "rating": video.rating,
+        "favorite": video.favorite, "rating": video.rating,
+        "favorite_url": f"/video/{pk}/favorite/",
         "rating_url": f"/video/{pk}/rating/",
         "playlist_url": f"/video/{pk}/playlist/",
         "autoplay_toggle_url": "/autoplay/",
@@ -1006,6 +1007,14 @@ def delete_video(request, pk):
     return JsonResponse({"ok": True})
 
 
+@require_POST
+def toggle_favorite(request, pk):
+    video = get_object_or_404(Video, pk=pk)
+    video.favorite = not video.favorite
+    video.save(update_fields=["favorite"])
+    return JsonResponse({"favorite": video.favorite})
+
+
 def _like_delta(request):
     """+1 (like) or -1 (dislike) from the POST body; anything else is refused."""
     try:
@@ -1155,7 +1164,7 @@ def _serialize(video, qs_suffix=""):
         "needs_convert": video.needs_convert_ui,
         "channel": video.channel,
         "date": _fmt_date(video.date_added),
-        "rating": video.rating,
+        "favorite": video.favorite, "rating": video.rating,
         "progress": round(progress, 1),
     }
 
@@ -1555,6 +1564,16 @@ def bulk_add_playlist(request):
         except Video.DoesNotExist:
             pass
     return JsonResponse({'ok': True, 'count': added, 'playlist_id': pl.pk, 'playlist': pl.name})
+
+
+@require_POST
+def bulk_favorite(request):
+    try:
+        ids = [int(i) for i in request.POST.get('ids', '').split(',') if i.strip()]
+    except ValueError:
+        return JsonResponse({'ok': False})
+    Video.objects.filter(pk__in=ids).update(favorite=True)
+    return JsonResponse({'ok': True, 'count': len(ids)})
 
 
 @require_POST
