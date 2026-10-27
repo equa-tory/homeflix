@@ -2834,3 +2834,22 @@ class CookieHelpMarkupTests(AuthTestCase):
         html = self.client.get(reverse("downloads")).content.decode()
         for needle in ("On an iPhone / iPad (Safari)", 'id="dlCookiePaste"', "navigator.clipboard.readText", "JSON export"):
             self.assertIn(needle, html, needle)
+
+
+class SourceLinkTests(AuthTestCase):
+    def test_a_video_without_a_source_gets_a_youtube_search_for_its_title(self):
+        v = _make_video(title="My Song & Co: live (2020)", source_url="")
+        self.client.force_login(self.viewer)
+        data = self.client.get(reverse("watch_api", args=[v.pk])).json()
+        self.assertEqual(data["source_url"], "")
+        self.assertEqual(data["search_url"],
+                         "https://www.youtube.com/results?search_query=My+Song+%26+Co%3A+live+%282020%29")
+        html = self.client.get(reverse("library")).content.decode()
+        for needle in ("phSrcFind", "find on YouTube", "search_url"):
+            self.assertIn(needle, html, needle)
+
+    def test_the_saved_source_still_wins(self):
+        v = _make_video(title="t", source_url="https://www.youtube.com/watch?v=abcdefghijk")
+        self.client.force_login(self.viewer)
+        data = self.client.get(reverse("watch_api", args=[v.pk])).json()
+        self.assertEqual(data["source_url"], "https://www.youtube.com/watch?v=abcdefghijk")

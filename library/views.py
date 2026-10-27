@@ -4,7 +4,7 @@ import re
 import json
 import difflib
 import mimetypes
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
@@ -670,6 +670,8 @@ def _build_watch_data(request, pk):
         "filename_stem": os.path.splitext(video.filename)[0],
         "filename_ext": os.path.splitext(video.filename)[1],
         "source_url": video.source_url or "", "tech": tech,
+        # no saved source: a YouTube search for the title instead
+        "search_url": "https://www.youtube.com/results?search_query=" + quote_plus(video.title or video.filename),
         "favorite": video.favorite, "rating": video.rating,
         "favorite_url": f"/video/{pk}/favorite/",
         "rating_url": f"/video/{pk}/rating/",
