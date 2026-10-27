@@ -2569,3 +2569,86 @@ class PhoneListMarkupTests(AuthTestCase):
         html = self.client.get(reverse("library"), {"channel": "Alpha"}).content.decode()
         self.assertIn('id="chanSubBtn"', html)
         self.assertIn(">Subscribe<", html)
+
+
+# ---- Not watched yet -------------------------------------------------------------------------
+
+class UnwatchedTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.seen = _make_video(title="seen", channel="Alpha")
+        self.fresh = _make_video(title="fresh", channel="Alpha")
+        self.other = _make_video(title="other", channel="Beta")
+        WatchEvent.objects.create(video=self.seen, user=self.viewer)
+        WatchEvent.objects.create(video=self.other, user=self.owner)      # someone else's history
+        self.client.force_login(self.viewer)
+
+    def items(self, **q):
+        return {i["title"]: i for i in self.client.get(reverse("api_videos"), q).json()["items"]}
+
+    def test_watched_means_in_this_accounts_history(self):
+        it = self.items()
+        self.assertFalse(it["seen"]["unwatched"])
+        self.assertTrue(it["fresh"]["unwatched"])
+        self.assertTrue(it["other"]["unwatched"])             # only the owner watched it
+
+    def test_unwatched_filter_and_it_combines_with_a_channel(self):
+        self.assertEqual({t for t in self.items(unwatched="1") if t in ("seen", "fresh", "other")}, {"fresh", "other"})
+        self.assertEqual(set(self.items(unwatched="1", channel="Alpha")), {"fresh"})
+        self.assertEqual(set(self.items(channel="Alpha")), {"seen", "fresh"})
+
+    def test_unwatched_random_only_picks_unwatched(self):
+        for _ in range(20):
+            r = self.client.get(reverse("random_video"), {"unwatched": "1", "channel": "Alpha", "json": "1"}).json()
+            self.assertEqual(r["id"], self.fresh.pk)
+
+    def test_mark_unwatched_clears_history_and_resume_point(self):
+        PlaybackState.objects.create(video=self.seen, user=self.viewer, position_seconds=300, finished=True)
+        self.assertEqual(self.client.post(reverse("mark_unwatched", args=[self.seen.pk])).json(), {"ok": True})
+        self.assertFalse(WatchEvent.objects.filter(video=self.seen, user=self.viewer).exists())
+        st = PlaybackState.objects.get(video=self.seen, user=self.viewer)
+        self.assertEqual((st.position_seconds, st.finished), (0, False))
+        self.assertTrue(self.items()["seen"]["unwatched"])
+
+    def test_it_only_touches_the_callers_own_history(self):
+        self.client.post(reverse("mark_unwatched", args=[self.other.pk]))
+        self.assertTrue(WatchEvent.objects.filter(video=self.other, user=self.owner).exists())
+
+    def test_bulk_mark_unwatched(self):
+        WatchEvent.objects.create(video=self.fresh, user=self.viewer)
+        r = self.client.post(reverse("bulk_unwatched"), {"ids": f"{self.seen.pk},{self.fresh.pk}"})
+        self.assertEqual(r.json()["count"], 2)
+        self.assertFalse(WatchEvent.objects.filter(user=self.viewer).exists())
+        self.assertEqual(self.client.post(reverse("bulk_unwatched"), {"ids": "x"}).json(), {"ok": False})
+
+    def test_anonymous_cannot_mark_and_gets_no_dots(self):
+        self.client.logout()
+        self.assertEqual(self.client.post(reverse("mark_unwatched", args=[self.seen.pk])).status_code, 302)
+        videos = views._attach_playback([self.seen, self.fresh], None)
+        self.assertTrue(all(v.my_seen for v in videos))        # nothing is "unwatched" without an account
+        self.assertFalse(views._serialize(videos[1])["unwatched"])
+
+    def test_cards_and_channels_show_the_marker(self):
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertIn('class="unw"', html)
+        ch = {c["name"]: c for c in self.client.get(reverse("channels")).context["channels"]}
+        self.assertEqual((ch["Alpha"]["unwatched"], ch["Beta"]["unwatched"]), (1, 1))
+        page = self.client.get(reverse("channels")).content.decode()
+        self.assertIn("1 new", page)
+        self.assertIn('class="chan-new"', page)
+
+    def test_library_chip_keeps_the_other_filters(self):
+        html = self.client.get(reverse("library"), {"channel": "Alpha", "unwatched": "1", "fav": "1"}).content.decode()
+        self.assertIn('name="unwatched"', html)
+        chip = html[html.index("Only videos you haven"):]
+        chip = chip[:chip.index("</a>")]
+        self.assertIn("channel=Alpha", chip)
+        self.assertIn("fav=1", chip)
+        self.assertNotIn("unwatched=1", chip)                  # it is on, so the chip toggles it off
+
+    def test_player_has_the_buttons(self):
+        html = self.client.get(reverse("library")).content.decode()
+        for needle in ("phUnw", "railUnwBtn", "bulkUnwBtn", "unwatched_url"):
+            self.assertIn(needle, html, needle)
+        self.assertEqual(self.client.get(reverse("watch_api", args=[self.seen.pk])).json()["unwatched_url"],
+                         f"/video/{self.seen.pk}/unwatched/")

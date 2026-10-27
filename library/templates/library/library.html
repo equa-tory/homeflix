@@ -14,6 +14,7 @@
   <input type="hidden" name="q" value="{{ q }}">
   <input type="hidden" name="rev" value="{{ rev|yesno:'1,0' }}">
   {% if channel %}<input type="hidden" name="channel" value="{{ channel }}">{% endif %}
+  {% if unwatched %}<input type="hidden" name="unwatched" value="1">{% endif %}
   <label>Sort&nbsp;
     <select name="sort" class="nav-item" data-filter-sort>
       <option value="added"    {% if sort == 'added'    %}selected{% endif %}>Date added</option>
@@ -22,18 +23,20 @@
     </select>
   </label>
   <a class="btn ghost nav-item" data-spa
-     href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}&q={{ q|urlencode }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
+     href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}&q={{ q|urlencode }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if unwatched %}&unwatched=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
      title="Reverse sort order" style="font-size:16px;padding:7px 10px">
     {% if rev %}{% icon "arrow-up" %}{% else %}{% icon "arrow-down" %}{% endif %}
   </a>
   <a class="chip nav-item {% if fav %}active{% endif %}" data-spa
-     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{% icon "heart" %} Favorites</a>
+     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if unwatched %}&unwatched=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{% icon "heart" %} Favorites</a>
+  <a class="chip nav-item {% if unwatched %}active{% endif %}" data-spa title="Only videos you haven't watched yet"
+     href="?{% if not unwatched %}unwatched=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{% icon "unseen" %} Unwatched</a>
   <a class="btn ghost nav-item" data-random
-     href="{% url 'random_video' %}?q={{ q|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
+     href="{% url 'random_video' %}?q={{ q|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if unwatched %}&unwatched=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
      title="Play a random video from these results" style="font-size:13px;padding:7px 10px">{% icon "dice" %} Random</a>
   {% for t in tags %}
     <a class="chip nav-item {% if active_tag == t.name %}active{% endif %}" data-spa
-       href="?tag={{ t.name|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{{ t.name }}</a>
+       href="?tag={{ t.name|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if unwatched %}&unwatched=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{{ t.name }}</a>
   {% endfor %}
   <button type="button" class="btn ghost nav-item" id="selModeBtn">{% icon "select" %} Select</button>
 </form>

@@ -113,11 +113,14 @@ def _attach_playback(videos, user):
     if user is None or not user.is_authenticated:
         for v in videos:
             v.my_playback = []
+            v.my_seen = True            # no account -> nothing to call "unwatched"
         return videos
     ids = [v.pk for v in videos]
     states = {s.video_id: s for s in PlaybackState.objects.filter(video_id__in=ids, user=user)}
+    seen = set(WatchEvent.objects.filter(video_id__in=ids, user=user).values_list("video_id", flat=True))
     for v in videos:
         v.my_playback = [states[v.pk]] if v.pk in states else []
+        v.my_seen = v.pk in seen          # watched = it is in this account's History
     return videos
 
 
@@ -232,6 +235,10 @@ def _filtered_videos(request):
     channel = request.GET.get("channel", "").strip()
     if channel:
         qs = qs.filter(channel=channel)
+    if request.GET.get("unwatched") == "1":
+        u = _state_user(request)
+        if u is not None:                 # only meaningful for a signed-in account
+            qs = qs.exclude(pk__in=WatchEvent.objects.filter(user=u).values("video_id"))
     if request.GET.get("shorts") != "1" and not q:
         qs = qs.exclude(PORTRAIT_Q)      # shorts live on their own tab; a text search still finds them
     sort = request.GET.get("sort", "added")
@@ -307,6 +314,7 @@ def library(request):
         q=q, sort=sort, rev=rev,
         page_size=settings.PAGE_SIZE,
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
+        unwatched=request.GET.get("unwatched") == "1",
         active_tag=request.GET.get("tag", ""),
         channel=request.GET.get("channel", "").strip(),
         channel_subscribed=request.GET.get("channel", "").strip() in _subscribed(request),
@@ -365,8 +373,13 @@ def channels(request):
             covers[name].append(vid)
     subs = _subscribed(request)
     rows.sort(key=lambda r: r["channel"] not in subs)       # subscribed first; sort is stable
+    unwatched = {}
+    u = _state_user(request)
+    if u is not None:                                       # videos of the channel not in this account's History
+        unwatched = dict(named.exclude(pk__in=WatchEvent.objects.filter(user=u).values("video_id"))
+                         .values_list("channel").annotate(n=Count("id")))
     items = [{"name": r["channel"], "count": r["n"], "covers": covers.get(r["channel"], []),
-              "subscribed": r["channel"] in subs}
+              "subscribed": r["channel"] in subs, "unwatched": unwatched.get(r["channel"], 0)}
              for r in rows]
     return render(request, "library/channels.html", base_ctx(
         request, active_nav="channels", page_id="channels", spa_title="Channels — HomeFlix",
@@ -640,6 +653,7 @@ def _build_watch_data(request, pk):
         "favorite": video.favorite, "rating": video.rating,
         "favorite_url": f"/video/{pk}/favorite/",
         "rating_url": f"/video/{pk}/rating/",
+        "unwatched_url": f"/video/{pk}/unwatched/",
         "playlist_url": f"/video/{pk}/playlist/",
         "autoplay_toggle_url": "/autoplay/",
         "autoplay": UserPref.get(u, "autoplay", "1") == "1",
@@ -963,6 +977,36 @@ def save_progress(request, pk):
     return JsonResponse({"ok": True})
 
 
+def _forget_watching(user, video_ids):
+    """Take videos back out of this account's History and reset their resume
+    point: they count as "not watched yet" again."""
+    WatchEvent.objects.filter(user=user, video_id__in=video_ids).delete()
+    PlaybackState.objects.filter(user=user, video_id__in=video_ids).update(position_seconds=0, finished=False)
+
+
+@require_POST
+def mark_unwatched(request, pk):
+    u = _state_user(request)
+    if u is None:
+        return JsonResponse({"ok": False, "error": "Sign in first"}, status=403)
+    video = get_object_or_404(Video, pk=pk)
+    _forget_watching(u, [video.pk])
+    return JsonResponse({"ok": True})
+
+
+@require_POST
+def bulk_unwatched(request):
+    u = _state_user(request)
+    if u is None:
+        return JsonResponse({"ok": False, "error": "Sign in first"}, status=403)
+    try:
+        ids = [int(i) for i in request.POST.get("ids", "").split(",") if i.strip()]
+    except ValueError:
+        return JsonResponse({"ok": False})
+    _forget_watching(u, ids)
+    return JsonResponse({"ok": True, "count": len(ids)})
+
+
 @require_POST
 @owner_required
 def toggle_hidden(request, pk):
@@ -1194,6 +1238,7 @@ def _serialize(video, qs_suffix=""):
         "channel": video.channel,
         "date": _fmt_date(video.date_added),
         "favorite": video.favorite, "rating": video.rating,
+        "unwatched": getattr(video, "my_seen", True) is False,
         "progress": round(progress, 1),
     }
 
@@ -1392,7 +1437,7 @@ def shorts(request):
               .order_by("-date_added"))
     return render(request, "library/shorts.html", base_ctx(
         request, active_nav="shorts", page_id="shorts", spa_title="Shorts — HomeFlix",
-        videos=videos,
+        videos=_attach_playback(videos, _state_user(request)),
     ))
 
 
@@ -1402,7 +1447,7 @@ def random_video(request):
     pl_id = request.GET.get("pl")
     sp_id = request.GET.get("sp")
     # "sort" is only sent by the Library page, whose results hide shorts
-    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts", "channel", "sort"))
+    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts", "channel", "sort", "unwatched"))
     if pl_id:
         ids = list(PlaylistItem.objects.filter(playlist_id=pl_id).values_list("video_id", flat=True))
         if not ids:

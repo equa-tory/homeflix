@@ -26,6 +26,7 @@
           <div class="chan-cover chan-n{{ c.covers|length }}">
             {% for vid in c.covers %}<div class="chan-th" style="background-image:url({% url 'thumb' vid %})"></div>{% empty %}<div class="placeholder">{% icon "channels" %}</div>{% endfor %}
           </div>
+          {% if c.unwatched %}<span class="chan-new" title="Videos you haven't watched yet">{{ c.unwatched }} new</span>{% endif %}
           <div class="meta">
             <div class="t">{{ c.name }}</div>
             <div class="s">{{ c.count }} video{{ c.count|pluralize }}{% if c.subscribed %} · subscribed{% endif %}</div>

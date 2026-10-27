@@ -23,6 +23,7 @@
       {% else %}
         <div class="placeholder" style="width:100%;height:100%;display:grid;place-items:center;color:var(--muted);font-size:32px">{% icon "play" %}</div>
       {% endif %}
+      {% if video.my_seen is False %}<span class="unw" title="Not watched yet"></span>{% endif %}
       <span class="dur">{{ video.duration_seconds|duration }}</span>
     </div>
     <div class="meta" style="padding:7px 2px 2px">

@@ -86,6 +86,7 @@ urlpatterns = [
     path("video/<int:pk>/delete/", views.delete_video, name="delete_video"),
     path("video/<int:pk>/favorite/", views.toggle_favorite, name="toggle_favorite"),
     path("video/<int:pk>/rating/", views.set_rating, name="set_rating"),
+    path("video/<int:pk>/unwatched/", views.mark_unwatched, name="mark_unwatched"),
     path("video/<int:pk>/playlist/", views.add_to_playlist, name="add_to_playlist"),
     path("theme/", views.toggle_theme, name="toggle_theme"),
     path("settings/thumb-percent/", views.set_default_thumb_percent, name="set_default_thumb_percent"),
@@ -112,6 +113,7 @@ urlpatterns = [
     # Bulk actions
     path("bulk/thumb-regen/", views.bulk_regen_thumb, name="bulk_regen_thumb"),
     path("bulk/rating/", views.bulk_rating, name="bulk_rating"),
+    path("bulk/unwatched/", views.bulk_unwatched, name="bulk_unwatched"),
     path("bulk/favorite/", views.bulk_favorite, name="bulk_favorite"),
     path("bulk/playlist/", views.bulk_add_playlist, name="bulk_add_playlist"),
     path("bulk/rename/", views.bulk_rename, name="bulk_rename"),

@@ -12,6 +12,7 @@
     {% elif video.aspect_label %}
       <span class="qbadge">{{ video.aspect_label }}</span>
     {% endif %}
+    {% if video.my_seen is False %}<span class="unw" title="Not watched yet"></span>{% endif %}
     <span class="dur">{{ video.duration_seconds|duration }}</span>
     {% with p=video.my_playback|first|pct:video %}
       {% if p > 1 %}<div class="progress" style="width:{{ p }}%"></div>{% endif %}
