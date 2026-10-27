@@ -221,6 +221,21 @@ class Setting(models.Model):
         cls.objects.update_or_create(key=key, defaults={"value": str(value)})
 
 
+class ChannelSub(models.Model):
+    """A channel the account subscribed to: it floats to the top of the Channels
+    page. Per account (like watch history), by the exact `Video.channel` string."""
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="channel_subs")
+    channel = models.CharField(max_length=256)
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "channel"], name="uniq_user_channel_sub")]
+
+    def __str__(self):
+        return f"{self.user_id} -> {self.channel}"
+
+
 class LibraryFolder(models.Model):
     """One folder of the library. Every folder is scanned and watched; the one
     flagged `is_main` is where downloads are saved. With no rows at all the

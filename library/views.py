@@ -22,6 +22,7 @@ from .auth import owner_required, public_when_enabled
 from .models import (
     Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
     UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob, RESUME_MIN_SECONDS,
+    ChannelSub,
 )
 from . import services, downloader, backup, refresh, roots
 
@@ -231,6 +232,8 @@ def _filtered_videos(request):
     channel = request.GET.get("channel", "").strip()
     if channel:
         qs = qs.filter(channel=channel)
+    if request.GET.get("shorts") != "1" and not q:
+        qs = qs.exclude(PORTRAIT_Q)      # shorts live on their own tab; a text search still finds them
     sort = request.GET.get("sort", "added")
     rev  = request.GET.get("rev") == "1"
     if sort == "rating":
@@ -306,12 +309,35 @@ def library(request):
         tags=Tag.objects.all(), fav=request.GET.get("fav") == "1",
         active_tag=request.GET.get("tag", ""),
         channel=request.GET.get("channel", "").strip(),
+        channel_subscribed=request.GET.get("channel", "").strip() in _subscribed(request),
         total_videos=Video.objects.filter(missing=False, hidden=False).count(),
         total_duration=total_duration,
     ))
 
 
 CHANNEL_SORTS = ("count", "name", "recent")
+
+
+def _subscribed(request):
+    """The channel names this account subscribed to (empty for anonymous)."""
+    u = _state_user(request)
+    if u is None:
+        return set()
+    return set(ChannelSub.objects.filter(user=u).values_list("channel", flat=True))
+
+
+@require_POST
+def toggle_subscribe(request):
+    """Subscribe / unsubscribe the signed-in account to a channel."""
+    name = (request.POST.get("name") or "").strip()[:256]
+    if not name:
+        return JsonResponse({"ok": False, "error": "no channel"}, status=400)
+    if not Video.objects.filter(channel=name).exists():
+        return JsonResponse({"ok": False, "error": "unknown channel"}, status=404)
+    sub, created = ChannelSub.objects.get_or_create(user=request.user, channel=name)
+    if not created:
+        sub.delete()
+    return JsonResponse({"ok": True, "subscribed": created})
 
 
 @public_when_enabled
@@ -337,7 +363,10 @@ def channels(request):
                       .values_list("channel", "id").iterator()):
         if len(covers.setdefault(name, [])) < 4:
             covers[name].append(vid)
-    items = [{"name": r["channel"], "count": r["n"], "covers": covers.get(r["channel"], [])}
+    subs = _subscribed(request)
+    rows.sort(key=lambda r: r["channel"] not in subs)       # subscribed first; sort is stable
+    items = [{"name": r["channel"], "count": r["n"], "covers": covers.get(r["channel"], []),
+              "subscribed": r["channel"] in subs}
              for r in rows]
     return render(request, "library/channels.html", base_ctx(
         request, active_nav="channels", page_id="channels", spa_title="Channels — HomeFlix",
@@ -1372,7 +1401,8 @@ def random_video(request):
     import random as _rnd
     pl_id = request.GET.get("pl")
     sp_id = request.GET.get("sp")
-    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts", "channel"))
+    # "sort" is only sent by the Library page, whose results hide shorts
+    has_filter = any(request.GET.get(k) for k in ("q", "tag", "fav", "shorts", "channel", "sort"))
     if pl_id:
         ids = list(PlaylistItem.objects.filter(playlist_id=pl_id).values_list("video_id", flat=True))
         if not ids:

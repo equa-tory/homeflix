@@ -30,7 +30,7 @@ from django.urls import reverse
 from . import backup, downloader, refresh, roots, services, views
 from .auth import LOGIN_ATTEMPT_LIMIT, public_when_enabled
 from .models import (
-    DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
+    ChannelSub, DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
     Setting, SmartPlaylist, Tag, UserPref, Video, WatchEvent,
 )
 
@@ -2361,3 +2361,82 @@ class FavoriteMigrationTests(TransactionTestCase):
         ex.migrate([("library", "0015_video_favorite")])
         v = Video.objects.get(title="a")
         self.assertEqual((v.favorite, v.rating), (False, 10))
+
+
+# ---- Library hides shorts; channel subscriptions -----------------------------------------------
+
+class LibraryHidesShortsTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.wide = _make_video(title="wide", width=1920, height=1080)
+        self.tall = _make_video(title="tall", width=1080, height=1920)
+        self.tall_ns = _make_video(title="tall but normal", width=1080, height=1920, not_short=True)
+        self.unknown = _make_video(title="unprobed")                 # no width/height at all
+        self.client.force_login(self.viewer)
+
+    def titles(self, **q):
+        return {i["title"] for i in self.client.get(reverse("api_videos"), q).json()["items"]}
+
+    def test_the_library_list_has_no_shorts(self):
+        t = self.titles()
+        self.assertIn("wide", t)
+        self.assertIn("unprobed", t)                                 # NULL width/height must not vanish
+        self.assertIn("tall but normal", t)                          # "not a short" is a normal video
+        self.assertNotIn("tall", t)
+
+    def test_shorts_filter_and_text_search_still_find_them(self):
+        self.assertEqual(self.titles(shorts="1"), {"tall"})
+        self.assertIn("tall", self.titles(q="tall"))                 # a search looks everywhere
+
+    def test_library_random_never_picks_a_short(self):
+        for _ in range(25):
+            r = self.client.get(reverse("random_video"), {"sort": "added", "json": "1"}).json()
+            self.assertNotEqual(r["id"], self.tall.pk)
+
+    def test_other_pages_are_unchanged(self):
+        self.assertIn("tall", [v.title for v in self.client.get(reverse("shorts")).context["videos"]])
+
+
+class ChannelSubscribeTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        for t, ch in (("a", "Alpha"), ("a2", "Alpha"), ("b", "Beta"), ("g", "Gamma"), ("g2", "Gamma"), ("g3", "Gamma")):
+            _make_video(title=t, channel=ch)
+
+    def order(self, user, **p):
+        self.client.force_login(user)
+        r = self.client.get(reverse("channels"), p)
+        return [(c["name"], c["subscribed"]) for c in r.context["channels"]]
+
+    def test_toggle_and_subscribed_channels_float_to_the_top(self):
+        self.client.force_login(self.viewer)
+        self.assertEqual([n for n, _ in self.order(self.viewer)], ["Gamma", "Alpha", "Beta"])   # most videos
+        r = self.client.post(reverse("toggle_subscribe"), {"name": "Beta"})
+        self.assertEqual(r.json(), {"ok": True, "subscribed": True})
+        self.assertEqual(self.order(self.viewer), [("Beta", True), ("Gamma", False), ("Alpha", False)])
+        self.client.post(reverse("toggle_subscribe"), {"name": "Alpha"})
+        # still the chosen sort inside each group
+        self.assertEqual(self.order(self.viewer), [("Alpha", True), ("Beta", True), ("Gamma", False)])
+        self.assertEqual([n for n, _ in self.order(self.viewer, sort="name")], ["Alpha", "Beta", "Gamma"])
+        self.assertEqual(self.client.post(reverse("toggle_subscribe"), {"name": "Beta"}).json()["subscribed"], False)
+
+    def test_subscriptions_are_per_account(self):
+        self.client.force_login(self.viewer)
+        self.client.post(reverse("toggle_subscribe"), {"name": "Beta"})
+        self.assertEqual([n for n, s in self.order(self.owner) if s], [])
+        self.assertEqual(ChannelSub.objects.filter(user=self.viewer).count(), 1)
+
+    def test_unknown_or_empty_channel_is_refused(self):
+        self.client.force_login(self.viewer)
+        self.assertEqual(self.client.post(reverse("toggle_subscribe"), {"name": "Nope"}).status_code, 404)
+        self.assertEqual(self.client.post(reverse("toggle_subscribe"), {"name": " "}).status_code, 400)
+        self.assertEqual(ChannelSub.objects.count(), 0)
+
+    def test_anonymous_cannot_subscribe(self):
+        self.assertEqual(self.client.post(reverse("toggle_subscribe"), {"name": "Beta"}).status_code, 302)
+
+    def test_library_channel_page_knows_if_you_subscribed(self):
+        self.client.force_login(self.viewer)
+        self.client.post(reverse("toggle_subscribe"), {"name": "Beta"})
+        self.assertTrue(self.client.get(reverse("library"), {"channel": "Beta"}).context["channel_subscribed"])
+        self.assertFalse(self.client.get(reverse("library"), {"channel": "Alpha"}).context["channel_subscribed"])

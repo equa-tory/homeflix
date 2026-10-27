@@ -7,6 +7,7 @@ urlpatterns = [
     path("hidden/", views.hidden_videos, name="hidden_videos"),
     path("history/", views.history, name="history"),
     path("channels/", views.channels, name="channels"),
+    path("channels/subscribe/", views.toggle_subscribe, name="toggle_subscribe"),
     path("playlists/", views.playlists, name="playlists"),
     path("playlists/<int:pk>/", views.playlist_detail, name="playlist_detail"),
     path("playlists/<int:pk>/thumbnail/", views.playlist_thumb, name="playlist_thumb"),
