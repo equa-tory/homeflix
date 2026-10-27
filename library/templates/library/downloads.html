@@ -8,6 +8,7 @@
 {{ tools|json_script:"dlToolsData" }}
 {{ job|json_script:"dlJobData" }}
 {{ refresh|json_script:"dlRefreshData" }}
+{{ avatars|json_script:"dlAvatarsData" }}
 
 <div id="dlWarn"></div>
 
@@ -100,6 +101,15 @@
     <span class="sub" id="rfMsg"></span>
   </div>
   <div class="dl-prog" id="rfProg" hidden><div id="rfBar"></div></div>
+  <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
+  <h2 style="font-size:15px">Channel icons</h2>
+  <p class="sub">Pulls each channel's round profile picture from YouTube, the way YouTube shows it, for the Channels page and the player. Needs the channels set first (the "Author / channel" box above) and the channel's playlist saved here. Only channels without an icon are fetched.</p>
+  <div class="dl-row">
+    <button type="button" class="btn nav-item" id="avStart">{% icon "image" %} Pull channel icons</button>
+    <label class="bk-row" style="margin:0"><input type="checkbox" id="avForce" class="nav-item"> Fetch them all again</label>
+    <span class="sub" id="avMsg"></span>
+  </div>
+  <div class="dl-prog" id="avProg" hidden><div id="avBar"></div></div>
 </section>
 
 <section class="dl-card">

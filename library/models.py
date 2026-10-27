@@ -236,6 +236,18 @@ class ChannelSub(models.Model):
         return f"{self.user_id} -> {self.channel}"
 
 
+class ChannelMeta(models.Model):
+    """What we know about a channel beyond its name (`Video.channel` is just a
+    string): its YouTube channel id and whether its avatar has been pulled
+    (library/avatars.py). The picture lives at THUMBNAIL_DIR/channels/<pk>.jpg."""
+    name = models.CharField(max_length=256, unique=True)
+    channel_id = models.CharField(max_length=64, blank=True, default="")
+    avatar_updated = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
+
 class LibraryFolder(models.Model):
     """One folder of the library. Every folder is scanned and watched; the one
     flagged `is_main` is where downloads are saved. With no rows at all the

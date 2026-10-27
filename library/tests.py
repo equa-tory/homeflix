@@ -27,10 +27,10 @@ from django.utils import timezone
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 
-from . import backup, downloader, refresh, roots, services, views
+from . import avatars, backup, downloader, refresh, roots, services, views
 from .auth import LOGIN_ATTEMPT_LIMIT, public_when_enabled
 from .models import (
-    ChannelSub, DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
+    ChannelMeta, ChannelSub, DownloadJob, DownloadSource, PlaybackState, Playlist, PlaylistItem, SkippedEntry,
     Setting, SmartPlaylist, Tag, UserPref, Video, WatchEvent,
 )
 
@@ -2652,3 +2652,150 @@ class UnwatchedTests(AuthTestCase):
             self.assertIn(needle, html, needle)
         self.assertEqual(self.client.get(reverse("watch_api", args=[self.seen.pk])).json()["unwatched_url"],
                          f"/video/{self.seen.pk}/unwatched/")
+
+
+# ---- Channel icons + the player's channel row ---------------------------------------------------
+
+class ChannelAvatarTests(AuthTestCase):
+    def setUp(self):
+        super().setUp()
+        self.thumbs = tempfile.mkdtemp()
+        self.ytdl = tempfile.mkdtemp()
+        ov = override_settings(THUMBNAIL_DIR=self.thumbs, YTDL_DIR=self.ytdl)
+        ov.enable()
+        self.addCleanup(ov.disable)
+        for d in (self.thumbs, self.ytdl):
+            self.addCleanup(shutil.rmtree, d, True)
+        self.a1 = _make_video(title="a1", channel="Alpha")
+        self.a2 = _make_video(title="a2", channel="Alpha")
+        self.b1 = _make_video(title="b1", channel="Beta", hidden=True)       # hidden: not counted
+        p = mock.patch.object(avatars, "WORKERS", 1)       # worker threads would get their own (empty) test DB
+        p.start()
+        self.addCleanup(p.stop)
+        self.src = DownloadSource.objects.create(url="https://www.youtube.com/playlist?list=PL1", entries_json=json.dumps([
+            {"id": "v1", "title": "a1", "channel": "Alpha", "channel_id": "UCalpha"},
+            {"id": "v2", "title": "b1", "channel": "Beta", "channel_id": "UCbeta"}]))
+
+    def put_avatar(self, name):
+        meta, _ = ChannelMeta.objects.get_or_create(name=name)
+        os.makedirs(avatars.avatar_dir(), exist_ok=True)
+        with open(avatars.avatar_file(meta.pk), "wb") as f:
+            f.write(b"\xff\xd8jpeg")
+        ChannelMeta.objects.filter(pk=meta.pk).update(avatar_updated=timezone.now())
+        return meta
+
+    def test_pick_avatar_prefers_the_biggest_square_picture_over_banners(self):
+        thumbs = [{"id": "0", "url": "https://x/banner", "width": 1060, "height": 175},
+                  {"id": "6", "url": "https://x/small", "width": 88, "height": 88},
+                  {"id": "7", "url": "https://x/big", "width": 900, "height": 900},
+                  {"id": "avatar_uncropped", "url": "https://x/uncropped"}]
+        self.assertEqual(avatars.pick_avatar(thumbs), "https://x/big")
+        self.assertEqual(avatars.pick_avatar(thumbs[:1] + thumbs[3:]), "https://x/uncropped")
+        self.assertEqual(avatars.pick_avatar(thumbs[:1]), "")
+        self.assertEqual(avatars.pick_avatar(None), "")
+
+    def test_id_map_comes_from_the_saved_listings(self):
+        self.assertEqual(avatars.id_map([json.loads(self.src.entries_json), [{"channel": "Alpha", "channel_id": "UCother"}]]),
+                         {"Alpha": "UCalpha", "Beta": "UCbeta"})
+
+    def test_only_a_real_channel_id_is_asked_for(self):
+        with mock.patch.object(avatars.subprocess, "run") as run:
+            self.assertEqual(avatars.channel_avatar_url("notachannel"), "")
+        run.assert_not_called()
+
+    def test_the_job_pulls_missing_icons_only_and_reports(self):
+        with mock.patch.object(avatars, "channel_avatar_url", return_value="https://x/a.jpg") as cu, \
+             mock.patch.object(avatars, "save_avatar", side_effect=lambda url, dest: (os.makedirs(os.path.dirname(dest), exist_ok=True),
+                                                                                       open(dest, "wb").write(b"jpg"))[1] > 0):
+            avatars._run(False)
+            st = avatars.status()
+            self.assertEqual(st["state"], "done")
+            self.assertEqual(st["saved"], 2)
+            self.assertEqual(cu.call_count, 2)
+            self.assertEqual(ChannelMeta.objects.get(name="Alpha").channel_id, "UCalpha")
+            self.assertIn("2 of 2 channels have one", st["msg"])
+            avatars._run(False)                                       # nothing missing now
+            self.assertEqual(cu.call_count, 2)
+            avatars._run(True)                                        # "fetch them all again"
+            self.assertEqual(cu.call_count, 4)
+
+    def test_channels_without_an_id_are_counted_not_guessed(self):
+        _make_video(title="z", channel="Nowhere")
+        with mock.patch.object(avatars, "channel_avatar_url", return_value=""), \
+             mock.patch.object(avatars, "save_avatar", return_value=False):
+            avatars._run(False)
+        st = avatars.status()
+        self.assertIn("1 channel aren't in any saved playlist", st["msg"])
+        self.assertEqual(st["failed"], 2)
+
+    def test_an_old_cached_listing_without_ids_is_fetched_again(self):
+        self.src.entries_json = json.dumps([{"id": "v1", "title": "a1", "channel": "Alpha"}])
+        self.src.save()
+        fresh = json.loads(DownloadSource.objects.get(pk=self.src.pk).entries_json)
+        fresh[0]["channel_id"] = "UCalpha"
+        with mock.patch.object(avatars.downloader, "fetch_playlist", return_value=("PL", fresh, "")) as fp, \
+             mock.patch.object(avatars, "channel_avatar_url", return_value=""):
+            avatars._run(False)
+        fp.assert_called_once()
+        self.assertEqual(ChannelMeta.objects.get(name="Alpha").channel_id, "UCalpha")
+
+    def test_status_and_start_are_owner_only(self):
+        self.client.force_login(self.viewer)
+        self.assertNotEqual(self.client.get(reverse("dl_avatars_status")).status_code, 200)
+        self.assertNotEqual(self.client.post(reverse("dl_avatars")).status_code, 200)
+        self.client.force_login(self.owner)
+        self.assertTrue(self.client.get(reverse("dl_avatars_status")).json()["ok"])
+        with mock.patch.object(views.avatars, "start_pull", return_value=True) as sp:
+            self.assertTrue(self.client.post(reverse("dl_avatars"), {"force": "1"}).json()["ok"])
+        sp.assert_called_once_with(force=True)
+        with mock.patch.object(views.avatars, "start_pull", return_value=False):
+            self.assertEqual(self.client.post(reverse("dl_avatars")).status_code, 409)
+
+    def test_the_picture_is_served_only_when_it_exists(self):
+        meta = ChannelMeta.objects.create(name="Alpha")
+        self.assertEqual(self.client.get(reverse("channel_avatar", args=[meta.pk])).status_code, 302)   # sign in first
+        self.client.force_login(self.viewer)
+        self.assertEqual(self.client.get(reverse("channel_avatar", args=[meta.pk])).status_code, 404)
+        self.put_avatar("Alpha")
+        r = self.client.get(reverse("channel_avatar", args=[meta.pk]))
+        self.assertEqual((r.status_code, r["Content-Type"]), (200, "image/jpeg"))
+        self.assertIn("max-age", r["Cache-Control"])
+
+    def test_channel_cards_use_the_icon_or_the_initial(self):
+        self.put_avatar("Alpha")
+        self.client.force_login(self.viewer)
+        html = self.client.get(reverse("channels")).content.decode()
+        self.assertIn("/channel-avatar/", html)
+        self.assertIn('class="avatar"', html)                    # Alpha has a picture
+        ch = {c["name"]: c for c in self.client.get(reverse("channels")).context["channels"]}
+        self.assertTrue(ch["Alpha"]["avatar"].startswith("/channel-avatar/"))
+
+    def test_player_data_has_the_channel_row(self):
+        self.put_avatar("Alpha")
+        self.client.force_login(self.viewer)
+        self.client.post(reverse("toggle_subscribe"), {"name": "Alpha"})
+        info = self.client.get(reverse("watch_api", args=[self.a1.pk])).json()["channel_info"]
+        self.assertEqual((info["name"], info["count"], info["subscribed"], info["can_follow"]), ("Alpha", 2, True, True))
+        self.assertTrue(info["avatar"].startswith("/channel-avatar/"))
+        self.assertEqual(info["url"], "/library/?channel=Alpha")
+        self.assertEqual(info["follow_url"], "/channels/subscribe/")
+        none = self.client.get(reverse("watch_api", args=[self.video.pk])).json()      # no channel
+        self.assertIsNone(none["channel_info"])
+        _make_video(title="a3", channel="Alpha", hidden=True)             # hidden videos aren't counted
+        self.assertEqual(self.client.get(reverse("watch_api", args=[self.a1.pk])).json()["channel_info"]["count"], 2)
+
+    def test_channel_names_with_odd_characters_make_a_working_link(self):
+        v = _make_video(title="odd", channel="A&B / C?")
+        self.client.force_login(self.viewer)
+        url = self.client.get(reverse("watch_api", args=[v.pk])).json()["channel_info"]["url"]
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertIn("A%26B%20/%20C%3F", url)
+
+    def test_downloads_page_has_the_button_and_the_player_script_the_row(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("downloads")).content.decode()
+        for needle in ('id="avStart"', 'id="dlAvatarsData"', "/downloads/avatars/"):
+            self.assertIn(needle, html, needle)
+        page = self.client.get(reverse("library")).content.decode()
+        for needle in ("channelRowHtml", "phFollow", "railChannelBtn", "chan-row"):
+            self.assertIn(needle, page, needle)

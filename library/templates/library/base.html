@@ -132,10 +132,27 @@ h2{font-size:14px; margin:26px 0 12px; color:var(--muted); font-weight:700;
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
 .meta .s{color:var(--muted); font-size:12px; margin-top:3px}
 .meta .s svg.i{width:12px;height:12px;vertical-align:-.12em}
+/* player: channel row (icon, name, video count, follow) */
+.chan-row{display:flex; align-items:center; gap:12px; margin:8px 0 4px; flex-wrap:wrap}
+.chan-row .chan-who{display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 220px}
+.chan-row .chan-name{font-weight:700; font-size:15px; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.chan-row .chan-who:hover .chan-name{color:var(--accent)}
+.chan-follow{display:inline-flex; align-items:center; gap:7px; padding:7px 14px; border-radius:20px; font-size:13px}
+.chan-follow.on{background:var(--surface); color:var(--accent); border:1px solid var(--accent)}
 /* "not watched yet" marker on a thumbnail, and the "N new" pill on a channel card */
 .unw{position:absolute; right:7px; top:7px; width:11px; height:11px; border-radius:50%;
   background:var(--accent); box-shadow:0 0 0 2px rgba(0,0,0,.55), 0 0 8px var(--accent); z-index:2}
 .chan-wrap{position:relative}
+/* round channel icon (like YouTube): the pulled picture, or the channel's initial */
+.avatar{display:inline-grid; place-items:center; width:40px; height:40px; flex:0 0 40px; border-radius:50%;
+  background:var(--surface2) center/cover no-repeat; border:1px solid var(--border); color:var(--muted);
+  font-weight:800; font-size:16px; overflow:hidden}
+.avatar.ph{background:var(--accent-soft); color:var(--accent); border-color:transparent}
+.avatar.xs{width:20px; height:20px; flex-basis:20px; font-size:10px}
+.avatar.lg{width:46px; height:46px; flex-basis:46px; font-size:19px}
+.chan-meta{display:flex; align-items:flex-start; gap:10px; padding-top:10px}
+.chan-meta .chan-txt{min-width:0}
+.chan-chip{display:inline-flex; align-items:center; gap:8px}
 .chan-new{position:absolute; left:8px; top:8px; z-index:3; background:var(--accent); color:#fff;
   font-size:11px; font-weight:800; padding:2px 8px; border-radius:10px; pointer-events:none;
   box-shadow:0 2px 8px #0008}
@@ -1314,6 +1331,22 @@ function randomScope(){
 // Icons: the same inline-SVG set the server renders (the icon template tag, library/icons.py).
 // ic('heart','fill') -> '<svg class="i fill">...'; use innerHTML (never textContent) with it.
 function ic(name,extra){return '<svg class="i'+(extra?' '+extra:'')+'" aria-hidden="true" focusable="false"><use href="#i-'+name+'"/></svg>';}
+// The player's channel row: round icon, name, video count, Follow.
+function channelRowHtml(ci){
+  const av=ci.avatar?`<span class="avatar lg" style="background-image:url(${esc(ci.avatar)})"></span>`
+    :`<span class="avatar lg ph">${esc((ci.name||'?').slice(0,1).toUpperCase())}</span>`;
+  return `<div class="chan-row"><a class="chan-who" href="${esc(ci.url)}" title="Go to this channel">${av}`+
+    `<span style="min-width:0"><span class="chan-name">${esc(ci.name)}</span>`+
+    `<span class="sub">${ci.count} video${ci.count===1?'':'s'}</span></span></a>`+
+    (ci.can_follow?`<button type="button" class="btn chan-follow${ci.subscribed?' on':''}" id="phFollow">`+
+      `${ic('bell',ci.subscribed?'fill':'')}<span>${ci.subscribed?'Following':'Follow'}</span></button>`:'')+`</div>`;
+}
+function bindFollow(btn,ci){
+  btn.onclick=e=>{e.stopPropagation();
+    post(ci.follow_url,{name:ci.name}).then(r=>{
+      if(!r||!r.ok)return;ci.subscribed=r.subscribed;btn.classList.toggle('on',r.subscribed);
+      btn.innerHTML=ic('bell',r.subscribed?'fill':'')+'<span>'+(r.subscribed?'Following':'Follow')+'</span>';});};
+}
 // Likes: `rating` is the net score (+1 per like, -1 per dislike). The player's
 // info panel and the shorts rail share these; bindLikes keeps the two in step.
 function likeTxt(n){n=+n||0;return n>0?'+'+n:n<0?'\u2212'+(-n):'0';}
@@ -2539,8 +2572,37 @@ const PAGE_INIT={
       }).catch(e=>fail(m,e));
     };
 
+    /* ---- channel icons ---- */
+    let av=readJSON('#dlAvatarsData')||{state:'idle'}, avTimer=null;
+    function renderAvatars(){
+      const run=av.state==='running', m=$('#avMsg'), prog=$('#avProg');
+      $('#avStart').disabled=run;
+      prog.hidden=!(run||av.state==='done');
+      const pct=av.total?Math.round(av.done/av.total*100):(av.state==='done'?100:3);
+      $('#avBar').style.width=(run&&!av.total?5:pct)+'%';
+      if(run)say(m,av.phase||'Working…');
+      else if(av.state==='done')say(m,'✓ '+(av.msg||'Done'));
+      else if(av.state==='error')say(m,av.msg||'Failed',true);
+      else say(m,'');
+    }
+    function pollAvatars(){
+      clearTimeout(avTimer);
+      getJSON('/downloads/avatars/status/').then(j=>{
+        av=j.avatars||{state:'idle'};renderAvatars();
+        if(av.state==='running')avTimer=setTimeout(pollAvatars,1500);
+      }).catch(()=>{avTimer=setTimeout(pollAvatars,4000);});
+    }
+    $('#avStart').onclick=()=>{
+      const m=$('#avMsg');say(m,'Starting…');
+      post('/downloads/avatars/',{force:$('#avForce').checked?'1':'0'}).then(j=>{
+        if(!j.ok){say(m,j.error||'Could not start',true);return;}
+        av=j.avatars;renderAvatars();pollAvatars();
+      }).catch(e=>fail(m,e));
+    };
+
     /* ---- init ---- */
-    renderWarn();renderCookies();renderTools();renderSources();renderJob();updateBar();renderRefresh();
+    renderWarn();renderCookies();renderTools();renderSources();renderJob();updateBar();renderRefresh();renderAvatars();
+    if(av.state==='running')pollAvatars();
     if(rf.state==='running')pollRefresh();
     if(running())pollJob();
     if((tools.update||{}).state==='running')pollTools();
@@ -2549,7 +2611,7 @@ const PAGE_INIT={
     if(first)openSource(first.id);
 
     return ()=>{
-      clearTimeout(jobTimer);clearTimeout(toolTimer);clearTimeout(rfTimer);
+      clearTimeout(jobTimer);clearTimeout(toolTimer);clearTimeout(rfTimer);clearTimeout(avTimer);
       document.body.classList.remove('dl-bar-on');
     };
   },
@@ -3306,6 +3368,7 @@ const PLAYER=(function(){
     INFO.innerHTML=`<div class="ph-pad">`+
       `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>← →</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>↑ ↓</b> next/prev video</span></div>`+
       `<h1 class="wtitle">${esc(data.title)}</h1>`+
+      (data.channel_info?channelRowHtml(data.channel_info):'')+
       `<div class="wbar"><span class="like-box">`+
         `<button class="iconbtn" id="phLike" title="Like (+1)">${ic('thumb-up')}</button>`+
         `<span class="like-n ${likeCls(data.rating)}" id="phScore" title="Net likes">${likeTxt(data.rating)}</span>`+
@@ -3391,6 +3454,8 @@ const PLAYER=(function(){
       ['phFav','railFavBtn'].forEach(id=>{const b=document.getElementById(id);if(!b)return;
         if(id==='phFav'){b.style.color=r.favorite?'var(--accent)':'';b.style.borderColor=r.favorite?'var(--accent)':'';}
         else b.classList.toggle('on',r.favorite);});});};
+    const folBtn=document.getElementById('phFollow');
+    if(folBtn&&data.channel_info)bindFollow(folBtn,data.channel_info);
     const unwBtn=document.getElementById('phUnw');
     if(unwBtn)unwBtn.onclick=e=>{e.stopPropagation();post(data.unwatched_url).then(r=>{
       if(!r||!r.ok)return;unwBtn.style.color='var(--accent)';unwBtn.style.borderColor='var(--accent)';
@@ -3527,6 +3592,8 @@ const PLAYER=(function(){
         `</div></div>`+
       `<div class="bulk-aw"><button class="rail-btn" id="railMoreBtn" title="More">•••</button>`+
         `<div class="bulk-pop" id="railMorePop" style="left:auto;right:0;bottom:calc(100% + 8px);min-width:220px">`+
+          (data.channel_info?`<a class="nav-item" id="railChannelBtn" href="${esc(data.channel_info.url)}">${ic('channels')} <span>Go to ${esc(data.channel_info.name)}</span></a>`+
+            (data.channel_info.can_follow?`<button class="nav-item" id="railFollowBtn">${ic('bell',data.channel_info.subscribed?'fill':'')} <span>${data.channel_info.subscribed?'Following':'Follow'}</span></button>`:''):'')+
           `<button class="nav-item" id="railUnwBtn">${ic('unseen')} Mark as not watched</button>`+
           (data.is_owner?
             `<button class="nav-item" id="railHideBtn">${data.hidden?ic('eye')+' Unhide':ic('eye-off')+' Hide from library'}</button>`+
@@ -3582,6 +3649,13 @@ const PLAYER=(function(){
       }};
     const moreBtn=document.getElementById('railMoreBtn'),morePop=document.getElementById('railMorePop');
     if(moreBtn&&morePop)moreBtn.onclick=e=>{e.stopPropagation();morePop.classList.toggle('open');};
+    const rCh=document.getElementById('railChannelBtn');
+    if(rCh)rCh.onclick=e=>{e.preventDefault();e.stopPropagation();ROUTER.go(rCh.getAttribute('href'));};
+    const rFol=document.getElementById('railFollowBtn');
+    if(rFol&&data.channel_info)rFol.onclick=e=>{e.stopPropagation();
+      post(data.channel_info.follow_url,{name:data.channel_info.name}).then(r=>{
+        if(!r||!r.ok)return;data.channel_info.subscribed=r.subscribed;
+        rFol.innerHTML=ic('bell',r.subscribed?'fill':'')+' <span>'+(r.subscribed?'Following':'Follow')+'</span>';});};
     const rUnw=document.getElementById('railUnwBtn');
     if(rUnw)rUnw.onclick=e=>{e.stopPropagation();post(data.unwatched_url).then(r=>{
       if(r&&r.ok)rUnw.innerHTML=ic('check')+' Marked as not watched';});};

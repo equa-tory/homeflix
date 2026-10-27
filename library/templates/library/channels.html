@@ -27,9 +27,10 @@
             {% for vid in c.covers %}<div class="chan-th" style="background-image:url({% url 'thumb' vid %})"></div>{% empty %}<div class="placeholder">{% icon "channels" %}</div>{% endfor %}
           </div>
           {% if c.unwatched %}<span class="chan-new" title="Videos you haven't watched yet">{{ c.unwatched }} new</span>{% endif %}
-          <div class="meta">
-            <div class="t">{{ c.name }}</div>
-            <div class="s">{{ c.count }} video{{ c.count|pluralize }}{% if c.subscribed %} · subscribed{% endif %}</div>
+          <div class="meta chan-meta">
+            <span class="avatar{% if not c.avatar %} ph{% endif %}"{% if c.avatar %} style="background-image:url({{ c.avatar }})"{% endif %}>{% if not c.avatar %}{{ c.name|slice:":1"|upper }}{% endif %}</span>
+            <div class="chan-txt"><div class="t">{{ c.name }}</div>
+            <div class="s">{{ c.count }} video{{ c.count|pluralize }}{% if c.subscribed %} · subscribed{% endif %}</div></div>
           </div>
         </a>
         {% if user.is_authenticated %}<button type="button" class="chan-sub nav-item{% if c.subscribed %} on{% endif %}" data-chan="{{ c.name }}"

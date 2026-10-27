@@ -4,6 +4,7 @@ import re
 import json
 import difflib
 import mimetypes
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_not_required
@@ -22,9 +23,9 @@ from .auth import owner_required, public_when_enabled
 from .models import (
     Video, PlaybackState, WatchEvent, Playlist, PlaylistItem, Tag, Setting,
     UserPref, VideoSubtitle, DownloadSource, SkippedEntry, DownloadJob, RESUME_MIN_SECONDS,
-    ChannelSub,
+    ChannelSub, ChannelMeta,
 )
-from . import services, downloader, backup, refresh, roots
+from . import services, downloader, backup, refresh, roots, avatars
 
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 CHUNK = 8192
@@ -318,6 +319,7 @@ def library(request):
         active_tag=request.GET.get("tag", ""),
         channel=request.GET.get("channel", "").strip(),
         channel_subscribed=request.GET.get("channel", "").strip() in _subscribed(request),
+        channel_avatar=avatars.avatar_urls([request.GET.get("channel", "").strip()]).get(request.GET.get("channel", "").strip(), ""),
         total_videos=Video.objects.filter(missing=False, hidden=False).count(),
         total_duration=total_duration,
     ))
@@ -378,8 +380,10 @@ def channels(request):
     if u is not None:                                       # videos of the channel not in this account's History
         unwatched = dict(named.exclude(pk__in=WatchEvent.objects.filter(user=u).values("video_id"))
                          .values_list("channel").annotate(n=Count("id")))
+    pics = avatars.avatar_urls(r["channel"] for r in rows)
     items = [{"name": r["channel"], "count": r["n"], "covers": covers.get(r["channel"], []),
-              "subscribed": r["channel"] in subs, "unwatched": unwatched.get(r["channel"], 0)}
+              "subscribed": r["channel"] in subs, "unwatched": unwatched.get(r["channel"], 0),
+              "avatar": pics.get(r["channel"], "")}
              for r in rows]
     return render(request, "library/channels.html", base_ctx(
         request, active_nav="channels", page_id="channels", spa_title="Channels — HomeFlix",
@@ -448,6 +452,22 @@ def playlist_detail(request, pk):
 
 
 # ---- watch (single-page player) --------------------------------------------
+
+def _channel_info(video, user):
+    """What the player's channel row shows: icon, name, how many videos, follow state."""
+    if not video.channel:
+        return None
+    name = video.channel
+    return {
+        "name": name,
+        "count": Video.objects.filter(channel=name, missing=False, hidden=False).count(),
+        "avatar": avatars.avatar_urls([name]).get(name, ""),
+        "url": f"/library/?channel={quote(name)}",
+        "subscribed": bool(user is not None and ChannelSub.objects.filter(user=user, channel=name).exists()),
+        "can_follow": user is not None,
+        "follow_url": "/channels/subscribe/",
+    }
+
 
 def _serialize_subs(pk, video):
     """Subtitle list in the shape the player's CC popover expects. Manual
@@ -654,6 +674,7 @@ def _build_watch_data(request, pk):
         "favorite_url": f"/video/{pk}/favorite/",
         "rating_url": f"/video/{pk}/rating/",
         "unwatched_url": f"/video/{pk}/unwatched/",
+        "channel_info": _channel_info(video, u),
         "playlist_url": f"/video/{pk}/playlist/",
         "autoplay_toggle_url": "/autoplay/",
         "autoplay": UserPref.get(u, "autoplay", "1") == "1",
@@ -722,6 +743,15 @@ def thumb(request, pk):
     if video.thumbnail_path and os.path.exists(video.thumbnail_path):
         return _thumb_file_response(request, video.thumbnail_path)
     raise Http404("No thumbnail")
+
+
+@public_when_enabled
+def channel_avatar(request, pk):
+    """A channel's round-icon image (pulled by library/avatars.py)."""
+    path = avatars.avatar_file(pk)
+    if not ChannelMeta.objects.filter(pk=pk, avatar_updated__isnull=False).exists() or not os.path.isfile(path):
+        raise Http404("No avatar")
+    return _thumb_file_response(request, path)
 
 
 @public_when_enabled
@@ -1844,6 +1874,7 @@ def downloads(request):
         sources=[_dl_source_json(s) for s in DownloadSource.objects.all()],
         tools=_dl_tools_json(),
         refresh=refresh.status(),
+        avatars=avatars.status(),
         job=_dl_job_json(DownloadJob.objects.select_related("source").first()),
     ))
 
@@ -1891,6 +1922,22 @@ def dl_refresh(request):
 @owner_required
 def dl_refresh_status(request):
     return JsonResponse({"ok": True, "refresh": refresh.status()})
+
+
+@require_POST
+@owner_required
+def dl_avatars(request):
+    """Pull every channel's YouTube icon (only the missing ones unless force=1)."""
+    if not downloader.ytdlp_available():
+        return JsonResponse({"ok": False, "error": "yt-dlp isn't installed on the server"}, status=400)
+    if not avatars.start_pull(force=request.POST.get("force") == "1"):
+        return JsonResponse({"ok": False, "error": "A pull is already running"}, status=409)
+    return JsonResponse({"ok": True, "avatars": avatars.status()})
+
+
+@owner_required
+def dl_avatars_status(request):
+    return JsonResponse({"ok": True, "avatars": avatars.status()})
 
 
 @require_POST

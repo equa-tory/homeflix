@@ -4,7 +4,7 @@
 <h1>Library <span style="color:var(--muted);font-size:14px;font-weight:400" id="vcount" data-duration="{{ total_duration }}"></span></h1>
 {% if channel %}
   <div class="toolbar" style="margin:0 0 6px">
-    <span class="chip active">Channel: {{ channel }}</span>
+    <span class="chip active chan-chip">{% if channel_avatar %}<span class="avatar xs" style="background-image:url({{ channel_avatar }})"></span>{% endif %}Channel: {{ channel }}</span>
     <a class="chip nav-item" data-spa href="{% url 'library' %}" title="Show all videos">{% icon "x" %} All channels</a>
     <a class="chip nav-item" data-spa href="{% url 'channels' %}">{% icon "channels" %} Channels</a>
     <button type="button" class="chip nav-item chan-sub-chip{% if channel_subscribed %} on{% endif %}" id="chanSubBtn" data-chan="{{ channel }}">{% icon "bell" %}<span>{% if channel_subscribed %}Subscribed{% else %}Subscribe{% endif %}</span></button>
