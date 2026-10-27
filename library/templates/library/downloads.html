@@ -16,8 +16,9 @@
   <h2>YouTube cookies <span class="dl-badge" id="dlCookieBadge"></span></h2>
   <p class="dl-reco"><b>Required for downloads.</b> Without cookies YouTube caps quality, often blocks downloads with <i>"Sign in to confirm you're not a bot"</i>, and private/unlisted playlists can't be read at all, so downloading is switched off until they're saved. Paste them once — they're stored on the server (not shown again) and used for every download, including ones you start from your phone.</p>
   <textarea id="dlCookieText" rows="3" class="nav-item" spellcheck="false" autocomplete="off" autocapitalize="off"
-            placeholder="Paste the cookies.txt contents, or the Cookie: header value"></textarea>
+            placeholder="Paste the cookies (JSON export, cookies.txt contents, or the Cookie: header value)"></textarea>
   <div class="dl-row">
+    <button type="button" class="btn ghost nav-item" id="dlCookiePaste" hidden>{% icon "download" %} Paste from clipboard</button>
     <button type="button" class="btn nav-item" id="dlCookieSave">Save cookies</button>
     <button type="button" class="btn ghost nav-item" id="dlCookieTest" hidden>Test cookies</button>
     <button type="button" class="btn ghost nav-item" id="dlCookieClear">Remove</button>
@@ -26,7 +27,16 @@
   <details class="dl-how">
     <summary class="nav-item" tabindex="0">How do I get the cookies?</summary>
     <p><b>Do it in a private window</b> so YouTube never rotates the cookies you export (a normal browser session keeps refreshing them, which invalidates the saved copy within days).</p>
-    <p><b>Option A — extension (easiest, PC or Firefox for Android)</b></p>
+    <p><b>On an iPhone / iPad (Safari) — no PC needed</b></p>
+    <ol>
+      <li>Install a cookie extension for Safari from the App Store, for example <i>Cookie-Editor</i>. Then <b>Settings → Apps → Safari → Extensions</b> (older iOS: Settings → Safari → Extensions): turn it on, allow it for <b>youtube.com</b>, and allow it in <b>Private</b> browsing.</li>
+      <li>In Safari open a <b>Private</b> tab, sign in at <code>youtube.com</code>, then open <code>https://www.youtube.com/robots.txt</code> (keep it the only tab).</li>
+      <li>Open the page menu (<b>aA</b> / the puzzle-piece icon) → the cookie extension → <b>Export</b> → choose <b>JSON</b> (or <i>Netscape</i> / <i>Header string</i>). It copies everything to the clipboard.</li>
+      <li>Come back to this page and tap <b>Paste from clipboard</b>, then <b>Save cookies</b>. The JSON export is understood as is.</li>
+      <li>Close the private tab <b>without signing out</b>.</li>
+    </ol>
+    <p class="sub">There is no bookmarklet shortcut: the cookies that matter are marked <i>HttpOnly</i>, which page scripts (and so any bookmarklet) can't read. A browser extension is the only way on Safari.</p>
+    <p><b>Option A — extension (easiest on a PC, or Firefox for Android)</b></p>
     <ol>
       <li>Install <i>Get cookies.txt LOCALLY</i> (Chrome / Edge) or <i>cookies.txt</i> (Firefox) and allow it in private windows.</li>
       <li>Open a <b>private / incognito window</b>, sign in at youtube.com.</li>

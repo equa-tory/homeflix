@@ -2572,6 +2572,19 @@ const PAGE_INIT={
       }).catch(e=>fail(m,e));
     };
 
+    /* ---- paste from the clipboard (phones: the long cookie export is one tap away) ---- */
+    const pasteBtn=$('#dlCookiePaste');
+    if(pasteBtn&&navigator.clipboard&&navigator.clipboard.readText){
+      pasteBtn.hidden=false;
+      pasteBtn.onclick=()=>{
+        navigator.clipboard.readText().then(t=>{
+          if(!t||!t.trim()){say($('#dlCookieMsg'),'The clipboard is empty.',true);return;}
+          $('#dlCookieText').value=t;$('#dlCookieSave').click();
+        }).catch(()=>{say($('#dlCookieMsg'),'Allow pasting when Safari asks, or paste into the box by hand.',true);
+          $('#dlCookieText').focus();});
+      };
+    }
+
     /* ---- channel icons ---- */
     let av=readJSON('#dlAvatarsData')||{state:'idle'}, avTimer=null;
     function renderAvatars(){

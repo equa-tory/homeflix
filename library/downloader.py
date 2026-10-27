@@ -279,8 +279,41 @@ def cookie_path():
     return os.path.join(settings.YTDL_DIR, "cookies.txt")
 
 
+_JSON_DOMAINS = ("youtube.com", "google.com")
+
+
+def _json_cookie_rows(text):
+    """Rows from a JSON cookie export (the Cookie-Editor / EditThisCookie
+    format: a list of {name, value, domain, path, secure, expirationDate, ...}
+    objects, or {"cookies": [...]}). [] if `text` isn't one. Only YouTube/Google
+    domains are kept when the export has any (it may hold the whole browser's)."""
+    if not text.lstrip().startswith(("[", "{")):
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = data.get("cookies")
+    rows = []
+    for c in data if isinstance(data, list) else []:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        domain = str(c.get("domain") or ".youtube.com")
+        exp = c.get("expirationDate", c.get("expires"))
+        try:
+            expiry = str(int(float(exp))) if exp and not c.get("session") else _FAR_FUTURE
+        except (TypeError, ValueError):
+            expiry = _FAR_FUTURE
+        rows.append((domain, "TRUE" if domain.startswith(".") else "FALSE", str(c.get("path") or "/"),
+                     "TRUE" if c.get("secure") else "FALSE", expiry, str(c["name"]), str(c.get("value", ""))))
+    ours = [r for r in rows if r[0].lstrip(".").endswith(_JSON_DOMAINS)]
+    return ours or rows
+
+
 def normalize_cookies(text):
-    """Accept a Netscape cookies.txt paste *or* a raw `Cookie:` request header
+    """Accept a Netscape cookies.txt paste, a JSON export (Cookie-Editor, the
+    easy way on an iPhone) *or* a raw `Cookie:` request header
     (`a=b; c=d`, copied from DevTools) and return (netscape_text, count,
     has_login_cookie). Raises ValueError if nothing usable is found.
 
@@ -289,8 +322,8 @@ def normalize_cookies(text):
     text = (text or "").strip()
     if not text:
         raise ValueError("Nothing pasted")
-    rows = []  # (domain, flag, path, secure, expiry, name, value)
-    for raw in text.splitlines():
+    rows = _json_cookie_rows(text)  # (domain, flag, path, secure, expiry, name, value)
+    for raw in ([] if rows else text.splitlines()):
         line = raw.strip()
         if line.startswith("#HttpOnly_"):
             line = line[len("#HttpOnly_"):]
@@ -312,7 +345,7 @@ def normalize_cookies(text):
                 rows.append((".youtube.com", "TRUE", "/", "TRUE", _FAR_FUTURE, name, value))
     if not rows:
         raise ValueError("Couldn't find any cookies in that. Paste the whole cookies.txt "
-                         "file, or the Cookie: header value.")
+                         "file, the JSON export, or the Cookie: header value.")
     lines = ["# Netscape HTTP Cookie File"]
     for r in rows:
         if "\t" in r[6]:   # would corrupt the tab-separated layout

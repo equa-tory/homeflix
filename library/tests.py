@@ -474,6 +474,33 @@ class DownloaderHelperTests(TestCase):
         self.assertTrue(has_login)
         self.assertIn("\tb\t2=3", body)
 
+    def test_normalize_cookies_accepts_a_json_export(self):
+        """Cookie-Editor's JSON export (the easy route on an iPhone's Safari)."""
+        export = json.dumps([
+            {"name": "SID", "value": "abc", "domain": ".youtube.com", "path": "/", "secure": True,
+             "httpOnly": True, "expirationDate": 1999999999.4},
+            {"name": "LOGIN_INFO", "value": "q=1", "domain": ".youtube.com", "path": "/", "secure": True, "session": True},
+            {"name": "NID", "value": "n", "domain": "www.google.com", "path": "/", "secure": False, "expirationDate": 1999999999},
+            {"name": "tracker", "value": "x", "domain": ".example.org", "path": "/", "secure": False},
+        ])
+        body, count, has_login = downloader.normalize_cookies(export)
+        self.assertEqual(count, 3)                                    # the unrelated site is dropped
+        self.assertTrue(has_login)
+        self.assertIn(".youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tabc", body)
+        self.assertIn("www.google.com\tFALSE\t/\tFALSE\t1999999999\tNID\tn", body)
+        self.assertIn("\tLOGIN_INFO\tq=1", body)
+        self.assertNotIn("example.org", body)
+        wrapped = downloader.normalize_cookies(json.dumps({"cookies": json.loads(export)}))
+        self.assertEqual(wrapped[1], 3)
+        body2, count2, _ = downloader.normalize_cookies(json.dumps([{"name": "a", "value": "b", "domain": "x.test"}]))
+        self.assertEqual(count2, 1)                                   # no YouTube rows at all: keep what there is
+
+    def test_broken_or_empty_json_is_not_mistaken_for_cookies(self):
+        for bad in ["[]", "{}", '[{"value": "no name"}]', "[1, 2]", '{"cookies": []}', "[{"]:
+            with self.subTest(text=bad):
+                with self.assertRaises(ValueError):
+                    downloader.normalize_cookies(bad)
+
     def test_normalize_cookies_rejects_garbage(self):
         for bad in ["", "   ", "hello world", "# just a comment"]:
             with self.subTest(text=bad):
@@ -2799,3 +2826,11 @@ class ChannelAvatarTests(AuthTestCase):
         page = self.client.get(reverse("library")).content.decode()
         for needle in ("channelRowHtml", "phFollow", "railChannelBtn", "chan-row"):
             self.assertIn(needle, page, needle)
+
+
+class CookieHelpMarkupTests(AuthTestCase):
+    def test_downloads_page_explains_safari_and_offers_clipboard_paste(self):
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("downloads")).content.decode()
+        for needle in ("On an iPhone / iPad (Safari)", 'id="dlCookiePaste"', "navigator.clipboard.readText", "JSON export"):
+            self.assertIn(needle, html, needle)
