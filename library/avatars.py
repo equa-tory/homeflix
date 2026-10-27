@@ -32,7 +32,7 @@ from .models import ChannelMeta, DownloadSource, Video
 logger = logging.getLogger(__name__)
 
 STALE_SECONDS = 180
-WORKERS = 4
+WORKERS = 8                 # each channel costs ~2-4 s of YouTube page, so run several at once
 AVATAR_PX = 240
 
 
@@ -123,8 +123,9 @@ def save_avatar(url, dest):
 
 
 def pull_one(meta):
-    """Fetch and store one channel's avatar. True if it now has one."""
-    url = channel_avatar_url(meta.channel_id)
+    """Fetch and store one channel's avatar. True if it now has one. One retry:
+    YouTube drops the odd connection when several channels are asked at once."""
+    url = channel_avatar_url(meta.channel_id) or channel_avatar_url(meta.channel_id)
     if not url or not save_avatar(url, avatar_file(meta.pk)):
         return False
     ChannelMeta.objects.filter(pk=meta.pk).update(avatar_updated=timezone.now())
@@ -224,6 +225,7 @@ def _run_inner(force):
     counts = {"saved": 0, "failed": 0}
     lock = threading.Lock()
     done = [0]
+    t0 = time.time()
 
     def work(meta, threaded=True):
         try:
@@ -237,7 +239,11 @@ def _run_inner(force):
         with lock:
             done[0] += 1
             counts["saved" if ok else "failed"] += 1
-            _write(state="running", phase=f"Channel icons ({done[0]} of {total})", done=done[0], total=total, **counts)
+            phase = f"Channel icons ({done[0]} of {total})"
+            if done[0] >= 5 and done[0] < total:
+                left = (time.time() - t0) / done[0] * (total - done[0])
+                phase += f" · about {int(left // 60)} min {int(left % 60):02d} s left" if left >= 60 else f" · about {int(left) + 1} s left"
+            _write(state="running", phase=phase, done=done[0], total=total, **counts)
         return ok
 
     if metas:

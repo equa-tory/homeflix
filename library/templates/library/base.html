@@ -3400,8 +3400,8 @@ const PLAYER=(function(){
           `</div></div></div>`:'')+
       `<span class="spacer"></span>`+
       `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${ic('autoplay')} ${data.autoplay?'Auto On':'Auto Off'}</button></div>`+
-      `<div class="tech">${tech}${data.source_url?`<a id="phSrc" href="${esc(data.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Opens the source at the current time">source ${ic('external')}</a>`
-        :`<a id="phSrcFind" href="${esc(data.search_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="No source link saved: search YouTube for this title">find on YouTube ${ic('external')}</a>`}</div>`+
+      `<div class="tech">${tech}${data.source_url?`<a id="phSrc" href="${esc(data.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Opens the source at the current time">source ${ic('external')}</a> `:''}`+
+        `<a id="phSrcFind" href="${esc(data.search_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Search YouTube for this title">find on YouTube ${ic('external')}</a></div>`+
       (data.needs_convert&&data.is_owner?`<div class="conv-inline" id="phConvInline">`+
         `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
         `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+

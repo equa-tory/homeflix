@@ -113,7 +113,7 @@
   <div class="dl-prog" id="rfProg" hidden><div id="rfBar"></div></div>
   <hr style="border:0;border-top:1px solid var(--border);margin:16px 0">
   <h2 style="font-size:15px">Channel icons</h2>
-  <p class="sub">Pulls each channel's round profile picture from YouTube, the way YouTube shows it, for the Channels page and the player. Needs the channels set first (the "Author / channel" box above) and the channel's playlist saved here. Only channels without an icon are fetched.</p>
+  <p class="sub">Pulls each channel's round profile picture from YouTube, the way YouTube shows it, for the Channels page and the player. Needs the channels set first (the "Author / channel" box above) and the channel's playlist saved here. Only channels without an icon are fetched. The picture is tiny, but its address is only on the channel's own YouTube page (a few MB each), so expect a couple of seconds per channel (about 2-4 minutes for 500 channels); the page shows the time left. After the first run only new channels are fetched.</p>
   <div class="dl-row">
     <button type="button" class="btn nav-item" id="avStart">{% icon "image" %} Pull channel icons</button>
     <label class="bk-row" style="margin:0"><input type="checkbox" id="avForce" class="nav-item"> Fetch them all again</label>

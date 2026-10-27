@@ -2847,6 +2847,9 @@ class SourceLinkTests(AuthTestCase):
         html = self.client.get(reverse("library")).content.decode()
         for needle in ("phSrcFind", "find on YouTube", "search_url"):
             self.assertIn(needle, html, needle)
+        # the direct "source" link only exists when there is one; the search link is always there
+        self.assertIn("data.source_url?`<a id=\"phSrc\"", html)
+        self.assertLess(html.index('id="phSrc"'), html.index('id="phSrcFind"'))
 
     def test_the_saved_source_still_wins(self):
         v = _make_video(title="t", source_url="https://www.youtube.com/watch?v=abcdefghijk")
