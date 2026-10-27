@@ -1,4 +1,5 @@
 {% extends base_template %}
+{% load library_extras %}
 {% block content %}
 <h1>Library folders</h1>
 <p class="sub">Everything in all of these folders shows up in HomeFlix as one library. <b>New downloads</b> are saved in the one marked <b>main</b>, so when a drive fills up you can add a bigger one and mark that as main, without moving anything.</p>
@@ -9,9 +10,9 @@
   <h2>Folders</h2>
   <div id="flList"></div>
   <div class="dl-row">
-    <button type="button" class="btn ghost nav-item" id="flAdd">＋ Add folder</button>
+    <button type="button" class="btn ghost nav-item" id="flAdd">{% icon "plus" %} Add folder</button>
     <button type="button" class="btn nav-item" id="flSave">Save</button>
-    <button type="button" class="btn ghost nav-item" id="flScan">↻ Rescan now</button>
+    <button type="button" class="btn ghost nav-item" id="flScan">{% icon "refresh" %} Rescan now</button>
     <span class="sub" id="flMsg"></span>
   </div>
   <p class="sub" style="margin-bottom:0">Type the full path as the server sees it (for example <code>/mnt/big/YouTube</code>). The <b>network path</b> is optional: it is what the player shows under a video so you can open the file from another PC (for example <code>\\192.168.1.39\big\YouTube</code>).</p>

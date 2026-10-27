@@ -12,7 +12,7 @@
 {% if user.is_staff %}
 <div class="grid">
   <a class="card nav-item" tabindex="0" href="{% url 'hidden_videos' %}" data-spa>
-    <div class="thumb"><div class="placeholder">🙈</div></div>
+    <div class="thumb"><div class="placeholder">{% icon "eye-off" %}</div></div>
     <div class="meta"><div class="t">Hidden</div>
       <div class="s">{{ total_hidden }} video{{ total_hidden|pluralize }}</div></div>
   </a>
@@ -28,7 +28,7 @@
         {% if p.thumbnail_path %}
           <div class="thumb-bg" style="background-image:url({% url 'playlist_thumb' p.pk %}?v={{ p.thumbnail_path|thumb_v }})"></div>
         {% else %}
-          <div class="placeholder">☰ {{ p.items.count }}</div>
+          <div class="placeholder">{% icon "playlists" %}&nbsp;{{ p.items.count }}</div>
         {% endif %}
       </div>
       <div class="meta"><div class="t">{{ p.name }}</div>
@@ -36,7 +36,7 @@
     </a>
     <form class="pl-del-form" method="post" action="{% url 'delete_playlist' p.pk %}"
           data-confirm="Delete &quot;{{ p.name|escapejs }}&quot;? Videos are kept.">
-      {% csrf_token %}<button class="pl-del-btn" title="Delete playlist">🗑</button>
+      {% csrf_token %}<button class="pl-del-btn" title="Delete playlist">{% icon "trash" %}</button>
     </form>
   </div>
   {% endfor %}
@@ -61,7 +61,7 @@
         {% if sp.thumbnail_path %}
           <div class="thumb-bg" style="background-image:url({% url 'smart_playlist_thumb' sp.pk %}?v={{ sp.thumbnail_path|thumb_v }})"></div>
         {% else %}
-          <div class="placeholder" style="font-size:16px">⚙ Auto</div>
+          <div class="placeholder" style="font-size:16px">{% icon "sliders" %}&nbsp;Auto</div>
         {% endif %}
       </div>
       <div class="meta"><div class="t">{{ sp.name }}</div>
@@ -70,7 +70,7 @@
     </a>
     <form class="pl-del-form" method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
           data-confirm="Delete &quot;{{ sp.name|escapejs }}&quot;?">
-      {% csrf_token %}<button class="pl-del-btn" title="Delete">🗑</button>
+      {% csrf_token %}<button class="pl-del-btn" title="Delete">{% icon "trash" %}</button>
     </form>
   </div>
   {% endfor %}

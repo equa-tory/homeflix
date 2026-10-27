@@ -1,11 +1,13 @@
 {% extends base_template %}
+{% load library_extras %}
 {% block content %}
 <h1>Library <span style="color:var(--muted);font-size:14px;font-weight:400" id="vcount" data-duration="{{ total_duration }}"></span></h1>
 {% if channel %}
   <div class="toolbar" style="margin:0 0 6px">
     <span class="chip active">Channel: {{ channel }}</span>
-    <a class="chip nav-item" data-spa href="{% url 'library' %}" title="Show all videos">✕ All channels</a>
-    <a class="chip nav-item" data-spa href="{% url 'channels' %}">◉ Channels</a>
+    <a class="chip nav-item" data-spa href="{% url 'library' %}" title="Show all videos">{% icon "x" %} All channels</a>
+    <a class="chip nav-item" data-spa href="{% url 'channels' %}">{% icon "channels" %} Channels</a>
+    <button type="button" class="chip nav-item chan-sub-chip{% if channel_subscribed %} on{% endif %}" id="chanSubBtn" data-chan="{{ channel }}">{% icon "bell" %}<span>{% if channel_subscribed %}Subscribed{% else %}Subscribe{% endif %}</span></button>
   </div>
 {% endif %}
 <form class="toolbar" method="get" id="filters" data-no-spa>
@@ -22,18 +24,18 @@
   <a class="btn ghost nav-item" data-spa
      href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}&q={{ q|urlencode }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
      title="Reverse sort order" style="font-size:16px;padding:7px 10px">
-    {% if rev %}↑{% else %}↓{% endif %}
+    {% if rev %}{% icon "arrow-up" %}{% else %}{% icon "arrow-down" %}{% endif %}
   </a>
   <a class="chip nav-item {% if fav %}active{% endif %}" data-spa
-     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">♥ Favorites</a>
+     href="?{% if not fav %}fav=1&{% endif %}sort={{ sort }}&rev={{ rev|yesno:'1,0' }}&q={{ q|urlencode }}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{% icon "heart" %} Favorites</a>
   <a class="btn ghost nav-item" data-random
      href="{% url 'random_video' %}?q={{ q|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if active_tag %}&tag={{ active_tag|urlencode }}{% endif %}{% if fav %}&fav=1{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}"
-     title="Play a random video from these results" style="font-size:13px;padding:7px 10px">🎲 Random</a>
+     title="Play a random video from these results" style="font-size:13px;padding:7px 10px">{% icon "dice" %} Random</a>
   {% for t in tags %}
     <a class="chip nav-item {% if active_tag == t.name %}active{% endif %}" data-spa
        href="?tag={{ t.name|urlencode }}&sort={{ sort }}&rev={{ rev|yesno:'1,0' }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if channel %}&channel={{ channel|urlencode }}{% endif %}">{{ t.name }}</a>
   {% endfor %}
-  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">{% icon "select" %} Select</button>
 </form>
 
 <div id="vgrid" data-server-total="{{ total_videos }}" data-page-size="{{ page_size }}"></div>
@@ -42,9 +44,9 @@
   {% if total_videos > 0 %}
     <p>Filtering returned no results. <a href="{% url 'library' %}" data-spa>Clear filters</a></p>
   {% else %}
-    <div class="big">🎬</div>
+    <div class="big">{% icon "film" %}</div>
     <p>Library is empty.</p>
-    <p class="sub">Use the <b>⋯ → Rescan</b> button to scan your video folder.<br>
+    <p class="sub">Use the user menu → <b>Rescan library</b> to scan your video folder.<br>
       Library folders: {% for r in library_roots %}<code>{{ r }}</code>{% if not forloop.last %}, {% endif %}{% endfor %}{% if is_owner %} · <a href="{% url 'folders' %}" data-spa>change</a>{% endif %}</p>
   {% endif %}
 </div>

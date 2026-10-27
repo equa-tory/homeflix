@@ -1,6 +1,7 @@
 {% extends base_template %}
 {% load library_extras %}
 {% block content %}
+<div data-flip>
 <h1>History</h1>
 {% if events %}
   <div class="grid" style="margin-top:18px">
@@ -11,4 +12,5 @@
 {% else %}
   <div class="empty"><p>Nothing watched yet.</p></div>
 {% endif %}
+</div>
 {% endblock %}

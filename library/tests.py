@@ -1611,7 +1611,7 @@ class ChannelsTests(AuthTestCase):
         self.assertEqual(self.client.get(reverse("channels")).status_code, 302)
         self.client.force_login(self.viewer)
         shell = self.client.get(reverse("library")).content.decode()
-        self.assertEqual(shell.count('data-nav="channels"'), 2)             # top nav + bottom tab bar
+        self.assertEqual(shell.count('data-nav="channels"'), 1)             # the one header nav (it is the phone's bottom row too)
 
     def test_library_filter_api_and_random_respect_channel(self):
         api = self.client.get(reverse("api_videos"), {"channel": "Beta Ch"}).json()
@@ -2272,7 +2272,7 @@ class LikesTests(AuthTestCase):
         for gone in ("bulkStars", "phStars", "railStars"):
             self.assertNotIn(gone, html, gone)
         for there in ("bulkLikeBtn", "bulkDislikeBtn", "bulkFavBtn", "phLike", "phDislike", "phFav", "railLikeBtn",
-                      "railDislikeBtn", "railFavBtn", "bindLikes", "\U0001F44D"):
+                      "railDislikeBtn", "railFavBtn", "bindLikes", "#i-thumb-up", "#i-thumb-down"):
             self.assertIn(there, html, there)
 
 
@@ -2331,7 +2331,7 @@ class FavoriteTests(AuthTestCase):
         self.assertEqual([i["title"] for i in items], ["fav"])
         self.assertTrue(items[0]["favorite"])
         html = self.client.get(reverse("library")).content.decode()
-        self.assertIn("\u2665 Favorites", html)
+        self.assertIn('<use href="#i-heart"/></svg> Favorites', html)
 
     def test_smart_playlist_favorite_rule(self):
         _make_video(title="yes", favorite=True)
@@ -2342,8 +2342,8 @@ class FavoriteTests(AuthTestCase):
         _make_video(title="both", favorite=True, rating=3)
         self.client.force_login(self.viewer)
         html = self.client.get(reverse("home")).content.decode()
-        self.assertIn("\u2665", html)
-        self.assertIn("\U0001F44D 3", html)
+        self.assertIn('<use href="#i-heart"/>', html[html.index('class="meta"'):])
+        self.assertIn('<use href="#i-thumb-up"/></svg> 3', html)
 
 
 class FavoriteMigrationTests(TransactionTestCase):
@@ -2440,3 +2440,132 @@ class ChannelSubscribeTests(AuthTestCase):
         self.client.post(reverse("toggle_subscribe"), {"name": "Beta"})
         self.assertTrue(self.client.get(reverse("library"), {"channel": "Beta"}).context["channel_subscribed"])
         self.assertFalse(self.client.get(reverse("library"), {"channel": "Alpha"}).context["channel_subscribed"])
+
+
+# ---- Icons, header and phone layout markup ------------------------------------------------------
+
+class IconSetTests(AuthTestCase):
+    TPL = os.path.join(os.path.dirname(__file__), "templates", "library")
+
+    def sources(self):
+        for name in sorted(os.listdir(self.TPL)):
+            if name.endswith(".html"):
+                with open(os.path.join(self.TPL, name), encoding="utf-8") as f:
+                    yield name, f.read()
+
+    def test_every_icon_used_in_a_template_or_script_exists(self):
+        import re
+        from . import icons
+        used = set()
+        for name, src in self.sources():
+            used |= {m for m in re.findall(r"""\{%\s*icon\s+["']([\w-]+)["']""", src)}
+            used |= {m for m in re.findall(r"""\bic\(\s*['"]([\w-]+)['"]""", src)}
+            # ic(cond?'a':'b') style picks
+            for call in re.findall(r"\bic\(([^()]*(?:\([^()]*\)[^()]*)*)\)", src):
+                used |= set(re.findall(r"""['"]([a-z][\w-]*)['"]""", call)) & set(icons.ICONS)
+        missing = sorted(u for u in used if u not in icons.ICONS and u not in ("fill", "x-"))
+        self.assertEqual(missing, [])
+        self.assertGreater(len(used), 40)
+
+    def test_no_emoji_or_symbol_glyph_icons_are_left(self):
+        """Pictographs (emoji, dingbats, geometric shapes, braille, misc symbols
+        and the fancier arrows) render per device; only plain text marks are allowed."""
+        import re
+        glyphs = re.compile("[\U0001F000-\U0001FAFF\u2600-\u26FF\u2700-\u2712\u2714-\u27BF\u2194-\u21FF"
+                            "\u2300-\u23FF\u25A0-\u25FF\u2800-\u28FF\u2B00-\u2BFF\uFF0B\u2039\u203A]")
+        for name, src in self.sources():
+            if name == "login.html":
+                continue
+            body = re.sub(r"/\*.*?\*/", "", src, flags=re.S)                  # CSS/JS block comments
+            body = "\n".join(l for l in body.splitlines() if not l.lstrip().startswith("//"))
+            body = re.sub(r"\{#.*?#\}|\{% comment %\}.*?\{% endcomment %\}", "", body, flags=re.S)
+            self.assertEqual(glyphs.findall(body), [], name)
+
+    def test_sprite_is_in_every_full_page_and_defines_each_symbol(self):
+        from . import icons
+        self.client.force_login(self.owner)
+        html = self.client.get(reverse("library")).content.decode()
+        self.assertEqual(html.count("<symbol id="), len(icons.ICONS))
+        self.assertIn('<use href="#i-home"/>', html)
+
+    def test_unknown_icon_fails_loudly(self):
+        from . import icons
+        with self.assertRaises(KeyError):
+            icons.svg("not-an-icon")
+
+
+class HeaderMarkupTests(AuthTestCase):
+    def page(self, user=None):
+        if user:
+            self.client.force_login(user)
+        return self.client.get(reverse("library")).content.decode()
+
+    def test_one_user_button_holds_theme_menu_and_sign_out(self):
+        h = self.page(self.owner)
+        self.assertEqual(h.count('id="userBtn"'), 1)
+        for gone in ('id="manageBtn"', 'id="accountBtn"', 'id="manageMenu"', 'id="accountMenu"', 'class="bottom-nav"'):
+            self.assertNotIn(gone, h, gone)
+        menu = h[h.index('id="userMenu"'):h.index("</header>")]
+        for inside in ('id="themeBtn"', "Rescan library", "Library folders", "Sign out", self.owner.username):
+            self.assertIn(inside, menu, inside)
+        self.assertLess(h.index('id="userMenu"'), h.index('id="themeBtn"'))        # theme is inside the menu
+
+    def test_viewer_menu_has_theme_and_sign_out_but_no_manage_items(self):
+        menu = self.page(self.viewer)
+        menu = menu[menu.index('id="userMenu"'):menu.index("</header>")]
+        self.assertIn('id="themeBtn"', menu)
+        self.assertIn("Sign out", menu)
+        self.assertNotIn("Rescan library", menu)
+        self.assertNotIn("Library folders", menu)
+
+    def test_nav_tabs_carry_an_icon_and_a_label(self):
+        h = self.page(self.viewer)
+        nav = h[h.index('<nav class="topnav"'):h.index("</nav>")]
+        for key in ("home", "library", "channels", "playlists", "history", "shorts"):
+            self.assertIn(f'data-nav="{key}"', nav)
+            self.assertIn(f'<use href="#i-{key}"/>', nav, key)
+        self.assertEqual(nav.count("<span>"), 6)
+
+    def test_search_is_a_circle_button_plus_input_and_the_player_has_a_minimise_button(self):
+        h = self.page(self.viewer)
+        self.assertIn('id="searchBtn"', h)
+        self.assertIn('id="hdrMin"', h)
+        self.assertIn('name="q"', h[h.index('id="searchForm"'):h.index('id="hdrMin"')])
+
+    def test_light_theme_offers_dark_and_vice_versa(self):
+        self.assertIn("Light theme", self.page(self.viewer))
+        UserPref.set(self.viewer, "theme", "light")
+        self.assertIn("Dark theme", self.page(self.viewer))
+
+
+class PhoneListMarkupTests(AuthTestCase):
+    def test_list_pages_opt_in_to_the_bottom_up_layout(self):
+        self.client.force_login(self.viewer)
+        _make_video(title="s", width=100, height=200)
+        for name in ("home", "channels", "history", "shorts"):
+            html = self.client.get(reverse(name)).content.decode()
+            self.assertIn("<div data-flip>", html, name)
+        pl = Playlist.objects.create(name="p")
+        self.assertIn("<div data-flip>", self.client.get(reverse("playlist_detail", args=[pl.pk])).content.decode())
+        self.assertNotIn("<div data-flip>", self.client.get(reverse("playlists")).content.decode())
+
+    def test_home_sections_are_wrapped_so_they_can_stack_upward(self):
+        self.client.force_login(self.viewer)
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertIn('class="home-secs"', html)
+        self.assertIn("<section>", html)
+
+    def test_channels_show_a_subscribe_bell_and_two_columns_css_exists(self):
+        _make_video(title="c", channel="Alpha")
+        self.client.force_login(self.viewer)
+        html = self.client.get(reverse("channels")).content.decode()
+        self.assertIn('class="chan-sub nav-item"', html)
+        self.assertIn('data-chan="Alpha"', html)
+        self.assertIn(".chan-grid{grid-template-columns:1fr 1fr", html.replace(" ", "").replace(".grid,.chan-grid{grid-template-columns:1fr1fr", ".chan-grid{grid-template-columns:1fr 1fr"))
+
+    def test_library_channel_header_has_a_subscribe_chip(self):
+        _make_video(title="c", channel="Alpha")
+        self.client.force_login(self.viewer)
+        html = self.client.get(reverse("library"), {"channel": "Alpha"}).content.decode()
+        self.assertIn('id="chanSubBtn"', html)
+        self.assertIn(">Subscribe<", html)

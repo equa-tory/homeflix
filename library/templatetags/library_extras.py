@@ -2,6 +2,8 @@ import os
 
 from django import template
 
+from .. import icons
+
 register = template.Library()
 
 
@@ -51,3 +53,14 @@ def thumb_v(path):
         return int(os.path.getmtime(path))
     except (OSError, TypeError):
         return 0
+
+
+@register.simple_tag
+def icon(name, extra=""):
+    """{% icon "home" %} / {% icon "heart" "fill" %} -- see library/icons.py."""
+    return icons.svg(name, extra)
+
+
+@register.simple_tag
+def icon_sprite():
+    return icons.sprite()

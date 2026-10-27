@@ -1,13 +1,14 @@
 {% extends base_template %}
 {% load library_extras %}
 {% block content %}
+<div data-flip>
 <h1>{{ playlist.name }}</h1>
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
   <p class="sub" style="margin:0">{{ items|length }} video{{ items|length|pluralize }}</p>
   {% if items %}
     <a class="btn ghost nav-item" data-random
        href="{% url 'random_video' %}?pl={{ playlist.pk }}" title="Play a random video from this playlist"
-       style="font-size:13px;padding:7px 10px">🎲 Random</a>
+       style="font-size:13px;padding:7px 10px">{% icon "dice" %} Random</a>
   {% endif %}
   <label class="sub" style="margin:0">Sort&nbsp;
     <select class="nav-item" data-filter-sort style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
@@ -20,20 +21,20 @@
   <a class="btn ghost nav-item" data-spa
      href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}"
      title="Reverse sort order" style="font-size:16px;padding:7px 10px">
-    {% if rev %}↑{% else %}↓{% endif %}
+    {% if rev %}{% icon "arrow-up" %}{% else %}{% icon "arrow-down" %}{% endif %}
   </a>
-  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">{% icon "select" %} Select</button>
   {% if items|length > 1 %}
-    <button type="button" class="btn ghost nav-item" id="reorderModeBtn" data-reorder-url="{% url 'reorder_playlist' playlist.pk %}">⇅ Reorder</button>
+    <button type="button" class="btn ghost nav-item" id="reorderModeBtn" data-reorder-url="{% url 'reorder_playlist' playlist.pk %}">{% icon "sort" %} Reorder</button>
   {% endif %}
   <form method="post" action="{% url 'delete_playlist' playlist.pk %}"
         data-confirm="Delete this playlist? Videos are kept." style="margin:0">
     {% csrf_token %}
-    <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete playlist</button>
+    <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">{% icon "trash" %} Delete playlist</button>
   </form>
 </div>
 <details class="pl-settings">
-  <summary class="nav-item" tabindex="0">⚙ Playlist settings <span class="sub">cover image</span></summary>
+  <summary class="nav-item" tabindex="0">{% icon "sliders" %} Playlist settings <span class="sub">cover image</span></summary>
 <div class="thumb-tool" id="plThumbTool" data-pl="{{ playlist.pk }}" data-generate-url="{% url 'playlist_thumb_generate' playlist.pk %}"
      data-remove-url="{% url 'playlist_thumb_remove' playlist.pk %}" data-upload-url="{% url 'playlist_thumb_upload' playlist.pk %}">
   <div class="row-inline">
@@ -41,9 +42,9 @@
     {% if playlist.thumbnail_path %}
       <img src="{% url 'playlist_thumb' playlist.pk %}?v={{ playlist.thumbnail_path|thumb_v }}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
     {% endif %}
-    <button type="button" class="btn ghost" id="plThumbGen">🖼 Generate</button>
-    <button type="button" class="btn ghost" id="plThumbRemove"{% if not playlist.thumbnail_path %} style="display:none"{% endif %}>✕ Remove</button>
-    <label class="btn ghost" style="cursor:pointer;margin:0">⬆ Upload
+    <button type="button" class="btn ghost" id="plThumbGen">{% icon "image" %} Generate</button>
+    <button type="button" class="btn ghost" id="plThumbRemove"{% if not playlist.thumbnail_path %} style="display:none"{% endif %}>{% icon "x" %} Remove</button>
+    <label class="btn ghost" style="cursor:pointer;margin:0">{% icon "arrow-up" %} Upload
       <input type="file" id="plThumbUpload" accept="image/png,image/jpeg,image/webp" style="display:none">
     </label>
   </div>
@@ -56,4 +57,5 @@
     {% endfor %}
   </div>
 {% else %}<div class="empty"><p>This playlist is empty. Open a video and use “Add to playlist”.</p></div>{% endif %}
+</div>
 {% endblock %}

@@ -44,17 +44,32 @@ header{position:sticky; top:0; z-index:40; display:flex; align-items:center; gap
 .brand{font-weight:800; letter-spacing:-.02em; font-size:19px; white-space:nowrap; cursor:pointer}
 .brand b{color:var(--accent)}
 nav.topnav{display:flex; gap:4px}
-nav.topnav a{padding:7px 11px; border-radius:8px; color:var(--muted);
-  font-weight:600; font-size:14px; white-space:nowrap}
+nav.topnav a{display:inline-flex; align-items:center; gap:7px; padding:7px 11px; border-radius:8px;
+  color:var(--muted); font-weight:600; font-size:14px; white-space:nowrap}
+nav.topnav a svg.i{width:17px;height:17px}
 nav.topnav a:hover, nav.topnav a.active{color:var(--text); background:var(--surface2)}
 .hdr-search{flex:1; min-width:0; max-width:440px; margin-left:auto}
 .hdr-search input{width:100%; padding:9px 14px; border-radius:20px; border:1px solid var(--border);
   background:var(--surface); color:var(--text); font-size:14px; min-width:0}
 .hdr-search input:focus{outline:2px solid var(--accent); outline-offset:1px}
+.hdr-search form{margin:0; display:flex}
+.hdr-search .hdr-search-btn{display:none}
+/* desktop, player open: the player has no top bar of its own, this is its minimise button */
+.hdr-min{display:none; align-items:center; gap:7px; flex-shrink:0; background:var(--accent); color:#fff;
+  border:0; border-radius:8px; padding:8px 13px; font-weight:700; font-size:13.5px; cursor:pointer; white-space:nowrap}
+.hdr-min:hover{filter:brightness(1.07)}
+.hdr-min svg.i{width:17px;height:17px}
 .iconbtn{flex-shrink:0; background:var(--surface); border:1px solid var(--border);
   color:var(--text); width:40px; height:40px; border-radius:50%; cursor:pointer;
   font-size:17px; display:grid; place-items:center}
 .iconbtn:hover{border-color:var(--accent)}
+
+/* ---- icons (library/icons.py): one outline set, identical on every device ---- */
+svg.i{width:1.2em;height:1.2em;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round;vertical-align:-.22em;pointer-events:none;overflow:visible}
+svg.i.fill{fill:currentColor}
+button svg.i,a svg.i{display:inline-block}
+.iconbtn svg.i{width:20px;height:20px}
 
 /* ---- manage dropdown ---- */
 .menu{position:relative}
@@ -62,9 +77,18 @@ nav.topnav a:hover, nav.topnav a.active{color:var(--text); background:var(--surf
   border:1px solid var(--border); border-radius:10px; padding:6px; min-width:210px;
   box-shadow:0 10px 30px #0006; display:none; z-index:50}
 .menu.open .menu-panel{display:block}
-.menu-panel button,.menu-panel a{display:block; width:100%; text-align:left;
+.menu-panel button,.menu-panel a{display:flex; align-items:center; gap:10px; width:100%; text-align:left;
   background:none; border:0; color:var(--text); padding:10px 12px; border-radius:7px;
-  font-size:14px; cursor:pointer; font-weight:600; line-height:1}
+  font-size:14px; cursor:pointer; font-weight:600; line-height:1.2}
+.menu-panel svg.i{width:18px;height:18px;color:var(--muted)}
+.menu-panel .danger svg.i{color:var(--accent)}
+.menu-panel .row-inline{flex-wrap:nowrap; justify-content:space-between; padding:6px 12px; gap:8px}
+.menu-panel .row-inline input[type=number]{padding:5px 6px; border-radius:6px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:13px}
+.menu-panel .menu-user{padding:8px 12px 6px; color:var(--muted); font-size:13px; font-weight:600;
+  display:flex; align-items:center; gap:10px}
+.menu-panel .menu-user svg.i{width:18px;height:18px}
+.menu-panel{max-height:calc(100vh - 90px); overflow-y:auto}
 .menu-panel button:hover,.menu-panel a:hover{background:var(--surface2)}
 .menu-panel .danger{color:var(--accent)}
 .menu-panel form{margin:0}
@@ -72,7 +96,8 @@ nav.topnav a:hover, nav.topnav a.active{color:var(--text); background:var(--surf
 
 /* ---- buttons ---- */
 .btn{background:var(--accent); color:#fff; border:0; border-radius:8px; cursor:pointer;
-  padding:9px 16px; font-weight:700; font-size:14px; white-space:nowrap}
+  padding:9px 16px; font-weight:700; font-size:14px; white-space:nowrap;
+  display:inline-flex; align-items:center; justify-content:center; gap:7px}
 .btn.ghost{background:var(--surface); color:var(--text); border:1px solid var(--border)}
 .btn:hover{filter:brightness(1.06)}
 .btn:disabled{opacity:.4; cursor:default}
@@ -106,6 +131,8 @@ h2{font-size:14px; margin:26px 0 12px; color:var(--muted); font-weight:700;
 .meta .t{font-weight:600; font-size:13.5px; line-height:1.35;
   display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden}
 .meta .s{color:var(--muted); font-size:12px; margin-top:3px}
+.meta .s svg.i{width:12px;height:12px;vertical-align:-.12em}
+.thumb .placeholder svg.i,.pl-wrap .placeholder svg.i{width:34px;height:34px}
 
 /* ---- toolbar ---- */
 .toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:10px 0 18px}
@@ -254,9 +281,9 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   background:var(--bg);color:var(--text);font-size:13px}
 .sel-mode .card{cursor:pointer}
 .sel-mode .card.selected .thumb{outline:2px solid var(--accent);outline-offset:-2px}
-.sel-mode .card.selected .thumb::after{content:'✓';position:absolute;top:5px;left:5px;
-  width:22px;height:22px;background:var(--accent);color:#fff;border-radius:50%;
-  font-size:13px;font-weight:900;text-align:center;line-height:22px;z-index:2}
+.sel-mode .card.selected .thumb::after{content:'';position:absolute;top:5px;left:5px;
+  width:22px;height:22px;border-radius:50%;z-index:2;
+  background:var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E") center/68% no-repeat}
 
 /* ---- collapsed settings blocks (playlist settings, player tools) ---- */
 .pl-settings,.ph-utils{margin:14px 0;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
@@ -282,6 +309,17 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
 .chan-th{background-size:cover;background-position:center;background-color:var(--surface2)}
 .chan-cover .placeholder{display:grid;place-items:center;color:var(--muted);font-size:28px}
 .chan-card:hover .chan-cover,.chan-card:focus .chan-cover{outline:2px solid var(--accent)}
+.chan-wrap{position:relative; min-width:0}
+.chan-sub{position:absolute; top:8px; right:8px; z-index:3; width:34px; height:34px; border-radius:50%;
+  display:grid; place-items:center; cursor:pointer; color:var(--muted);
+  background:color-mix(in srgb,var(--bg) 75%,transparent); backdrop-filter:blur(6px);
+  border:1px solid var(--border)}
+.chan-sub:hover,.chan-sub.on{color:var(--accent); border-color:var(--accent)}
+.chan-sub svg.i{width:18px;height:18px}
+.chan-sub-chip{display:inline-flex; align-items:center; gap:6px; cursor:pointer}
+.chan-sub-chip.on{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+.chan-sub-chip svg.i{width:14px;height:14px}
+.home-secs{display:block}
 
 /* ---- backups page ---- */
 .bk-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:14px}
@@ -374,7 +412,7 @@ body[data-page="hidden"] #bulkUnhideBtn{display:inline-block}
   box-shadow:0 12px 48px #000b; cursor:grab; touch-action:none;
 }
 #player.ph-mini.grabbing{cursor:grabbing}
-@media(max-width:700px){#player.ph-mini{bottom:72px; width:220px; right:10px}}
+@media(max-width:700px){#player.ph-mini{bottom:calc(var(--bottom-nav-h) + 6px); width:220px; right:10px}}
 
 /* scroll wrapper */
 #phScroll{flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;
@@ -832,128 +870,151 @@ html.player-locked{overflow:hidden}
   cursor:pointer; -webkit-tap-highlight-color:transparent}
 .ph-prep-hide:hover{background:#fff2}
 
+/* ====== DESKTOP: the player sits under the site header ====== */
+@media (min-width:701px){
+  /* While the player is open the header stays on top as its top bar, with one
+     extra button (#hdrMin) that shrinks the player to the mini player. */
+  html.player-locked header{z-index:310}
+  html.player-locked .hdr-min{display:inline-flex}
+  #player.ph-expanded{top:var(--hdr-h,58px)}
+  #player.ph-expanded .ph-topbar{display:none}
+}
+
 /* ====== MOBILE ====== */
 @media (max-width:700px){
-  /* Plain fixed bar pinned to the bottom of the viewport (below) -- sized by
-     its own content, not a computed viewport height. This variable is only
-     an estimate of that content height (icons+labels) plus the home-
-     indicator safe area, used to (a) keep the page's own bottom padding
-     clear of the bar and (b) stack #bulkBar/#reorderBar above it -- being a
-     few px off either way is harmless (a small gap, not a broken layout),
-     unlike when this fed a flex/100dvh page-height calculation that had to
-     be exact or the whole page layout broke. */
-  :root{--bottom-nav-h:calc(60px + env(safe-area-inset-bottom,0px))}
-  nav.topnav{display:none}
-  header{gap:10px; padding:calc(9px + env(safe-area-inset-top,0px)) 14px 9px}
-  .hdr-search{max-width:none}
-  .hdr-search input{font-size:16px}
-  .grid{grid-template-columns:1fr 1fr; gap:10px}
-  .bottom-nav{
-    position:fixed; left:0; right:0; bottom:0; z-index:100;
-    display:flex; background:var(--bg);
-    border-top:1px solid var(--border); padding:0 0 env(safe-area-inset-bottom,0px);
-  }
-  .bottom-nav a{flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px;
-    padding:10px 2px 8px; color:var(--muted); font-size:9px; font-weight:600;
-    text-transform:uppercase; letter-spacing:.02em; white-space:nowrap;}
-  .bottom-nav a .icon{font-size:22px; line-height:1}
-  .bottom-nav a.active,.bottom-nav a:hover{color:var(--accent)}
+  /* No top bar and no tab bar: the header is ONE row of round buttons pinned to
+     the bottom right, where the thumb is. It reads right to left: search (a
+     circle that grows into the input), Home, Library, Channels, Playlists,
+     History, Shorts, then the user menu. Menus open upward from it. The var is
+     the room the row needs: it keeps the page's end, the bulk/reorder bars and
+     the mini player clear of it. */
+  :root{--bottom-nav-h:calc(66px + env(safe-area-inset-bottom,0px));
+        --fb:clamp(30px, calc((100vw - 20px - 42px) / 8), 44px)}
+  header{position:fixed; top:auto; left:auto; right:10px;
+    bottom:calc(10px + env(safe-area-inset-bottom,0px)); z-index:100;
+    flex-direction:row-reverse; justify-content:flex-start; align-items:center; gap:6px;
+    padding:0; background:none; border:0; backdrop-filter:none; max-width:calc(100vw - 20px)}
+  .brand,.hdr-min{display:none!important}
+  nav.topnav{display:flex; flex-direction:row-reverse; gap:6px; order:2}
+  .hdr-search{order:1; flex:0 0 auto; max-width:none; margin:0}
+  #userMenu{order:3}
+  nav.topnav a,header .iconbtn{width:var(--fb); height:var(--fb); padding:0; border-radius:50%;
+    justify-content:center; background:var(--surface); border:1px solid var(--border);
+    color:var(--muted); box-shadow:0 4px 14px #0006}
+  header .iconbtn{color:var(--text)}
+  nav.topnav a span{display:none}
+  nav.topnav a svg.i,header .iconbtn svg.i{width:calc(var(--fb) * .5); height:calc(var(--fb) * .5)}
+  nav.topnav a:hover,nav.topnav a.active{background:var(--accent-soft); border-color:var(--accent); color:var(--accent)}
+  .hdr-search .hdr-search-btn{display:grid}
+  .hdr-search form{flex-direction:row-reverse; align-items:center; gap:6px}
+  .hdr-search input{display:none; width:0}
+  header.search-open{left:10px}
+  header.search-open nav.topnav,header.search-open #userMenu{display:none}
+  header.search-open .hdr-search{flex:1; min-width:0}
+  header.search-open .hdr-search form{width:100%}
+  header.search-open .hdr-search input{display:block; flex:1; width:auto; min-width:0; height:var(--fb);
+    border-radius:999px; padding:0 16px; font-size:16px; box-shadow:0 4px 14px #0006}
+  /* lists grow from the button up, first entry nearest the thumb */
+  .menu-panel{top:auto; bottom:calc(100% + 10px); right:auto; left:0; min-width:230px;
+    max-height:calc(100vh - var(--bottom-nav-h) - 24px); flex-direction:column-reverse}
+  .menu.open .menu-panel{display:flex}
+  .grid,.chan-grid{grid-template-columns:1fr 1fr; gap:10px}
+  /* Lists run from the bottom up: the first (newest) entries sit nearest the
+     thumb and the page opens scrolled to them (ROUTER.flipToBottom). Rows stack
+     upward but each row still reads left to right; on Home the sections stack
+     upward too. Only pages that opt in with [data-flip] (and the Library grid,
+     which does the same maths in its own JS) are flipped. */
+  [data-flip] .grid,[data-flip] .grid-shorts,[data-flip] .chan-grid{display:flex; flex-wrap:wrap-reverse; gap:10px}
+  [data-flip] .grid>*,[data-flip] .grid-shorts>*,[data-flip] .chan-grid>*{flex:0 0 calc(50% - 5px); min-width:0}
+  [data-flip] .home-secs{display:flex; flex-direction:column-reverse}
+  /* a short list sits at the bottom of the screen too, not under an empty page */
+  main:has(>[data-flip]){display:flex; flex-direction:column; min-height:calc(100svh - var(--bottom-nav-h))}
+  main>[data-flip]{margin-top:auto}
   .focused{ outline:none !important }
   :focus-visible{ outline:none }
   .card:focus .thumb{ outline:none }
 }
-@media (min-width:701px){ .bottom-nav{display:none} }
 </style>
 </head>
 <body data-page="{{ page_id|default:'' }}">
+{% icon_sprite %}
 
 <div id="spaBar"></div>
 
-<header>
+<header id="hdr">
   <a href="{% url 'home' %}" class="brand spa-link" data-nav="home">Home<b>Flix</b></a>
-  <nav class="topnav">
-    <a href="{% url 'home' %}"      class="nav-item spa-link" data-nav="home">Home</a>
-    <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library">Library</a>
-    <a href="{% url 'channels' %}"  class="nav-item spa-link" data-nav="channels">Channels</a>
-    <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists">Playlists</a>
-    <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history">History</a>
-    <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts">Shorts</a>
+  <nav class="topnav" aria-label="Main">
+    <a href="{% url 'home' %}"      class="nav-item spa-link" data-nav="home" title="Home">{% icon "home" %}<span>Home</span></a>
+    <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library" title="Library">{% icon "library" %}<span>Library</span></a>
+    <a href="{% url 'channels' %}"  class="nav-item spa-link" data-nav="channels" title="Channels">{% icon "channels" %}<span>Channels</span></a>
+    <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists" title="Playlists">{% icon "playlists" %}<span>Playlists</span></a>
+    <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history" title="History">{% icon "history" %}<span>History</span></a>
+    <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts" title="Shorts">{% icon "shorts" %}<span>Shorts</span></a>
   </nav>
   <div class="hdr-search">
-    <form action="{% url 'library' %}" method="get" id="searchForm">
-      <input type="search" name="q" placeholder="Search…" value="{{ q|default:'' }}" class="nav-item">
+    <form action="{% url 'library' %}" method="get" id="searchForm" role="search">
+      <button type="button" class="iconbtn hdr-search-btn nav-item" id="searchBtn" title="Search" aria-label="Search">{% icon "search" %}</button>
+      <input type="search" name="q" placeholder="Search…" value="{{ q|default:'' }}" class="nav-item" autocomplete="off" enterkeyhint="search">
     </form>
   </div>
-  <button class="iconbtn nav-item" id="themeBtn" title="Toggle theme">◐</button>
-  {% if user.is_staff %}
-  <div class="menu" id="manageMenu">
-    <button class="iconbtn nav-item" id="manageBtn" title="Manage">⋯</button>
+  <button type="button" class="hdr-min nav-item" id="hdrMin" title="Minimise the player">{% icon "chevron-down" %}<span>Mini player</span></button>
+  <div class="menu" id="userMenu">
+    <button class="iconbtn nav-item" id="userBtn" title="{% if user.is_authenticated %}{{ user.username }}{% else %}Menu{% endif %}" aria-label="Menu">{% icon "user" %}</button>
     <div class="menu-panel">
-      <form action="{% url 'scan' %}" method="post">{% csrf_token %}
-        <button class="nav-item">↻ Rescan library</button></form>
-      <a href="{% url 'organize' %}" class="nav-item spa-link">🗂 Organize by date…</a>
-      <a href="{% url 'duplicates' %}" class="nav-item spa-link">🧬 Find duplicates…</a>
-      <a href="{% url 'downloads' %}" class="nav-item spa-link">⬇ Download from playlist…</a>
-      <a href="{% url 'folders' %}" class="nav-item spa-link">📁 Library folders…</a>
-      <a href="{% url 'backups' %}" class="nav-item spa-link">💾 Backups…</a>
+      {% if user.is_authenticated %}<div class="menu-user">{% icon "user" %}<span>{{ user.username }}{% if user.is_staff %} · owner{% endif %}</span></div>{% endif %}
+      <button type="button" class="nav-item" id="themeBtn">{% if theme == "light" %}{% icon "moon" %}<span>Dark theme</span>{% else %}{% icon "sun" %}<span>Light theme</span>{% endif %}</button>
+      {% if user.is_staff %}
       <hr>
-      <div class="nav-item row-inline" style="cursor:default">
-        <span>🖼 Default thumb %</span>
+      <form action="{% url 'scan' %}" method="post">{% csrf_token %}
+        <button class="nav-item">{% icon "refresh" %}<span>Rescan library</span></button></form>
+      <a href="{% url 'organize' %}" class="nav-item spa-link">{% icon "layers" %}<span>Organize by date…</span></a>
+      <a href="{% url 'duplicates' %}" class="nav-item spa-link">{% icon "copy" %}<span>Find duplicates…</span></a>
+      <a href="{% url 'downloads' %}" class="nav-item spa-link">{% icon "download" %}<span>Download from playlist…</span></a>
+      <a href="{% url 'folders' %}" class="nav-item spa-link">{% icon "folder" %}<span>Library folders…</span></a>
+      <a href="{% url 'backups' %}" class="nav-item spa-link">{% icon "save" %}<span>Backups…</span></a>
+      <hr>
+      <div class="nav-item row-inline" style="cursor:default" title="Default thumbnail position, in % of the video">
+        <span style="display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px;white-space:nowrap">{% icon "image" %}Thumb %</span>
         <input type="number" id="defThumbPct" min="0" max="100" step="1"
                value="{{ default_thumb_percent|floatformat:0 }}" style="width:56px">
         <button type="button" class="btn ghost" id="defThumbSave" style="padding:4px 8px;font-size:12px">Save</button>
       </div>
       <hr>
       <form action="{% url 'purge_missing' %}" method="post">{% csrf_token %}
-        <button class="nav-item">🧹 Remove missing files</button></form>
+        <button class="nav-item">{% icon "eraser" %}<span>Remove missing files</span></button></form>
       <form action="{% url 'reset_library' %}" method="post"
             data-confirm="Clear all records and rescan? (Files on disk are NOT deleted.)">
-        {% csrf_token %}<button class="nav-item danger">⟳ Reset &amp; rebuild</button></form>
-    </div>
-  </div>
-  {% endif %}
-  {% if user.is_authenticated %}
-  <div class="menu" id="accountMenu">
-    <button class="iconbtn nav-item" id="accountBtn" title="Account">{{ user.username|slice:":1"|upper }}</button>
-    <div class="menu-panel">
-      <div class="nav-item row-inline" style="cursor:default">
-        <span>{{ user.username }}{% if user.is_staff %} · owner{% endif %}</span>
-      </div>
+        {% csrf_token %}<button class="nav-item danger">{% icon "reset" %}<span>Reset &amp; rebuild</span></button></form>
+      {% endif %}
       <hr>
+      {% if user.is_authenticated %}
       <form action="{% url 'logout' %}" method="post">{% csrf_token %}
-        <button class="nav-item">⎋ Sign out</button></form>
+        <button class="nav-item">{% icon "logout" %}<span>Sign out</span></button></form>
+      {% else %}
+      {% comment %}
+        Only reachable at all when HOMEFLIX_PUBLIC=1 let an anonymous request
+        render a page in the first place -- otherwise LoginRequiredMiddleware
+        would already have redirected before any template rendered.
+      {% endcomment %}
+      <a href="{% url 'login' %}?next={{ request.path|urlencode }}" class="nav-item" data-no-spa>{% icon "login" %}<span>Log in</span></a>
+      {% endif %}
     </div>
   </div>
-  {% else %}
-  {% comment %}
-    Only reachable at all when HOMEFLIX_PUBLIC=1 let an anonymous request
-    render a page in the first place -- otherwise LoginRequiredMiddleware
-    would already have redirected before any template rendered.
-  {% endcomment %}
-  <a href="{% url 'login' %}?next={{ request.path|urlencode }}" class="iconbtn nav-item" title="Log in" style="width:auto;padding:0 12px;font-size:13px;font-weight:700">Log in</a>
-  {% endif %}
 </header>
 
 <main id="app">{% block content %}{% endblock %}</main>
 
-<nav class="bottom-nav">
-  <a href="{% url 'home' %}"      class="nav-item spa-link" data-nav="home"><span class="icon">⌂</span>Home</a>
-  <a href="{% url 'library' %}"   class="nav-item spa-link" data-nav="library"><span class="icon">▤</span>Library</a>
-  <a href="{% url 'channels' %}"  class="nav-item spa-link" data-nav="channels"><span class="icon">◉</span>Channels</a>
-  <a href="{% url 'playlists' %}" class="nav-item spa-link" data-nav="playlists"><span class="icon">☰</span>Playlists</a>
-  <a href="{% url 'history' %}"   class="nav-item spa-link" data-nav="history"><span class="icon">◷</span>History</a>
-  <a href="{% url 'shorts' %}"    class="nav-item spa-link" data-nav="shorts"><span class="icon">▯</span>Shorts</a>
-</nav>
+<!-- phone navigation: the #hdr row above is pinned to the bottom right on small screens -->
 
 <!-- ====== BULK SELECT BAR ====== -->
 <div id="bulkBar" role="toolbar" aria-label="Bulk actions">
   <span class="bulk-count" id="bulkCount">0 selected</span>
-  <button class="btn ghost" id="bulkClearBtn" style="padding:7px 10px">✕ Clear</button>
+  <button class="btn ghost" id="bulkClearBtn" style="padding:7px 10px">{% icon "x" %} Clear</button>
   <span style="flex:1"></span>
 
   {% if user.is_staff %}
   <div class="bulk-aw">
-    <button class="btn ghost" id="bulkThumbBtn">🖼 Thumbnail %</button>
+    <button class="btn ghost" id="bulkThumbBtn">{% icon "image" %} Thumbnail %</button>
     <div class="bulk-pop" id="bulkThumbPop">
       <label>Regenerate thumbnail at</label>
       <div class="brow">
@@ -966,7 +1027,7 @@ html.player-locked{overflow:hidden}
   {% endif %}
 
   <div class="bulk-aw">
-    <button class="btn ghost" id="bulkPlBtn">☰ Playlist</button>
+    <button class="btn ghost" id="bulkPlBtn">{% icon "list-add" %} Playlist</button>
     <div class="bulk-pop" id="bulkPlPop">
       <label>Add to playlist</label>
       <div class="brow">
@@ -979,15 +1040,15 @@ html.player-locked{overflow:hidden}
     </div>
   </div>
 
-  <button class="btn ghost" id="bulkLikeBtn" title="+1 like for every selected video">👍 Like</button>
-  <button class="btn ghost" id="bulkDislikeBtn" title="-1 for every selected video">👎 Dislike</button>
-  <button class="btn ghost" id="bulkFavBtn">♥ Favorite</button>
+  <button class="btn ghost" id="bulkLikeBtn" title="+1 like for every selected video">{% icon "thumb-up" %} Like</button>
+  <button class="btn ghost" id="bulkDislikeBtn" title="-1 for every selected video">{% icon "thumb-down" %} Dislike</button>
+  <button class="btn ghost" id="bulkFavBtn">{% icon "heart" %} Favorite</button>
   {% if user.is_staff %}
-  <button class="btn ghost" id="bulkHideBtn">🙈 Hide</button>
-  <button class="btn ghost" id="bulkUnhideBtn" style="display:none">👁 Unhide</button>
+  <button class="btn ghost" id="bulkHideBtn">{% icon "eye-off" %} Hide</button>
+  <button class="btn ghost" id="bulkUnhideBtn" style="display:none">{% icon "eye" %} Unhide</button>
 
   <div class="bulk-aw">
-    <button class="btn ghost" id="bulkRenBtn">✎ Rename</button>
+    <button class="btn ghost" id="bulkRenBtn">{% icon "pencil" %} Rename</button>
     <div class="bulk-pop" id="bulkRenPop">
       <label>Rename selected (in the order you clicked them)</label>
       <div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">
@@ -1006,7 +1067,7 @@ html.player-locked{overflow:hidden}
   </div>
 
   <div class="bulk-aw">
-    <button class="btn ghost" id="bulkDelBtn">🗑 Delete</button>
+    <button class="btn ghost" id="bulkDelBtn">{% icon "trash" %} Delete</button>
     <div class="bulk-pop" id="bulkDelPop">
       <label>Delete selected</label>
       <div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">
@@ -1019,20 +1080,20 @@ html.player-locked{overflow:hidden}
 </div>
 
 <!-- select FAB (visible only on library page) -->
-<button id="selFab">☑ Select</button>
-<button id="diceFab" title="Random video" aria-label="Random video">🎲</button>
+<button id="selFab" title="Select videos" aria-label="Select videos">{% icon "select" %}</button>
+<button id="diceFab" title="Random video" aria-label="Random video">{% icon "dice" %}</button>
 
 <!-- ====== PLAYER (single persistent video) ====== -->
 <div id="player" class="ph-hidden" aria-hidden="true">
   <div id="phScroll">
     <div class="ph-topbar">
-      <button class="ph-back" id="phBack" title="Close">‹</button>
+      <button class="ph-back" id="phBack" title="Close">{% icon "chevron-left" %}</button>
       <span class="ph-hdr-title" id="phHdr"></span>
       <form id="phSearchForm" class="ph-searchform" role="search" action="/library/" method="get">
         <input type="search" id="phSearch" name="q" class="ph-search" placeholder="Search…"
                enterkeyhint="search" autocomplete="off" autocapitalize="off">
       </form>
-      <button class="ph-min-btn" id="phMinBtn" title="Minimize">▾</button>
+      <button class="ph-min-btn" id="phMinBtn" title="Minimize">{% icon "chevron-down" %}</button>
     </div>
 
     <div class="ph-stage-wrap" id="phStageWrap">
@@ -1042,7 +1103,7 @@ html.player-locked{overflow:hidden}
         <video id="phNbNext" class="sh-nb" muted playsinline preload="auto"></video>
         <div class="ph-prep" id="phPrep"><div class="ph-spinner"></div><span>Preparing…</span>
           <button type="button" class="ph-prep-hide" id="phPrepHide">Hide</button></div>
-        <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">▶</span></div>
+        <div class="ripple" id="phRipple"><span class="icon" id="phRIcon">{% icon "play" %}</span></div>
 
         <div class="ctrls">
           <div class="bar" id="phBar" tabindex="0">
@@ -1055,11 +1116,11 @@ html.player-locked{overflow:hidden}
             </div>
           </div>
           <div class="btn-row">
-            <button class="cbtn" id="phPrev" disabled title="Previous">⏮</button>
-            <button class="cbtn" id="phPlay" title="Play/Pause">▶</button>
-            <button class="cbtn" id="phNext" disabled title="Next">⏭</button>
+            <button class="cbtn" id="phPrev" disabled title="Previous">{% icon "skip-back" %}</button>
+            <button class="cbtn" id="phPlay" title="Play/Pause">{% icon "play" %}</button>
+            <button class="cbtn" id="phNext" disabled title="Next">{% icon "skip-forward" %}</button>
             <div class="vol-wrap">
-              <button class="cbtn" id="phMute" title="Mute">🔊</button>
+              <button class="cbtn" id="phMute" title="Mute">{% icon "volume" %}</button>
               <input type="range" id="phVol" class="vol-slider" min="0" max="1" step="0.02" value="1">
             </div>
             <span class="ctime" id="phCur">0:00</span><span class="csep">/</span>
@@ -1107,19 +1168,19 @@ html.player-locked{overflow:hidden}
                 </div>
               </div>
             </div>
-            <button class="cbtn" id="phShuffle" title="Shuffle">🔀</button>
-            <button class="cbtn" id="phLoop" title="Repeat">↻</button>
+            <button class="cbtn" id="phShuffle" title="Shuffle">{% icon "shuffle" %}</button>
+            <button class="cbtn" id="phLoop" title="Repeat">{% icon "repeat" %}</button>
             <div class="cc-wrap" id="phSeekWrap">
-              <button class="cbtn cbtn-cc" id="phSeekBtn" title="Seek step (◀ ▶)">10s</button>
+              <button class="cbtn cbtn-cc" id="phSeekBtn" title="Seek step (← →)">10s</button>
               <div class="cc-pop" id="phSeekPop">
                 <label>Seek step</label>
-                <div class="cc-row"><span>Seconds (◀ ▶)</span>
+                <div class="cc-row"><span>Seconds (← →)</span>
                   <input type="number" id="phSeekInput" min="1" max="600" step="1" value="10" inputmode="numeric">
                 </div>
               </div>
             </div>
-            <a class="cbtn" id="phDownload" title="Download" download>⇩</a>
-            <button class="cbtn" id="phFull" title="Fullscreen">⛶</button>
+            <a class="cbtn" id="phDownload" title="Download" download>{% icon "download" %}</a>
+            <button class="cbtn" id="phFull" title="Fullscreen">{% icon "fullscreen" %}</button>
           </div>
         </div>
 
@@ -1131,11 +1192,11 @@ html.player-locked{overflow:hidden}
             <span class="mts" id="phMiniTs">0:00</span>
           </div>
           <div class="mini-ctrls">
-            <button id="phMiniClose" title="Close">×</button>
-            <button id="phMiniSeekB" title="Previous video">⏮</button>
-            <button id="phMiniPlay" title="Play/pause">▶</button>
-            <button id="phMiniSeekF" title="Next video">⏭</button>
-            <button id="phMiniExpand" title="Expand">⤢</button>
+            <button id="phMiniClose" title="Close">{% icon "x" %}</button>
+            <button id="phMiniSeekB" title="Previous video">{% icon "skip-back" %}</button>
+            <button id="phMiniPlay" title="Play/pause">{% icon "play" %}</button>
+            <button id="phMiniSeekF" title="Next video">{% icon "skip-forward" %}</button>
+            <button id="phMiniExpand" title="Expand">{% icon "expand" %}</button>
           </div>
           <div class="mini-timeline" id="phMiniTimeline"><div class="mini-fill" id="phMiniFill"></div></div>
         </div>
@@ -1233,6 +1294,9 @@ function randomScope(){
   m=location.pathname.match(/^\/smart-playlists\/(\d+)\//);if(m)out.set('sp',m[1]);
   return out.toString();
 }
+// Icons: the same inline-SVG set the server renders (the icon template tag, library/icons.py).
+// ic('heart','fill') -> '<svg class="i fill">...'; use innerHTML (never textContent) with it.
+function ic(name,extra){return '<svg class="i'+(extra?' '+extra:'')+'" aria-hidden="true" focusable="false"><use href="#i-'+name+'"/></svg>';}
 // Likes: `rating` is the net score (+1 per like, -1 per dislike). The player's
 // info panel and the shorts rail share these; bindLikes keeps the two in step.
 function likeTxt(n){n=+n||0;return n>0?'+'+n:n<0?'\u2212'+(-n):'0';}
@@ -1259,7 +1323,7 @@ function esc(s){return(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':
 function thumbErr(img){
   if(!img.dataset.retried){img.dataset.retried='1';
     img.src=img.src.split('?')[0]+'?r='+Date.now();return;}
-  const ph=document.createElement('div');ph.className='placeholder';ph.textContent='▶';
+  const ph=document.createElement('div');ph.className='placeholder';ph.innerHTML=ic('play');
   img.replaceWith(ph);
 }
 function fmt(s){s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
@@ -1269,19 +1333,56 @@ function fmt(s){s=Math.max(0,Math.floor(s||0));const h=Math.floor(s/3600),m=Math
    renders for the owner (see the is_staff check in the header above), so
    every lookup here is null-guarded -- a viewer simply has no menu to open. */
 document.getElementById('themeBtn').onclick=()=>post('/theme/')
-  .then(d=>document.documentElement.setAttribute('data-theme',d.theme));
+  .then(d=>{document.documentElement.setAttribute('data-theme',d.theme);
+    // the button offers the *other* theme
+    document.getElementById('themeBtn').innerHTML=ic(d.theme==='light'?'moon':'sun')+'<span>'+(d.theme==='light'?'Dark theme':'Light theme')+'</span>';});
 function wireDropdown(menuId,btnId){
   const menu=document.getElementById(menuId),btn=document.getElementById(btnId);
   if(!menu||!btn)return;
   btn.onclick=e=>{e.stopPropagation();menu.classList.toggle('open');};
+  // typing in a field inside the panel (default thumb %) must not close it
+  menu.querySelector('.menu-panel').addEventListener('click',e=>{if(e.target.closest('input'))e.stopPropagation();});
   document.addEventListener('click',()=>menu.classList.remove('open'));
 }
-wireDropdown('manageMenu','manageBtn');
-wireDropdown('accountMenu','accountBtn');
+wireDropdown('userMenu','userBtn');
+
+/* header: its height (the desktop player sits right under it), the phone's
+   search circle, and the player's minimise button */
+(function(){
+  const hdr=document.getElementById('hdr'),root=document.documentElement;
+  const setH=()=>root.style.setProperty('--hdr-h',hdr.offsetHeight+'px');
+  setH();window.addEventListener('resize',setH);
+  const form=document.getElementById('searchForm'),btn=document.getElementById('searchBtn'),
+        inp=form.querySelector('input[name=q]');
+  const phone=()=>window.matchMedia('(max-width:700px)').matches;
+  const isOpen=()=>hdr.classList.contains('search-open');
+  // The bar is pinned to the bottom; with the on-screen keyboard up, lift it just above the keyboard.
+  const vv=window.visualViewport;
+  function lift(){
+    if(!vv||!isOpen()){hdr.style.bottom='';return;}
+    const gap=window.innerHeight-(vv.offsetTop+vv.height);
+    hdr.style.bottom=gap>40?(gap+10)+'px':'';
+  }
+  if(vv){vv.addEventListener('resize',lift);vv.addEventListener('scroll',lift);}
+  function openSearch(){hdr.classList.add('search-open');inp.focus();lift();}
+  function closeSearch(){if(!isOpen())return;hdr.classList.remove('search-open');inp.blur();lift();}
+  window.closeHdrSearch=closeSearch;
+  btn.onclick=e=>{e.stopPropagation();
+    if(!phone()){form.requestSubmit?form.requestSubmit():form.dispatchEvent(new Event('submit',{cancelable:true}));return;}
+    if(!isOpen())openSearch();
+    else if(inp.value.trim())form.requestSubmit?form.requestSubmit():form.dispatchEvent(new Event('submit',{cancelable:true}));
+    else closeSearch();};
+  // any other action (a tap elsewhere, Esc, a finished search, an empty box losing focus) folds it back into a circle
+  document.addEventListener('pointerdown',e=>{if(isOpen()&&!e.target.closest('.hdr-search'))closeSearch();},true);
+  inp.addEventListener('keydown',e=>{if(e.key==='Escape')closeSearch();});
+  inp.addEventListener('blur',()=>{if(!inp.value.trim())setTimeout(closeSearch,150);});
+  form.addEventListener('submit',()=>setTimeout(closeSearch,0));
+  document.getElementById('hdrMin').onclick=e=>{e.stopPropagation();PLAYER.minimize();};
+})();
 const defThumbSave=document.getElementById('defThumbSave');
 if(defThumbSave)defThumbSave.onclick=e=>{e.stopPropagation();
   const btn=e.currentTarget,pct=document.getElementById('defThumbPct').value;
-  post('/settings/thumb-percent/',{percent:pct}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='Save',1200);});};
+  post('/settings/thumb-percent/',{percent:pct}).then(()=>{btn.innerHTML=ic('check');setTimeout(()=>btn.textContent='Save',1200);});};
 
 /* =========================================================
    SPA ROUTER
@@ -1331,14 +1432,26 @@ const ROUTER=(function(){
     document.body.dataset.page=pageId;
     setActiveNav(nav);
     syncSearchBox(pageId);
+    if(window.closeHdrSearch)window.closeHdrSearch();
     if(APP.parentElement)APP.parentElement.scrollTop=0;
     window.scrollTo(0,0);
     runInit(pageId);
+    flipToBottom();
+  }
+
+  /* Phone: pages marked [data-flip] list from the bottom up, so land at the bottom. */
+  function flipToBottom(){
+    if(!window.matchMedia('(max-width:700px)').matches||!APP.querySelector('[data-flip]'))return;
+    requestAnimationFrame(()=>window.scrollTo(0,document.documentElement.scrollHeight));
   }
 
   /* Navigate to a URL (SPA). push: add history entry. */
   let navSeq=0;
   function go(url,{push=true,replace=false}={}){
+    // The header stays reachable over the open player (desktop): going to a
+    // page shrinks the player to the mini player first, like the player's own search.
+    if(typeof PLAYER!=='undefined'&&PLAYER.isExpanded()&&!/^\/(watch|random)\//.test(url))
+      PLAYER.minimize({keepUrl:true});
     showBar();
     // Only the most recent navigation may touch the page: a slower earlier
     // response (double Enter, click-then-search) must not land on top of it.
@@ -1379,7 +1492,7 @@ const ROUTER=(function(){
 
   function search(q){return go('/library/?q='+encodeURIComponent((q||'').trim()));}
 
-  return {go,reload,apply,setActiveNav,runInit,search,
+  return {go,reload,apply,setActiveNav,runInit,search,flipToBottom,
           get cleanup(){return cleanup;}, set cleanup(v){cleanup=v;}};
 })();
 
@@ -1414,7 +1527,7 @@ const SELECT_MODE=(function(){
     const fab=document.getElementById('selFab');
     if(fab&&fab.style.display!=='none'){
       fab.classList.toggle('active',active);
-      fab.textContent=active?'✕':'☑';
+      fab.innerHTML=ic(active?'x':'select');
       fab.title=active?'Cancel select (S)':'Select videos (S)';
     }
   }
@@ -1457,7 +1570,7 @@ const SELECT_MODE=(function(){
         if(pop.classList.toggle('open')&&popId==='bulkPlPop'){
           fetch('/api/playlists/',{headers:{'X-SPA':'1'}}).then(r=>r.json()).then(d=>{
             const s=document.getElementById('bulkPlSel');
-            const newOpt='<option value="__new__">＋ New playlist…</option>';
+            const newOpt='<option value="__new__">+ New playlist…</option>';
             s.innerHTML=newOpt+(d.playlists.length?d.playlists.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join(''):'');
             s.onchange=()=>{const ni=document.getElementById('bulkPlNew');if(ni)ni.style.display=s.value==='__new__'?'':'none';if(s.value==='__new__'&&ni)ni.focus();};
             // The freshly-set <select> defaults to its first option ("__new__")
@@ -1476,7 +1589,7 @@ const SELECT_MODE=(function(){
       const ids=getIds().join(','); if(!ids)return;
       const pct=parseFloat(document.getElementById('bulkThumbPct').value)||0;
       const btn=e.currentTarget;
-      post('/bulk/thumb-regen/',{ids,percent:pct.toFixed(1)}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='Apply',1500);});
+      post('/bulk/thumb-regen/',{ids,percent:pct.toFixed(1)}).then(()=>{btn.innerHTML=ic('check');setTimeout(()=>btn.textContent='Apply',1500);});
     };
 
     // playlist
@@ -1504,12 +1617,12 @@ const SELECT_MODE=(function(){
     // favorite
     document.getElementById('bulkFavBtn').onclick=e=>{e.stopPropagation();
       const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
-      post('/bulk/favorite/',{ids}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent='♥ Favorite',1200);});
+      post('/bulk/favorite/',{ids}).then(()=>{btn.innerHTML=ic('check');setTimeout(()=>btn.innerHTML=ic('heart')+' Favorite',1200);});
     };
-    [['bulkLikeBtn',1,'👍 Like'],['bulkDislikeBtn',-1,'👎 Dislike']].forEach(([id,delta,label])=>{
+    [['bulkLikeBtn',1,ic('thumb-up')+' Like'],['bulkDislikeBtn',-1,ic('thumb-down')+' Dislike']].forEach(([id,delta,label])=>{
       document.getElementById(id).onclick=e=>{e.stopPropagation();
         const ids=getIds().join(',');if(!ids)return;const btn=e.currentTarget;
-        post('/bulk/rating/',{ids,delta}).then(()=>{btn.textContent='✓';setTimeout(()=>btn.textContent=label,1200);});
+        post('/bulk/rating/',{ids,delta}).then(()=>{btn.innerHTML=ic('check');setTimeout(()=>btn.innerHTML=label,1200);});
       };
     });
 
@@ -1567,7 +1680,7 @@ function wireThumbTool(root){
         up=document.getElementById('plThumbUpload');
   const refresh=()=>ROUTER.go(location.pathname,{push:false});
   if(gen)gen.onclick=()=>{gen.textContent='…';post(tool.dataset.generateUrl).then(r=>{
-    if(!r.ok){gen.textContent='🖼 Generate';alert(r.error||'Could not build a cover.');return;}
+    if(!r.ok){gen.innerHTML=ic('image')+' Generate';alert(r.error||'Could not build a cover.');return;}
     refresh();});};
   if(rem)rem.onclick=()=>{post(tool.dataset.removeUrl).then(refresh);};
   if(up)up.onchange=()=>{
@@ -1591,11 +1704,11 @@ function wireSelectUI(root,opts){
   const selFab=document.getElementById('selFab');
   function syncSelUI(){
     const on=SELECT_MODE.isActive();
-    if(selBtn){selBtn.classList.toggle('active',on);selBtn.textContent=on?'✕ Cancel':'☑ Select';}
+    if(selBtn){selBtn.classList.toggle('active',on);selBtn.innerHTML=on?ic('x')+' Cancel':ic('select')+' Select';}
   }
   if(selFab){
     selFab.style.display='flex';
-    selFab.textContent=SELECT_MODE.isActive()?'✕':'☑';
+    selFab.innerHTML=ic(SELECT_MODE.isActive()?'x':'select');
     selFab.title=SELECT_MODE.isActive()?'Cancel select (S)':'Select videos (S)';
     selFab.classList.toggle('active',SELECT_MODE.isActive());
     selFab.onclick=()=>{SELECT_MODE.toggle();syncSelUI();};
@@ -1662,7 +1775,7 @@ function wireReorderUI(root){
       const thumb=card.querySelector('.thumb');
       if(!thumb||thumb.querySelector('.reorder-handle'))return;
       const h=document.createElement('span');
-      h.className='reorder-handle';h.textContent='⠿';
+      h.className='reorder-handle';h.innerHTML=ic('grip');
       thumb.appendChild(h);
     });
   }
@@ -1721,11 +1834,11 @@ function wireReorderUI(root){
 
   function enable(){
     active=true;grid.classList.add('reorder-mode');addHandles();
-    btn.classList.add('active');btn.textContent='✕ Cancel reorder';
+    btn.classList.add('active');btn.innerHTML=ic('x')+' Cancel reorder';
     bar=document.createElement('div');bar.id='reorderBar';
-    bar.innerHTML='<span class="sub">Drag ⠿ to reorder</span>'+
+    bar.innerHTML='<span class="sub">Drag the handle to reorder</span>'+
       '<button class="btn" id="reorderSaveBtn">✓ Save order</button>'+
-      '<button class="btn ghost" id="reorderCancelBtn">✕ Cancel</button>';
+      '<button class="btn ghost" id="reorderCancelBtn">'+ic('x')+' Cancel</button>';
     document.body.appendChild(bar);
     bar.querySelector('#reorderSaveBtn').onclick=()=>{
       const ids=[...grid.querySelectorAll('.card')].map(cardId).filter(Boolean).join(',');
@@ -1735,7 +1848,7 @@ function wireReorderUI(root){
   }
   function disable(){
     active=false;grid.classList.remove('reorder-mode');removeHandles();
-    btn.classList.remove('active');btn.textContent='⇅ Reorder';
+    btn.classList.remove('active');btn.innerHTML=ic('sort')+' Reorder';
     if(bar){bar.remove();bar=null;}
   }
   btn.onclick=()=>{active?disable():enable();};
@@ -1755,7 +1868,8 @@ const PAGE_INIT={
     const BUFFER=3, META_H=62;
     let _gap=18, total=null, cols=1, cardW=200, rowH=200;
     const data=[], loadedPages=new Set(), inflight=new Set(), nodes=new Map();
-    const scrollEl=window.innerWidth<=700?(document.getElementById('app')||window):window;
+    // the page itself scrolls on every device (#app only has overflow-x:hidden and no fixed height)
+    const scrollEl=window;
 
     function getScroll(){return scrollEl===window?window.scrollY:scrollEl.scrollTop;}
     function getVH(){return scrollEl===window?window.innerHeight:scrollEl.clientHeight;}
@@ -1770,8 +1884,9 @@ const PAGE_INIT={
     function makeCard(item){
       const badge=item.needs_convert?'<span class="warn">MKV/HEVC</span>':(item.quality?`<span class="qbadge">${item.quality}</span>`:'');
       const prog=item.progress>1?`<div class="progress" style="width:${item.progress}%"></div>`:'';
-      const thumb=item.thumb?`<img src="${item.thumb}" alt="" loading="lazy" onerror="thumbErr(this)">`:'<div class="placeholder">▶</div>';
-      const sub=esc((item.channel?item.channel+' · ':'')+item.date+(item.favorite?' · ♥':'')+(item.rating>0?' · 👍 '+item.rating:(item.rating<0?' · 👎 '+item.rating:'')));
+      const thumb=item.thumb?`<img src="${item.thumb}" alt="" loading="lazy" onerror="thumbErr(this)">`:'<div class="placeholder">'+ic('play')+'</div>';
+      const sub=esc((item.channel?item.channel+' · ':'')+item.date)+(item.favorite?' · '+ic('heart','fill'):'')+
+        (item.rating>0?' · '+ic('thumb-up')+' '+item.rating:(item.rating<0?' · '+ic('thumb-down')+' '+item.rating:''));
       const el=document.createElement('a');
       el.className='vcard card nav-item';el.tabIndex=0;el.href=item.url;
       el.innerHTML=`<div class="thumb">${thumb}${badge}<span class="dur">${item.dur}</span>${prog}</div>`+
@@ -1779,15 +1894,21 @@ const PAGE_INIT={
       if(SELECT_MODE.isSelected(item.id))el.classList.add('selected');
       return el;
     }
+    // Phone: the list runs bottom-up. Logical row r is drawn r-th from the BOTTOM
+    // (the newest cards sit nearest the thumb); columns still read left to right.
+    const flip=()=>window.innerWidth<=700;
+    const rowsCount=()=>Math.ceil(total/cols);
     function placeCard(el,i){const row=Math.floor(i/cols),col=i%cols;
-      el.style.top=(row*rowH)+'px';el.style.left=(col*(cardW+_gap))+'px';el.style.width=cardW+'px';}
+      const vrow=flip()?rowsCount()-1-row:row;
+      el.style.top=(vrow*rowH)+'px';el.style.left=(col*(cardW+_gap))+'px';el.style.width=cardW+'px';}
     function render(){
       if(total==null||!calcMetrics())return; setHeight();
       const gridTop=grid.getBoundingClientRect().top+
         (scrollEl===window?window.scrollY:scrollEl.getBoundingClientRect().top*-1+scrollEl.scrollTop);
       const scroll=getScroll(),vh=getVH();
-      const firstVis=Math.floor((scroll-gridTop)/rowH);
-      const lastVis=Math.ceil((scroll+vh-gridTop)/rowH);
+      // visible rows on screen, then which *logical* rows those are
+      const fv=Math.floor((scroll-gridTop)/rowH), lv=Math.ceil((scroll+vh-gridTop)/rowH);
+      const firstVis=flip()?rowsCount()-1-lv:fv, lastVis=flip()?rowsCount()-1-fv:lv;
       const start=Math.max(0,Math.max(0,firstVis-BUFFER)*cols);
       const end=Math.min(total,(lastVis+BUFFER+1)*cols);
       for(const[i,el]of nodes){if(i<start||i>=end){el.remove();nodes.delete(i);}}
@@ -1806,10 +1927,14 @@ const PAGE_INIT={
           if(countEl){const dur=countEl.dataset.duration||'';countEl.textContent=total?('· '+total.toLocaleString()+' videos'+(dur?' · '+dur:'')):'';}
           if(!total){if(emptyEl)emptyEl.style.display='';grid.style.display='none';return;}
           calcMetrics();setHeight();
+          let restored=false;
           try{const rs=JSON.parse(sessionStorage.getItem('hf_lib_scroll')||'null');
-            if(rs&&rs.url===location.pathname+location.search&&rs.pos>0)
-              setTimeout(()=>{if(scrollEl===window)window.scrollTo(0,rs.pos);else scrollEl.scrollTop=rs.pos;},60);
-          }catch{}}
+            if(rs&&rs.url===location.pathname+location.search&&rs.pos>0){restored=true;
+              setTimeout(()=>{if(scrollEl===window)window.scrollTo(0,rs.pos);else scrollEl.scrollTop=rs.pos;},60);}
+          }catch{}
+          // phone: open at the bottom, where the newest videos are
+          if(!restored&&flip())setTimeout(()=>{if(scrollEl===window)window.scrollTo(0,document.documentElement.scrollHeight);
+            else scrollEl.scrollTop=scrollEl.scrollHeight;},60);}
         const base=(p-1)*PAGE; d.items.forEach((it,k)=>{data[base+k]=it;}); render();
       }).catch(()=>{inflight.delete(p);});
     }
@@ -1826,6 +1951,12 @@ const PAGE_INIT={
     requestAnimationFrame(start);
 
     wireSortUI(root);
+    const subBtn=root.querySelector('#chanSubBtn');
+    if(subBtn)subBtn.onclick=e=>{e.preventDefault();
+      post('/channels/subscribe/',{name:subBtn.dataset.chan}).then(r=>{
+        if(!r||!r.ok)return;
+        subBtn.classList.toggle('on',r.subscribed);
+        subBtn.innerHTML=ic('bell',r.subscribed?'fill':'')+'<span>'+(r.subscribed?'Subscribed':'Subscribe')+'</span>';});};
     // No {selectAll:true} here -- this grid is virtualised, only on-screen
     // cards exist in the DOM (see wireSelectUI's doc comment).
     const selCleanup=wireSelectUI(root);
@@ -1854,6 +1985,22 @@ const PAGE_INIT={
       const cards=root.querySelectorAll('.chan-card');
       if(cards.length)ROUTER.go(cards[Math.floor(Math.random()*cards.length)].getAttribute('href'));
     };
+    // subscribe: the bell toggles it and the card moves to the top group (the
+    // server sorts subscribed first; here we do the same without a reload)
+    const grid=root.querySelector('.chan-grid');
+    root.querySelectorAll('.chan-sub').forEach(b=>b.onclick=e=>{
+      e.preventDefault();e.stopPropagation();
+      post('/channels/subscribe/',{name:b.dataset.chan}).then(r=>{
+        if(!r||!r.ok)return;
+        b.classList.toggle('on',r.subscribed);b.setAttribute('aria-pressed',r.subscribed);
+        b.title=r.subscribed?'Unsubscribe':'Subscribe';
+        b.innerHTML=ic('bell',r.subscribed?'fill':'');
+        const s=b.parentElement.querySelector('.meta .s');
+        if(s)s.textContent=s.textContent.replace(' · subscribed','')+(r.subscribed?' · subscribed':'');
+        if(grid){[...grid.children].sort((x,y)=>
+          (y.querySelector('.chan-sub.on')?1:0)-(x.querySelector('.chan-sub.on')?1:0)||(+x.dataset.i)-(+y.dataset.i))
+          .forEach(n=>grid.appendChild(n));}
+      });});
     return null;
   },
 
@@ -1923,8 +2070,8 @@ const PAGE_INIT={
     function infoText(r){
       const f=r.info;
       if(!f)return{t:'Not saved yet. Press Save to start using this folder.',bad:false};
-      if(!f.online)return{t:'⚠ Not reachable right now (unmounted or unplugged). Its videos are kept and not marked missing.',bad:true};
-      const parts=['✓ online',f.videos+' video'+(f.videos===1?'':'s')];
+      if(!f.online)return{t:'Not reachable right now (unmounted or unplugged). Its videos are kept and not marked missing.',bad:true,warn:true};
+      const parts=['Online',f.videos+' video'+(f.videos===1?'':'s')];
       if(f.missing)parts.push(f.missing+' missing');
       if(f.free!=null)parts.push(fmtB(f.free)+' free of '+fmtB(f.total));
       if(!f.writable)parts.push('read-only for HomeFlix: downloads can\'t go here');
@@ -1937,11 +2084,11 @@ const PAGE_INIT={
         return `<div class="fl-row" data-i="${i}">
           <div class="fl-top">
             <label class="fl-main"><input type="radio" name="flMain" class="nav-item" ${r.main?'checked':''}> ${r.main?'Main · downloads go here':'Use for downloads'}</label>
-            <button type="button" class="btn ghost nav-item fl-del" ${rows.length<2?'disabled title="Keep at least one folder"':''}>✕ Remove</button>
+            <button type="button" class="btn ghost nav-item fl-del" ${rows.length<2?'disabled title="Keep at least one folder"':''}>${ic('x')} Remove</button>
           </div>
           <input type="text" class="nav-item fl-path" value="${esc(r.path)}" placeholder="/mnt/big/YouTube" autocapitalize="off" autocomplete="off" spellcheck="false">
           <input type="text" class="nav-item fl-remote" value="${esc(r.remote)}" placeholder="Network path (optional), e.g. \\\\192.168.1.39\\big\\YouTube" autocapitalize="off" autocomplete="off" spellcheck="false">
-          <p class="sub fl-info${inf.bad?' bad':''}">${esc(inf.t)}</p>
+          <p class="sub fl-info${inf.bad?' bad':''}">${inf.warn?ic('alert')+' ':''}${esc(inf.t)}</p>
         </div>`;}).join('');
       box.querySelectorAll('.fl-row').forEach(el=>{
         const i=+el.dataset.i;
@@ -2008,7 +2155,7 @@ const PAGE_INIT={
     const ago=t=>{const m=Math.round((Date.now()/1000-t)/60);return m<1?'just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':Math.round(m/1440)+' d ago';};
     function renderWarn(){
       const w=[];
-      if(cookiesBad())w.push('⚠ <b>Your YouTube cookies have expired or stopped working.</b> Downloads are switched off until you paste fresh ones (see the cookies box below).');
+      if(cookiesBad())w.push(ic('alert')+' <b>Your YouTube cookies have expired or stopped working.</b> Downloads are switched off until you paste fresh ones (see the cookies box below).');
       if(!tools.installed)w.push('yt-dlp is not installed on the server. Run <code>pip install -r requirements.txt</code> and restart HomeFlix.');
       else if(!(tools.runtime&&tools.runtime.supported))w.push(esc((tools.runtime&&tools.runtime.problem)||'No JavaScript runtime found.'));
       $('#dlWarn').innerHTML=w.map(t=>`<div class="banner">${t}</div>`).join('');
@@ -2017,7 +2164,7 @@ const PAGE_INIT={
       const c=tools.cookies||{}, badge=$('#dlCookieBadge');
       $('#dlCookieCard').classList.toggle('dl-nocookie',!c.set||cookiesBad());
       if(!c.set){badge.textContent='not set — recommended';badge.className='dl-badge bad';}
-      else if(cookiesBad()){badge.textContent=c.expired?'⚠ expired — paste fresh ones':'⚠ not working — paste fresh ones';badge.className='dl-badge bad';}
+      else if(cookiesBad()){badge.innerHTML=ic('alert')+' '+(c.expired?'expired — paste fresh ones':'not working — paste fresh ones');badge.className='dl-badge bad';}
       else if(c.has_login===false){badge.textContent='saved ('+c.count+') — but no login cookie found';badge.className='dl-badge bad';}
       else{
         let t='✓ set · '+c.count+' cookies · saved '+new Date(c.saved*1000).toLocaleDateString();
@@ -2044,7 +2191,7 @@ const PAGE_INIT={
       if(!sources.length){box.innerHTML='<p class="sub" style="margin:0">No playlists saved yet — add a link below.</p>';return;}
       box.innerHTML=sources.map(s=>`<div class="dl-src nav-item${s.id===cur?' active':''}" data-id="${s.id}" tabindex="0" role="button">
         <div class="info"><div class="n">${esc(s.name)}</div><div class="u">${esc(s.url)}${s.subdir?' → '+esc(s.subdir):''}</div></div>
-        <button type="button" class="x" data-del="${s.id}" title="Remove link">✕</button></div>`).join('');
+        <button type="button" class="x" data-del="${s.id}" title="Remove link">${ic('x')}</button></div>`).join('');
     }
 
     function row(e){
@@ -2086,7 +2233,7 @@ const PAGE_INIT={
       $('#dlStart').disabled=!sel.size||running()||!tools.installed||!hasCookies||ckBad||!rtOk;
       const info=$('#dlSelInfo');let bad=false,t='';
       if(!hasCookies){t='Paste your YouTube cookies above to enable downloading';bad=true;}
-      else if(ckBad){t='⚠ Cookies expired / not working — paste fresh ones above';bad=true;}
+      else if(ckBad){t='Cookies expired / not working — paste fresh ones above';bad=true;}
       else if(!rtOk){t='Install Deno first (see the warning at the top)';bad=true;}
       else{
         const parts=[];
@@ -2157,7 +2304,7 @@ const PAGE_INIT={
         t.textContent='Downloading '+Math.min(job.done+1,job.total)+' of '+job.total+(job.title?' — '+job.title:' — starting…');
         bar.style.width=job.pct+'%';say($('#dlJobSummary'),'');
       }else{
-        t.textContent=job.status==='done'?'✓ Finished':job.status==='cancelled'?'Cancelled':'✗ Failed';
+        t.textContent=job.status==='done'?'Finished':job.status==='cancelled'?'Cancelled':'Failed';
         bar.style.width=job.status==='done'?'100%':'0';
         say($('#dlJobSummary'),job.summary,job.status==='failed');
       }
@@ -2361,7 +2508,7 @@ const PAGE_INIT={
         const opSel=`<select class="op-sel" data-i="${i}">${ops.map(o=>`<option value="${o.v}"${r.op===o.v?' selected':''}>${o.l}</option>`).join('')}</select>`;
         const valInput=r.field==='favorite'?'':
           `<input type="${['rating','duration_seconds','height'].includes(r.field)?'number':'text'}" class="val-inp" data-i="${i}" value="${(r.value||'').toString().replace(/"/g,'&quot;')}" placeholder="value"${r.field==='rating'?'':' min="0"'} step="any">`;
-        row.innerHTML=fieldSel+opSel+valInput+`<button type="button" class="del-rule" data-i="${i}">×</button>`;
+        row.innerHTML=fieldSel+opSel+valInput+`<button type="button" class="del-rule" data-i="${i}">${ic('x')}</button>`;
         list.appendChild(row);
       });
       list.querySelectorAll('.field-sel').forEach(s=>s.onchange=e=>{const i=+e.target.dataset.i;
@@ -2384,7 +2531,7 @@ const PAGE_INIT={
    ========================================================= */
 (function(){
   const typing=el=>el&&/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName);
-  function items(){return[...document.querySelectorAll('#app .nav-item, header .nav-item, .bottom-nav .nav-item')]
+  function items(){return[...document.querySelectorAll('#app .nav-item, header .nav-item')]
     .filter(el=>{const r=el.getBoundingClientRect();return el.offsetParent!==null&&r.width>0&&r.height>0;});}
   let cur=null;
   function focus(el){if(!el)return;if(cur)cur.classList.remove('focused');cur=el;el.classList.add('focused');
@@ -2622,7 +2769,7 @@ const PLAYER=(function(){
   V.addEventListener('error',()=>setLoading(false));
   function loadSource(src,pos,play){
     V.pause(); V.removeAttribute('src'); V.load();
-    STAGE.classList.add('paused'); PLAY.textContent='▶';
+    STAGE.classList.add('paused'); PLAY.innerHTML=ic('play');
     setLoading(!!play);
     V.src=src;
     V.addEventListener('loadedmetadata',function h(){
@@ -2667,7 +2814,7 @@ const PLAYER=(function(){
     teardownHls();
     hlsPk=pk;
     V.pause();V.removeAttribute('src');V.load();
-    STAGE.classList.add('paused');PLAY.textContent='▶';
+    STAGE.classList.add('paused');PLAY.innerHTML=ic('play');
     setLoading(!!play);
     // Show a "Preparing…" overlay over the video until playback actually
     // starts — the live transcode needs a moment to build a buffer lead.
@@ -2757,7 +2904,7 @@ const PLAYER=(function(){
     list.forEach((s,i)=>{
       html+='<div class="cc-track-row">'+
         '<button type="button" class="cc-track'+(i===chosen?' on':'')+'" data-idx="'+i+'" data-lang="'+esc(s.lang||'')+'">'+esc(s.label||s.lang||('Track '+(i+1)))+'</button>'+
-        (s.remove_url?'<button type="button" class="cc-track-del" data-remove="'+esc(s.remove_url)+'" title="Remove">×</button>':'')+
+        (s.remove_url?'<button type="button" class="cc-track-del" data-remove="'+esc(s.remove_url)+'" title="Remove">'+ic('x')+'</button>':'')+
         '</div>';
     });
     CCTRACKS.innerHTML=html;
@@ -2989,7 +3136,7 @@ const PLAYER=(function(){
     // on nextId()/prevId() wrapping (or not) at the ends of the queue.
     V.loop=(repeat==='one');
     LOOP.classList.toggle('looping',repeat!=='off');
-    LOOP.textContent=(repeat==='one')?'🔂':'↻';
+    LOOP.innerHTML=ic(repeat==='one'?'repeat-one':'repeat');
     LOOP.title=repeat==='off'?'Repeat: off':(repeat==='one'?'Repeat: one':'Repeat: all');
     if(SHUF){SHUF.classList.toggle('shuffling',shuffle);SHUF.title=shuffle?'Shuffle: on':'Shuffle: off';}
     if(data.hls){loadHlsSource(data.hls_url,startPos,play,data.id);}  // shows its own PREP overlay
@@ -3062,29 +3209,29 @@ const PLAYER=(function(){
     const tech=(data.tech||[]).map(t=>`<span>${esc(t)}</span>`).join('');
     const recs=(data.recommended||[]).map(r=>
       `<a class="card" href="${esc(r.watch_url)}"><div class="thumb">`+
-      (r.thumb_url?`<img src="${esc(r.thumb_url)}" alt="" loading="lazy">`:'<div class="placeholder">▶</div>')+
+      (r.thumb_url?`<img src="${esc(r.thumb_url)}" alt="" loading="lazy">`:'<div class="placeholder">'+ic('play')+'</div>')+
       (r.needs_convert?'<span class="warn">MKV/HEVC</span>':(r.quality?`<span class="qbadge">${esc(r.quality)}</span>`:''))+
       `<span class="dur">${esc(r.dur)}</span>`+(r.progress>1?`<div class="progress" style="width:${r.progress}%"></div>`:'')+
       `</div><div class="meta"><div class="t">${esc(r.title)}</div>`+(r.channel?`<div class="s">${esc(r.channel)}</div>`:'')+`</div></a>`).join('');
     const plOpts=(data.playlists||[]).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-    const plNewOpt=`<option value="__new__">＋ New playlist…</option>`;
+    const plNewOpt=`<option value="__new__">+ New playlist…</option>`;
     const notesHtml=notes.length?notes.map(n=>
       `<div class="note-item" data-id="${n.id}"><button class="note-ts-btn" data-t="${n.ts}">${esc(n.ts_label)}</button>`+
-      `<span class="note-text">${esc(n.text)}</span><button class="note-del" data-url="${esc(n.delete_url)}">×</button></div>`).join('')
+      `<span class="note-text">${esc(n.text)}</span><button class="note-del" data-url="${esc(n.delete_url)}">${ic('x')}</button></div>`).join('')
       :'<p class="sub" id="phEmptyNotes">No notes yet. Pause &amp; add a note, click its timestamp to jump back.</p>';
 
     INFO.innerHTML=`<div class="ph-pad">`+
-      `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>◀ ▶</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>▲▼</b> next/prev video</span></div>`+
+      `<div class="key-legend"><span><b>Click</b> play/pause</span><span><b>← →</b> seek <span id="phKeySeek">${SEEK_STEP}</span>s</span><span><b>↑ ↓</b> next/prev video</span></div>`+
       `<h1 class="wtitle">${esc(data.title)}</h1>`+
       `<div class="wbar"><span class="like-box">`+
-        `<button class="iconbtn" id="phLike" title="Like (+1)">👍</button>`+
+        `<button class="iconbtn" id="phLike" title="Like (+1)">${ic('thumb-up')}</button>`+
         `<span class="like-n ${likeCls(data.rating)}" id="phScore" title="Net likes">${likeTxt(data.rating)}</span>`+
-        `<button class="iconbtn" id="phDislike" title="Dislike (−1)">👎</button></span>`+
+        `<button class="iconbtn" id="phDislike" title="Dislike (−1)">${ic('thumb-down')}</button></span>`+
       `<button class="iconbtn" id="phFav" data-url="${esc(data.favorite_url)}" title="Favorite"`+
-        (data.favorite?' style="color:var(--accent);border-color:var(--accent)"':'')+`>♥</button>`+
+        (data.favorite?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${ic('heart',data.favorite?'fill':'')}</button>`+
       (data.is_owner?`<button class="iconbtn" id="phHide" data-url="${esc(data.hide_url)}" title="${data.hidden?'Unhide':'Hide from library'}"`+
-        (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${data.hidden?'👁':'🙈'}</button>`:'')+
-      (data.is_owner?`<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">🗑</button>`+
+        (data.hidden?' style="color:var(--accent);border-color:var(--accent)"':'')+`>${ic(data.hidden?'eye':'eye-off')}</button>`:'')+
+      (data.is_owner?`<div class="bulk-aw"><button class="iconbtn" id="phDelBtn" title="Delete">${ic('trash')}</button>`+
         `<div class="bulk-pop" id="phDelPop" style="left:auto;right:0">`+
           `<label>Delete this video</label>`+
           `<div class="brow" style="flex-direction:column;align-items:stretch;gap:6px">`+
@@ -3092,14 +3239,14 @@ const PLAYER=(function(){
             `<button class="btn" id="phDelFileGo" style="background:#c0392b">Delete file permanently</button>`+
           `</div></div></div>`:'')+
       `<span class="spacer"></span>`+
-      `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${data.autoplay?'▶▶ Auto On':'▶▶ Auto Off'}</button></div>`+
-      `<div class="tech">${tech}${data.source_url?`<a id="phSrc" href="${esc(data.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Opens the source at the current time">source ↗</a>`:''}</div>`+
+      `<button class="autopill${data.autoplay?' on':''}" id="phAuto" data-url="${esc(data.autoplay_toggle_url)}">${ic('autoplay')} ${data.autoplay?'Auto On':'Auto Off'}</button></div>`+
+      `<div class="tech">${tech}${data.source_url?`<a id="phSrc" href="${esc(data.source_url)}" target="_blank" rel="noopener" style="color:var(--accent)" title="Opens the source at the current time">source ${ic('external')}</a>`:''}</div>`+
       (data.needs_convert&&data.is_owner?`<div class="conv-inline" id="phConvInline">`+
         `<span class="conv-note">${esc(data.ext)} may not play in every browser.</span>`+
         `<div id="phConvIdle"><button class="btn ghost" id="phConvBtn">Convert to MP4</button></div>`+
         `<div id="phConvProg" style="display:none"><div class="cbar"><div id="phConvFill"></div></div>`+
           `<span id="phConvText" class="sub"></span>`+
-          `<button class="btn ghost" id="phConvCancel" style="margin-left:8px">✕ Cancel</button></div></div>`:'')+
+          `<button class="btn ghost" id="phConvCancel" style="margin-left:8px">${ic('x')} Cancel</button></div></div>`:'')+
       `<div class="notes-section"><h2>Notes</h2><div class="note-form">`+
         `<span class="note-ts-label" id="phNoteTs">at 0:00</span>`+
         `<input type="text" id="phNoteIn" placeholder="Note at current time…" autocomplete="off">`+
@@ -3107,10 +3254,10 @@ const PLAYER=(function(){
         `<div class="note-list" id="phNoteList">${notesHtml}</div></div>`+
       `<div class="pl-form"><div class="row-inline"><select id="phPlSel">${plNewOpt}${plOpts}</select><button class="btn ghost" id="phPlBtn">Add</button></div>`+
       `<input type="text" id="phPlNew" placeholder="New playlist name…" style="display:none;margin-top:8px;width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px"></div>`+
-      `<details class="ph-utils"><summary class="nav-item" tabindex="0">🛠 Tools <span class="sub">file path${data.is_owner?' · thumbnail · rename':''}</span></summary>`+
+      `<details class="ph-utils"><summary class="nav-item" tabindex="0">${ic('wrench')} Tools <span class="sub">file path${data.is_owner?' · thumbnail · rename':''}</span></summary>`+
       `<div class="remote-path" id="phRemotePath" title="Tap to copy">${esc(data.remote_path)}</div>`+
       (data.is_owner&&data.is_vertical?`<div class="thumb-tool"><div class="row-inline"><strong>Shorts</strong>`+
-        `<button class="btn ghost" id="phNotShort">${data.is_portrait?'▭ Not a short — play as a normal video':'▯ Mark as a short again'}</button></div></div>`:'')+
+        `<button class="btn ghost" id="phNotShort">${data.is_portrait?ic('wide')+' Not a short — play as a normal video':ic('shorts')+' Mark as a short again'}</button></div></div>`:'')+
       (data.is_owner?`<div class="thumb-tool"><div class="row-inline"><strong>Thumbnail</strong>`+
         `<input type="number" id="phThumbPct" min="0" max="100" step="1" value="${Math.round(data.thumbnail_percent||0)}"><span class="sub">%</span>`+
         `<button class="btn ghost" id="phThumbBtn">Regenerate</button></div></div>`+
@@ -3161,7 +3308,7 @@ const PLAYER=(function(){
     const hideBtn=document.getElementById('phHide');
     if(hideBtn)hideBtn.onclick=e=>{e.stopPropagation();post(data.hide_url).then(r=>{
       data.hidden=r.hidden;
-      hideBtn.title=r.hidden?'Unhide':'Hide from library';hideBtn.textContent=r.hidden?'👁':'🙈';
+      hideBtn.title=r.hidden?'Unhide':'Hide from library';hideBtn.innerHTML=ic(r.hidden?'eye':'eye-off');
       hideBtn.style.color=r.hidden?'var(--accent)':'';hideBtn.style.borderColor=r.hidden?'var(--accent)':'';});};
     const delBtn=document.getElementById('phDelBtn'),delPop=document.getElementById('phDelPop');
     if(delBtn)delBtn.onclick=e=>{e.stopPropagation();delPop.classList.toggle('open');};
@@ -3177,7 +3324,7 @@ const PLAYER=(function(){
       }).catch(()=>{});};
     const auto=document.getElementById('phAuto');
     if(auto)auto.onclick=()=>post(data.autoplay_toggle_url).then(r=>{autoplay=r.autoplay;
-      auto.textContent=autoplay?'▶▶ Auto On':'▶▶ Auto Off';auto.classList.toggle('on',autoplay);});
+      auto.innerHTML=ic('autoplay')+' '+(autoplay?'Auto On':'Auto Off');auto.classList.toggle('on',autoplay);});
     const plSel=document.getElementById('phPlSel');
     const plNew=document.getElementById('phPlNew');
     const plBtn=document.getElementById('phPlBtn');
@@ -3212,7 +3359,7 @@ const PLAYER=(function(){
     if(nsInfo)nsInfo.onclick=e=>{e.stopPropagation();toggleNotShort(data);};
     const thBtn=document.getElementById('phThumbBtn');
     if(thBtn)thBtn.onclick=()=>{const p=document.getElementById('phThumbPct').value;
-      post(data.regen_thumb_url,{percent:p}).then(()=>{thBtn.textContent='✓';setTimeout(()=>thBtn.textContent='Regenerate',1200);});};
+      post(data.regen_thumb_url,{percent:p}).then(()=>{thBtn.innerHTML=ic('check');setTimeout(()=>thBtn.textContent='Regenerate',1200);});};
     const rnBtn=document.getElementById('phRenameBtn');
     if(rnBtn)rnBtn.onclick=e=>{
       e.stopPropagation();
@@ -3244,7 +3391,7 @@ const PLAYER=(function(){
           const el=document.createElement('div');el.className='note-item';el.dataset.id=r.id;
           el.innerHTML=`<button class="note-ts-btn" data-t="${r.ts}">${esc(r.ts_label)}</button>`+
             `<span class="note-text">${esc(r.text)}</span>`+
-            `<button class="note-del" data-url="/video/${data.id}/notes/${r.id}/delete/">×</button>`;
+            `<button class="note-del" data-url="/video/${data.id}/notes/${r.id}/delete/">${ic('x')}</button>`;
           const items=[...nl.querySelectorAll('.note-item')];
           const after=items.find(i=>parseFloat(i.querySelector('.note-ts-btn').dataset.t)>r.ts);
           after?nl.insertBefore(el,after):nl.appendChild(el);bindNote(el);ni.value='';
@@ -3268,13 +3415,13 @@ const PLAYER=(function(){
     const rail=document.getElementById('phShortsRail');
     if(!rail)return;
     const plOpts=(data.playlists||[]).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
-    const plNewOpt=`<option value="__new__">＋ New playlist…</option>`;
+    const plNewOpt=`<option value="__new__">+ New playlist…</option>`;
     rail.innerHTML=
-      `<button class="rail-btn" id="railLikeBtn" title="Like (+1)">👍</button>`+
+      `<button class="rail-btn" id="railLikeBtn" title="Like (+1)">${ic('thumb-up')}</button>`+
       `<div class="rail-score ${likeCls(data.rating)}" id="railScore" title="Net likes">${likeTxt(data.rating)}</div>`+
-      `<button class="rail-btn" id="railDislikeBtn" title="Dislike (−1)">👎</button>`+
-      `<button class="rail-btn${data.favorite?' on':''}" id="railFavBtn" title="Favorite">♥</button>`+
-      `<div class="bulk-aw"><button class="rail-btn" id="railPlaylistBtn" title="Add to playlist">☰</button>`+
+      `<button class="rail-btn" id="railDislikeBtn" title="Dislike (−1)">${ic('thumb-down')}</button>`+
+      `<button class="rail-btn${data.favorite?' on':''}" id="railFavBtn" title="Favorite">${ic('heart',data.favorite?'fill':'')}</button>`+
+      `<div class="bulk-aw"><button class="rail-btn" id="railPlaylistBtn" title="Add to playlist">${ic('list-add')}</button>`+
         `<div class="bulk-pop" id="railPlaylistPop" style="left:auto;right:0;bottom:calc(100% + 8px)">`+
           `<label>Add to playlist</label>`+
           `<div class="brow"><select id="railPlSel">${plNewOpt}${plOpts}</select>`+
@@ -3286,14 +3433,14 @@ const PLAYER=(function(){
       `<div class="bulk-aw"><button class="rail-btn" id="railMoreBtn" title="More">•••</button>`+
         `<div class="bulk-pop" id="railMorePop" style="left:auto;right:0;bottom:calc(100% + 8px);min-width:220px">`+
           (data.is_owner?
-            `<button class="nav-item" id="railHideBtn">${data.hidden?'👁 Unhide':'🙈 Hide from library'}</button>`+
-            `<button class="nav-item danger" id="railDeleteBtn">🗑 Delete…</button>`+
+            `<button class="nav-item" id="railHideBtn">${data.hidden?ic('eye')+' Unhide':ic('eye-off')+' Hide from library'}</button>`+
+            `<button class="nav-item danger" id="railDeleteBtn">${ic('trash')} Delete…</button>`+
             `<div id="railDeleteConfirm" style="display:none;margin-top:6px">`+
               `<button class="btn ghost" id="railDeleteEntryGo" style="width:100%;margin-bottom:6px">Remove from library (keep file)</button>`+
               `<button class="btn" id="railDeleteFileGo" style="width:100%;background:#c0392b">Delete file permanently</button>`+
             `</div>`+
-            (data.is_vertical?`<button class="nav-item" id="railNotShortBtn">▭ Not a short (normal video)</button>`:'')+
-            (data.needs_convert?`<button class="nav-item" id="railConvertBtn">⇄ Convert to MP4</button>`:'')+
+            (data.is_vertical?`<button class="nav-item" id="railNotShortBtn">${ic('wide')} Not a short (normal video)</button>`:'')+
+            (data.needs_convert?`<button class="nav-item" id="railConvertBtn">${ic('convert')} Convert to MP4</button>`:'')+
             `<hr>`
           :'')+
           `<label>Add a note</label>`+
@@ -3341,7 +3488,7 @@ const PLAYER=(function(){
     if(moreBtn&&morePop)moreBtn.onclick=e=>{e.stopPropagation();morePop.classList.toggle('open');};
     const hideBtn=document.getElementById('railHideBtn');
     if(hideBtn)hideBtn.onclick=e=>{e.stopPropagation();post(data.hide_url).then(r=>{
-      data.hidden=r.hidden;hideBtn.textContent=r.hidden?'👁 Unhide':'🙈 Hide from library';});};
+      data.hidden=r.hidden;hideBtn.innerHTML=r.hidden?ic('eye')+' Unhide':ic('eye-off')+' Hide from library';});};
     const delBtn=document.getElementById('railDeleteBtn'),delConfirm=document.getElementById('railDeleteConfirm');
     if(delBtn&&delConfirm)delBtn.onclick=e=>{e.stopPropagation();
       delConfirm.style.display=delConfirm.style.display==='none'?'':'none';};
@@ -3364,7 +3511,7 @@ const PLAYER=(function(){
         post(data.note_add_url,{text,timestamp:ts.toFixed(1)}).then(r=>{
           if(!r.ok)return;
           notes.push({id:r.id,ts:r.ts,text:r.text});notes.sort((a,b)=>a.ts-b.ts);renderNoteDots();
-          rni.value='';rna.textContent='✓';setTimeout(()=>rna.textContent='Add',1000);
+          rni.value='';rna.innerHTML=ic('check');setTimeout(()=>rna.textContent='Add',1000);
           // Keep #phInfo's (hidden but still-live) note list in sync too, in
           // case the user leaves shorts mode later in this same session.
           const nl=document.getElementById('phNoteList');
@@ -3373,7 +3520,7 @@ const PLAYER=(function(){
             const el=document.createElement('div');el.className='note-item';el.dataset.id=r.id;
             el.innerHTML=`<button class="note-ts-btn" data-t="${r.ts}">${esc(r.ts_label)}</button>`+
               `<span class="note-text">${esc(r.text)}</span>`+
-              `<button class="note-del" data-url="/video/${data.id}/notes/${r.id}/delete/">×</button>`;
+              `<button class="note-del" data-url="/video/${data.id}/notes/${r.id}/delete/">${ic('x')}</button>`;
             const items=[...nl.querySelectorAll('.note-item')];
             const after=items.find(i=>parseFloat(i.querySelector('.note-ts-btn').dataset.t)>r.ts);
             after?nl.insertBefore(el,after):nl.appendChild(el);bindNote(el);
@@ -3417,7 +3564,7 @@ const PLAYER=(function(){
   function toggle(){
     const wasPaused=V.paused;
     if(wasPaused)V.play().catch(()=>{}); else V.pause();
-    ripple(wasPaused?'⏸':'▶');
+    ripple(ic(wasPaused?'pause':'play'));
   }
   PLAY.onclick=e=>{e.stopPropagation();toggle();};
   MBAR_P.onclick=e=>{e.stopPropagation();toggle();};
@@ -3426,7 +3573,7 @@ const PLAYER=(function(){
   // the control overlay on touch instead of also toggling playback.
   if(RICON)RICON.onclick=e=>{e.stopPropagation();toggle();};
   let ripT;
-  function ripple(icon){RICON.textContent=icon;STAGE.classList.add('show-ripple');
+  function ripple(html){RICON.innerHTML=html;STAGE.classList.add('show-ripple');
     clearTimeout(ripT);ripT=setTimeout(()=>STAGE.classList.remove('show-ripple'),550);}
   // Phone double-tap left/right thirds -> seek +-10s (see the touch branch of
   // the STAGE click handler below). Flashes the amount in the same center
@@ -3438,7 +3585,7 @@ const PLAYER=(function(){
     seekTo(curTime()+secs);
     ripple(secs<0?('−'+Math.abs(secs)+'s'):('+'+secs+'s'));
     clearTimeout(seekFlashT);
-    seekFlashT=setTimeout(()=>{RICON.textContent=V.paused?'▶':'⏸';},600);
+    seekFlashT=setTimeout(()=>{RICON.innerHTML=ic(V.paused?'play':'pause');},600);
   }
   // ripple()'s icon is what tapping the (now-persistent, round 8) center
   // button will do NEXT -- same convention PLAY/MBAR_P use one line earlier,
@@ -3446,8 +3593,8 @@ const PLAYER=(function(){
   // playing, so tapping it to pause looked like a play button).
   // Icons follow the element's state; the big flash (ripple) is only for the
   // user's own play/pause (toggle()), not for every video that merely starts.
-  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.textContent='⏸';MBAR_P.textContent='⏸';RICON.textContent='⏸';});
-  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.textContent='▶';MBAR_P.textContent='▶';RICON.textContent='▶';savePos();});
+  V.addEventListener('play',()=>{STAGE.classList.remove('paused');PLAY.innerHTML=MBAR_P.innerHTML=RICON.innerHTML=ic('pause');});
+  V.addEventListener('pause',()=>{STAGE.classList.add('paused');PLAY.innerHTML=MBAR_P.innerHTML=RICON.innerHTML=ic('play');savePos();});
 
   // Mouse vs. touch need different tap semantics below (desktop click still
   // toggles play; phone tap toggles the overlay -- see item 3).
@@ -3629,8 +3776,8 @@ const PLAYER=(function(){
     if(e.key==='ArrowLeft'){e.preventDefault();e.stopPropagation();seekTo(curTime()-SEEK_STEP);}});
 
   /* volume */
-  function volIcon(v,m){return(m||v===0)?'🔇':v<.5?'🔉':'🔊';}
-  function syncVol(){const vol=V.muted?0:V.volume;MUTE.textContent=volIcon(V.volume,V.muted);
+  function volIcon(v,m){return ic((m||v===0)?'volume-off':v<.5?'volume-low':'volume');}
+  function syncVol(){const vol=V.muted?0:V.volume;MUTE.innerHTML=volIcon(V.volume,V.muted);
     if(VOL){VOL.value=vol;VOL.style.setProperty('--v',(vol*100)+'%');}}
   MUTE.onclick=e=>{e.stopPropagation();
     if(V.muted&&V.volume===0)V.volume=.5;     // unmuting a zero-volume player must be audible
@@ -3652,7 +3799,7 @@ const PLAYER=(function(){
   });
   function applyRepeat(val){
     repeat=val; V.loop=(repeat==='one'); LOOP.classList.toggle('looping',repeat!=='off');
-    LOOP.textContent=(repeat==='one')?'🔂':'↻';
+    LOOP.innerHTML=ic(repeat==='one'?'repeat-one':'repeat');
     LOOP.title=repeat==='off'?'Repeat: off':(repeat==='one'?'Repeat: one':'Repeat: all');
     PREV.disabled=!prevId(); NEXT.disabled=!nextId();
     if(MBAR_SB)MBAR_SB.disabled=!prevId(); if(MBAR_SF)MBAR_SF.disabled=!nextId();
@@ -4103,7 +4250,7 @@ const PLAYER=(function(){
     return false;
   }
 
-  return {open,navigate,openFromSSR,restoreMini,handlePop,
+  return {open,navigate,openFromSSR,restoreMini,handlePop,minimize,
           isExpanded:()=>state()==='expanded', getState:state};
 })();
 
@@ -4200,6 +4347,7 @@ const PLAYER=(function(){
     pageId==='playlists'||pageId==='smart_playlist'?'playlists':
     pageId==='history'?'history':pageId==='shorts'?'shorts':'');
   ROUTER.runInit(pageId);
+  ROUTER.flipToBottom();
 
   // hard-load of /watch/<id>/ -> open player from embedded JSON
   const aw=document.getElementById('autoWatch');

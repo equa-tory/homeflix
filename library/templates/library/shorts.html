@@ -1,11 +1,12 @@
 {% extends base_template %}
 {% load library_extras %}
 {% block content %}
+<div data-flip>
 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <h1 style="margin:0">Shorts</h1>
   {% if videos %}
   <a class="btn ghost nav-item" href="{% url 'random_video' %}?shorts=1"
-     data-random style="font-size:13px;padding:7px 14px">🎲 Random</a>
+     data-random style="font-size:13px;padding:7px 14px">{% icon "dice" %} Random</a>
   {% endif %}
 </div>
 <p class="sub" style="margin:6px 0 18px">
@@ -20,7 +21,7 @@
       {% if video.thumbnail_path %}
         <div class="thumb-bg" style="background-image:url({% url 'thumb' video.pk %})"></div>
       {% else %}
-        <div class="placeholder" style="width:100%;height:100%;display:grid;place-items:center;color:var(--muted);font-size:32px">▶</div>
+        <div class="placeholder" style="width:100%;height:100%;display:grid;place-items:center;color:var(--muted);font-size:32px">{% icon "play" %}</div>
       {% endif %}
       <span class="dur">{{ video.duration_seconds|duration }}</span>
     </div>
@@ -46,9 +47,10 @@
 
 {% else %}
 <div class="empty">
-  <div class="big">▯</div>
+  <div class="big">{% icon "shorts" %}</div>
   <p>No portrait videos found.</p>
   <p class="sub">Shorts are videos whose height is equal to or greater than their width (9:16, 4:5, 1:1, etc).</p>
 </div>
 {% endif %}
+</div>
 {% endblock %}

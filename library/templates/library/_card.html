@@ -5,7 +5,7 @@
       {# background-image instead of <img> for TV browser compat (no object-fit needed) #}
       <div class="thumb-bg" style="background-image:url({% url 'thumb' video.pk %}?v={{ video.thumbnail_path|thumb_v }})"></div>
     {% else %}
-      <div class="placeholder">▶</div>
+      <div class="placeholder">{% icon "play" %}</div>
     {% endif %}
     {% if video.needs_convert_ui %}
       <span class="warn" title="May not play in a desktop browser">MKV/HEVC</span>
@@ -22,7 +22,7 @@
     <div class="s">
       {% if video.channel %}{{ video.channel }} · {% endif %}
       {{ video.date_added|date:"M j, Y" }}
-      {% if video.favorite %} · ♥{% endif %}{% if video.rating > 0 %} · 👍 {{ video.rating }}{% elif video.rating < 0 %} · 👎 {{ video.rating }}{% endif %}
+      {% if video.favorite %} · {% icon "heart" "fill" %}{% endif %}{% if video.rating > 0 %} · {% icon "thumb-up" %} {{ video.rating }}{% elif video.rating < 0 %} · {% icon "thumb-down" %} {{ video.rating }}{% endif %}
     </div>
   </div>
 </a>

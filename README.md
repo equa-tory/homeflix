@@ -31,21 +31,21 @@ plays the original directly anyway.)
   **▼** previous video · **Back** returns to the library. Media keys
   (play/pause, ⏪ ⏩, ⏮ ⏭) work too.
 
-**File organizer** — *Manage → Organize by date* moves each video into
+**File organizer** — *user menu → Organize by date* moves each video into
 `LIBRARY_ROOT/YYYY-MM/DD/` (e.g. `2026-06/18/`) based on its modified date.
 Subtitles/sidecars move with it; unrelated files stay put. Shows a **dry-run
 preview** before anything moves, and updates the database in place so your watch
 history survives the move.
 
-**Library maintenance** (Manage menu): Rescan · Remove missing files ·
+**Library maintenance** (user menu): Rescan · Remove missing files ·
 Reset & rebuild (clears records and rescans — files on disk are never deleted).
 
 **Accounts** — everyone signs in. There are two roles:
 - **Owner** (`is_staff`) — everything, including scan/organize/convert/rename/
-  delete and the Manage menu. Create yours with `createsuperuser` (below).
+  delete and the owner entries of the user menu. Create yours with `createsuperuser` (below).
 - **Viewer** — browse, search, stream, resume, favorite, like/dislike, use and create
   playlists, add notes. Blocked from anything that touches files or the
-  catalog (no Manage menu, no delete/rename/organize/convert, no Hidden page).
+  catalog (no owner entries in the user menu, no delete/rename/organize/convert, no Hidden page).
   Create one in `/admin` → *Users* → *Add* (leave "Staff status" unchecked).
 
 Resume position, watch history, and player preferences (theme, autoplay,
@@ -62,7 +62,7 @@ catalog still requires an account — an anonymous visitor gets sent to
 
 ## Downloading from a YouTube playlist (owner only)
 
-**Manage (⋯) → ⬇ Download from playlist…** — works from a phone, everything runs on the server.
+**User menu → Download from playlist…** — works from a phone, everything runs on the server.
 
 1. Save a playlist link (optionally into a subfolder of the library). Several links can be saved.
 2. **Fetch list.** The playlist is compared **by name** against the target folder (all
@@ -106,7 +106,7 @@ the **Update yt-dlp** button on the page when everything suddenly fails.
 
 ## Backups (owner only)
 
-**Manage (⋯) → 💾 Backups…** — automatic backups of HomeFlix's own data. Defaults: every
+**User menu → Backups…** — automatic backups of HomeFlix's own data. Defaults: every
 **48 hours** into **`/mnt/ssd/backups/homeflix`**, keeping **1** backup (a new one replaces the
 old only after it succeeded). One archive `homeflix-YYYYMMDD-HHMMSS.tar.gz` holds a consistent
 snapshot of the database (favorites, likes, playlists, notes, history, accounts, saved download
@@ -159,11 +159,11 @@ comes back after a reboot. At the end it prints the URLs to open on your phone /
 export HOMEFLIX_LIBRARY=/path/to/your/videos
 python manage.py migrate
 python manage.py createsuperuser   # your owner login
-python manage.py scan              # or press "Rescan" in the Manage (⋯) menu
+python manage.py scan              # or press "Rescan library" in the user menu
 python manage.py runserver 0.0.0.0:8002
 ```
 Open `http://<server-ip>:8002/` and sign in. `HOMEFLIX_LIBRARY` is the folder used until you
-change it: **⋯ → Library folders…** lets you add any number of folders (another drive, a second
+change it: **user menu → Library folders…** lets you add any number of folders (another drive, a second
 share) and mark one as the *main* folder where downloads are saved. All of them are scanned and
 watched as one library; nothing has to be moved.
 

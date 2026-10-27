@@ -1,4 +1,5 @@
 {% extends base_template %}
+{% load library_extras %}
 {% block content %}
 <h1>Download from playlist</h1>
 <p class="sub">Fetch a YouTube playlist, see which videos you don't have yet, tick the ones you want, and they download straight into your library. Works from your phone — everything runs on the server.</p>
@@ -60,7 +61,7 @@
 <section id="dlMain" hidden>
   <div class="dl-head">
     <h2 id="dlTitle" style="margin:0"></h2>
-    <button type="button" class="btn ghost nav-item" id="dlFetch">↻ Fetch list</button>
+    <button type="button" class="btn ghost nav-item" id="dlFetch">{% icon "refresh" %} Fetch list</button>
   </div>
   <p class="sub" id="dlFetchInfo"></p>
 
@@ -117,6 +118,6 @@
     <div class="dl-selinfo" id="dlSelInfo"></div>
   </div>
   <span style="flex:1"></span>
-  <button type="button" class="btn nav-item" id="dlStart" disabled>⬇ Download</button>
+  <button type="button" class="btn nav-item" id="dlStart" disabled>{% icon "download" %} Download</button>
 </div>
 {% endblock %}

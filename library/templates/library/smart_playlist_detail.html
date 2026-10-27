@@ -1,12 +1,13 @@
 {% extends base_template %}
 {% load library_extras %}
 {% block content %}
+<div data-flip>
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
   <h1 style="margin:0">{{ sp.name }}</h1>
   {% if videos %}
     <a class="btn ghost nav-item" data-random
        href="{% url 'random_video' %}?sp={{ sp.pk }}" title="Play a random video from this smart playlist"
-       style="font-size:13px;padding:7px 10px">🎲 Random</a>
+       style="font-size:13px;padding:7px 10px">{% icon "dice" %} Random</a>
   {% endif %}
   <label class="sub" style="margin:0">Sort&nbsp;
     <select class="nav-item" data-filter-sort style="padding:6px 8px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text)">
@@ -18,19 +19,19 @@
   <a class="btn ghost nav-item" data-spa
      href="?sort={{ sort }}&rev={{ rev|yesno:'0,1' }}"
      title="Reverse sort order" style="font-size:16px;padding:7px 10px">
-    {% if rev %}↑{% else %}↓{% endif %}
+    {% if rev %}{% icon "arrow-up" %}{% else %}{% icon "arrow-down" %}{% endif %}
   </a>
-  <button type="button" class="btn ghost nav-item" id="selModeBtn">☑ Select</button>
+  <button type="button" class="btn ghost nav-item" id="selModeBtn">{% icon "select" %} Select</button>
   <form method="post" action="{% url 'delete_smart_playlist' sp.pk %}"
         data-confirm="Delete smart playlist?" style="margin:0">
     {% csrf_token %}
-    <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">🗑 Delete</button>
+    <button class="btn ghost nav-item" style="color:var(--accent);font-size:13px">{% icon "trash" %} Delete</button>
   </form>
 </div>
 <p class="sub">{{ videos|length }} video{{ videos|length|pluralize }} match current rules</p>
 
 <details class="pl-settings">
-  <summary class="nav-item" tabindex="0">⚙ Playlist settings <span class="sub">cover image · conditions (match {{ sp.match_mode }} rules)</span></summary>
+  <summary class="nav-item" tabindex="0">{% icon "sliders" %} Playlist settings <span class="sub">cover image · conditions (match {{ sp.match_mode }} rules)</span></summary>
 <div class="thumb-tool" id="plThumbTool" data-pl="{{ sp.pk }}" data-generate-url="{% url 'smart_playlist_thumb_generate' sp.pk %}"
      data-remove-url="{% url 'smart_playlist_thumb_remove' sp.pk %}" data-upload-url="{% url 'smart_playlist_thumb_upload' sp.pk %}">
   <div class="row-inline">
@@ -38,9 +39,9 @@
     {% if sp.thumbnail_path %}
       <img src="{% url 'smart_playlist_thumb' sp.pk %}?v={{ sp.thumbnail_path|thumb_v }}" alt="" style="width:64px;height:36px;object-fit:cover;border-radius:6px">
     {% endif %}
-    <button type="button" class="btn ghost" id="plThumbGen">🖼 Generate</button>
-    <button type="button" class="btn ghost" id="plThumbRemove"{% if not sp.thumbnail_path %} style="display:none"{% endif %}>✕ Remove</button>
-    <label class="btn ghost" style="cursor:pointer;margin:0">⬆ Upload
+    <button type="button" class="btn ghost" id="plThumbGen">{% icon "image" %} Generate</button>
+    <button type="button" class="btn ghost" id="plThumbRemove"{% if not sp.thumbnail_path %} style="display:none"{% endif %}>{% icon "x" %} Remove</button>
+    <label class="btn ghost" style="cursor:pointer;margin:0">{% icon "arrow-up" %} Upload
       <input type="file" id="plThumbUpload" accept="image/png,image/jpeg,image/webp" style="display:none">
     </label>
   </div>
@@ -84,4 +85,5 @@
   <p>No videos match the current rules.</p>
 </div>
 {% endif %}
+</div>
 {% endblock %}
